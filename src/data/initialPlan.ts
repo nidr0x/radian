@@ -94,9 +94,9 @@ export const defaultData = (): AppData => ({
   schemaVersion: 7,
   onboardingComplete: false,
   profile: {
-    heightCm: 176, currentWeightKg: 70, goal: 'Definición estética', gym: 'Evanfit Picanya',
+    heightCm: undefined, currentWeightKg: undefined, goal: '', gym: '',
     trainingDays: [1, 2, 3, 5], sessionMinutes: 60, experienceLevel: 'intermediate', largeText: false, theme: 'system',
-    nutritionContext: 'Agua como bebida principal. Desayunos con avena o cereales, yogur alto en proteína, AOVE, chía, arándanos y anacardos. Comidas con pasta integral, pollo, pescado, legumbres y verduras. Cenas con salmón, fajitas caseras, hamburguesa de pollo o pan integral. Comida libre habitual los sábados por la noche.',
+    nutritionContext: '',
   },
   exercises: exerciseDefinitions,
   plan: { id: 'main-plan', version: 1, days: initialDays },

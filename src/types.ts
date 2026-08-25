@@ -8,8 +8,8 @@ export type SetPhase = 'warmup' | 'work';
 export type ExerciseEquipment = 'machine' | 'cable' | 'dumbbell' | 'barbell' | 'bodyweight';
 
 export interface UserProfile {
-  heightCm: number;
-  currentWeightKg: number;
+  heightCm?: number;
+  currentWeightKg?: number;
   goal: string;
   gym: string;
   trainingDays: number[];

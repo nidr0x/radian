@@ -2,5 +2,12 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "radian",
   "pages_build_output_dir": "./dist",
-  "compatibility_date": "2026-08-24"
+  "compatibility_date": "2026-08-24",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "radian-prod",
+      "database_id": "fd8d11e7-7a8f-4614-b152-52834589822e"
+    }
+  ]
 }

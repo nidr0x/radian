@@ -5,7 +5,7 @@ import { progressionAction, progressionCue, recommendationFor } from '../src/lib
 import { isWorkSet, nextPrescription } from '../src/lib/progression';
 import { bestRecordForExercise, detectPersonalRecord } from '../src/lib/records';
 import { summarizeSession } from '../src/lib/sessionSummary';
-import { createSession, migrateData, parseBackup, serializeBackup, snapshotMatchesPlan } from '../src/lib/storage';
+import { createSession, createSetLogs, migrateData, parseBackup, serializeBackup, snapshotMatchesPlan } from '../src/lib/storage';
 import { buildWeeklySummary, weeklySummaryText } from '../src/lib/weeklySummary';
 import type { WorkoutSession } from '../src/types';
 
@@ -87,6 +87,24 @@ describe('motor de recomendaciones', () => {
 });
 
 describe('persistencia y backups', () => {
+  it('empieza con un perfil neutro y medidas opcionales', () => {
+    const data = defaultData();
+    expect(data.profile.heightCm).toBeUndefined();
+    expect(data.profile.currentWeightKg).toBeUndefined();
+    expect(data.profile.goal).toBe('');
+    expect(data.profile.gym).toBe('');
+    expect(data.profile.nutritionContext).toBe('');
+  });
+
+  it('conserva las medidas de un perfil antiguo al migrarlo', () => {
+    const data = defaultData();
+    const restored = migrateData({
+      ...data,
+      profile: { ...data.profile, heightCm: 180, currentWeightKg: 82, goal: 'Fuerza' },
+    });
+    expect(restored.profile).toMatchObject({ heightCm: 180, currentWeightKg: 82, goal: 'Fuerza' });
+  });
+
   it('conserva una instantánea de la rutina al crear una sesión', () => {
     const data = defaultData();
     const day = data.plan.days[0];
@@ -149,6 +167,13 @@ describe('persistencia y backups', () => {
 
     const next = createSession(data.plan.days[0], '2026-08-24', new Date('2026-08-24T10:00:00.000Z'), [previous]);
     expect(next.plannedExercises[0].setLogs.filter(isWorkSet)[0]).toMatchObject({ actualReps: 10, weightKg: 40, completed: false });
+  });
+
+  it('autorrellena una sesión nueva sin marcar sus series como completadas', () => {
+    const previous = createSession(defaultData().plan.days[0], '2026-08-17');
+    previous.plannedExercises[0].setLogs.filter(isWorkSet).forEach((set) => Object.assign(set, { actualReps: 10, weightKg: 40, completed: true }));
+    const copied = createSetLogs(3, 8, previous.plannedExercises[0].setLogs, previous.plannedExercises[0], { copyCompleted: false });
+    expect(copied.filter(isWorkSet)[0]).toMatchObject({ actualReps: 10, weightKg: 40, completed: false });
   });
 
   it('migra cargas antiguas a todas las filas de serie', () => {

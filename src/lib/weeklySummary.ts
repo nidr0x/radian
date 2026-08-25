@@ -120,7 +120,7 @@ export const weeklySummaryText = (data: AppData, now = new Date()): string => {
     summary.periodLabel,
     '',
     'CONTEXTO',
-    `Objetivo: ${data.profile.goal}`,
+    `Objetivo: ${data.profile.goal || 'sin definir'}`,
     `Peso actual: ${formatMeasure(data.profile.currentWeightKg, 'kg')}`,
     '',
     'ADHERENCIA',

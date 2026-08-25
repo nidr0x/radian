@@ -7,6 +7,7 @@ export const STORAGE_KEY = 'radian-data-v1';
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 const isLegacyImage = (imageUrl?: string): boolean => !imageUrl || imageUrl.startsWith('https://wger.de/') || (imageUrl.startsWith('/exercises/atlas-') && (imageUrl.endsWith('.png') || imageUrl.endsWith('.webp')));
 const clampWarmupSets = (value: unknown): number => typeof value === 'number' && Number.isFinite(value) ? Math.min(3, Math.max(0, Math.round(value))) : 0;
+const optionalNumber = (value: unknown): number | undefined => typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 const validIncrement = (value: unknown): number => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 2.5;
 const validPolicy = (value: unknown): ProgressionPolicy => value === 'off' || value === 'linear' || value === 'double' ? value : 'double';
 
@@ -15,6 +16,7 @@ interface SetLogOptions {
   targetReps?: number;
   defaultWeightKg?: number;
   defaultActualReps?: Array<number | undefined>;
+  copyCompleted?: boolean;
 }
 
 export const createSetLogs = (sets: number, repMin: number, source?: SetLog[], legacy?: Pick<ExerciseSession, 'actualWeightKg' | 'actualReps' | 'completed'>, options: SetLogOptions = {}): SetLog[] => Array.from({ length: sets + (options.warmupSets ?? 0) }, (_, index) => {
@@ -26,7 +28,7 @@ export const createSetLogs = (sets: number, repMin: number, source?: SetLog[], l
     targetReps: previous?.targetReps ?? (phase === 'warmup' ? repMin : options.targetReps ?? repMin),
     actualReps: previous?.actualReps ?? options.defaultActualReps?.[index] ?? legacy?.actualReps,
     weightKg: previous?.weightKg ?? legacy?.actualWeightKg ?? options.defaultWeightKg,
-    completed: previous?.completed ?? Boolean(legacy?.completed),
+    completed: options.copyCompleted === false ? false : previous?.completed ?? Boolean(legacy?.completed),
   };
 });
 
@@ -87,6 +89,11 @@ export const migrateData = (value: unknown): AppData => {
   const profile = {
     ...fallback.profile,
     ...candidate.profile,
+    heightCm: optionalNumber(candidate.profile.heightCm),
+    currentWeightKg: optionalNumber(candidate.profile.currentWeightKg),
+    goal: typeof candidate.profile.goal === 'string' ? candidate.profile.goal : fallback.profile.goal,
+    gym: typeof candidate.profile.gym === 'string' ? candidate.profile.gym : fallback.profile.gym,
+    nutritionContext: typeof candidate.profile.nutritionContext === 'string' ? candidate.profile.nutritionContext : fallback.profile.nutritionContext,
     trainingDays: Array.isArray(candidate.profile.trainingDays) ? candidate.profile.trainingDays : fallback.profile.trainingDays,
     experienceLevel: candidate.profile.experienceLevel ?? fallback.profile.experienceLevel,
     largeText: candidate.profile.largeText === true,

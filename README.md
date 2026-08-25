@@ -17,7 +17,7 @@ npm test
 npm run build
 ```
 
-La primera vez, Radian muestra una configuración breve para elegir objetivo, días, duración y nivel. Durante una sesión se puede repetir el registro anterior, saltar un ejercicio, deshacer el último avance y salir conservando la sesión en curso.
+La primera vez, Radian muestra una configuración breve para elegir objetivo, días, duración y nivel. La altura y el peso son opcionales, se guardan solo en el dispositivo y se pueden omitir. La configuración se puede repetir desde Perfil. Durante una sesión se puede repetir el registro anterior, saltar un ejercicio, deshacer el último avance y salir conservando la sesión en curso.
 
 ## Desplegar en Cloudflare Pages
 
@@ -43,21 +43,21 @@ La app sigue funcionando sin backend. Si quieres compartir los datos entre el m�
 1. Crea una base D1 para la sincronización:
 
    ```bash
-   npx wrangler d1 create fitness-radian-sync
+   npx wrangler d1 create radian-prod
    ```
 
 2. En Cloudflare Pages, añade una vinculación D1 llamada `DB` a los entornos de producción y preview, usando esa base.
 3. Aplica la migración en remoto:
 
    ```bash
-   npx wrangler d1 migrations apply fitness-radian-sync --remote
+   npx wrangler d1 migrations apply radian-prod --remote
    ```
 
 4. En Radian, abre `Perfil → Sincronizar dispositivos`, genera un código y conecta el primer dispositivo. Introduce el mismo código en el segundo y elige si quieres descargar la copia remota o subir sus datos locales.
 
 El código funciona como llave de acceso a esa copia. El contenido se cifra en el dispositivo antes de subirlo; puedes revocar el código para borrar la copia remota y cortar el acceso de otros dispositivos. No lo compartas. Si ejecutas solo `npm run dev`, la app permanece en modo local-first porque Vite no sirve las Pages Functions.
 
-El despliegue no necesita variables secretas ni una base de datos: Radian guarda los datos en el dispositivo del usuario.
+El modo local no necesita variables secretas ni una base de datos. Si activas las cuentas passkey, el despliegue necesita la base D1 y los secretos descritos abajo.
 
 ## Decisiones del MVP
 
@@ -74,4 +74,16 @@ El despliegue no necesita variables secretas ni una base de datos: Radian guarda
 - Progreso incluye adherencia semanal, volumen reciente, mejores cargas, sesiones del mes, volumen por grupo muscular y un resumen semanal copiable para revisarlo juntos.
 - Perfil incluye texto grande, instalación PWA cuando el navegador lo permite y estados claros para el modo local y la sincronización.
 
-La primera versión no cuenta calorías, no registra comidas, no incluye cuentas tradicionales ni proveedor de IA, y usa un código de emparejamiento para la sincronización opcional.
+La primera versión no cuenta calorías, no registra comidas, no incluye cuentas basadas en contraseña ni proveedor de IA. Mantiene el modo local, el código de emparejamiento cifrado y las cuentas opcionales con passkey para la sincronización estructurada en D1.
+## Cuenta, D1 y passkeys
+
+Radian puede seguir funcionando sin cuenta y guardar los datos en el dispositivo. Si quieres sincronizar entre dispositivos, la cuenta opcional usa una passkey (WebAuthn) y guarda la copia estructurada en Cloudflare D1.
+
+Para preparar el entorno de Cloudflare:
+
+1. Crea una base de datos D1 llamada `radian-prod` y sustituye `REPLACE_WITH_D1_DATABASE_ID` en `wrangler.jsonc` por su identificador.
+2. Aplica las migraciones con `npx wrangler d1 migrations apply radian-prod --remote` (incluye `0001_sync_records.sql`, `0002_accounts.sql` y `0003_passkey_management.sql`).
+3. Configura en Pages Functions los secretos `SESSION_SECRET` y, en producción, `WEBAUTHN_RP_ID`, `WEBAUTHN_ORIGIN` y `WEBAUTHN_RP_NAME`.
+4. Para `radian.nidr0x.win`, usa `WEBAUTHN_RP_ID=radian.nidr0x.win` y `WEBAUTHN_ORIGIN=https://radian.nidr0x.win`.
+
+La passkey nunca se almacena en Radian: el dispositivo conserva la clave privada y D1 solo guarda la clave pública, el contador de uso y una etiqueta elegida por ti. Desde Perfil puedes añadir, renombrar o revocar dispositivos; siempre debe quedar al menos una passkey activa. El acceso local sigue disponible si no se configura la nube.

@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Activity, ArrowDown, ArrowUp, BarChart3, CalendarDays, Check, ChevronRight, CircleHelp, Clipboard, CloudOff,
-  Dumbbell, Download, FileJson, Gauge, History, Info, KeyRound, Layers3, LockKeyhole, Moon, MoreHorizontal, Play,
-  Plus, RotateCcw, Save, Search, Settings2, ShieldCheck, SkipForward, Sparkles, Sun, Timer, Trophy, Upload, UserRound, X,
+  Dumbbell, Download, FileJson, Fingerprint, Gauge, History, Info, KeyRound, Layers3, LockKeyhole, LogIn, LogOut, Minus, Moon, MoreHorizontal, Pause, Pencil, Play,
+  Plus, RotateCcw, Save, Search, Settings2, ShieldCheck, SkipForward, Sparkles, Sun, Timer, Trash2, Trophy, Upload, UserPlus, UserRound, X,
   Maximize2, Minimize2,
 } from 'lucide-react';
 import { currentWeekday, dateKey, dayNames, formatDate, formatDuration, shortDayNames, weekKey } from './lib/date';
@@ -16,6 +16,7 @@ import { deleteSyncData, generateSyncKey, loadSyncState, normalizeSyncKey, persi
 import { buildWeeklySummary, weeklySummaryText } from './lib/weeklySummary';
 import { requestScreenWakeLock, type ScreenWakeLock } from './lib/wakeLock';
 import { summarizeSession, type SessionSummary } from './lib/sessionSummary';
+import { addPasskey, AuthApiError, currentUser, listPasskeys, loginWithPasskey, logout, logoutEverywhere, pullCloudData, pushCloudData, registerPasskey, renamePasskey, revokePasskey, type AuthPasskey, type AuthUser } from './lib/auth';
 import type {
   AppData, Difficulty, Energy, ExperienceLevel, ExerciseDefinition, ExerciseGuidance, ExerciseSession, PlannedExercise, ProgressEntry, ProgressionPolicy, SetLog, Theme, UserProfile, View, WeeklyCheckin, WorkoutDay, WorkoutSession,
 } from './types';
@@ -38,6 +39,7 @@ const formatSessionDuration = (seconds: number): string => {
   return `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
 };
 type SyncStatus = 'idle' | 'checking' | 'syncing' | 'ready' | 'remote' | 'synced' | 'conflict' | 'unavailable' | 'error';
+type AuthStatus = 'checking' | 'signed_out' | 'registering' | 'signing_in' | 'syncing' | 'signed_in' | 'error';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -52,22 +54,34 @@ function App() {
   const [exitDialogOpen, setExitDialogOpen] = useState(false);
   const [restRemaining, setRestRemaining] = useState(0);
   const [restUntil, setRestUntil] = useState<number | null>(null);
+  const [restPaused, setRestPaused] = useState(false);
   const [theme, setTheme] = useState<Theme>(data.profile.theme);
   const [syncState, setSyncState] = useState<SyncState>(() => loadSyncState());
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
   const [syncError, setSyncError] = useState<string>();
   const [syncReady, setSyncReady] = useState(false);
+  const [authUser, setAuthUser] = useState<AuthUser>();
+  const [authStatus, setAuthStatus] = useState<AuthStatus>('checking');
+  const [authError, setAuthError] = useState<string>();
+  const [passkeys, setPasskeys] = useState<AuthPasskey[]>([]);
+  const [cloudUpdatedAt, setCloudUpdatedAt] = useState<string>();
   const [lastSessionChange, setLastSessionChange] = useState<{ sessionId: string; snapshot: WorkoutSession }>();
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [isInstalled, setIsInstalled] = useState(false);
   const [screenWakeLockActive, setScreenWakeLockActive] = useState(false);
   const screenWakeLockRef = useRef<ScreenWakeLock | undefined>(undefined);
   const syncStateRef = useRef(syncState);
+  const authUserRef = useRef<AuthUser | undefined>(undefined);
+  const cloudUpdatedAtRef = useRef<string | undefined>(undefined);
+  const cloudSyncReadyRef = useRef(false);
 
   useEffect(() => {
     syncStateRef.current = syncState;
     persistSyncState(syncState);
   }, [syncState]);
+  useEffect(() => {
+    authUserRef.current = authUser;
+  }, [authUser]);
   useEffect(() => {
     persistData(data);
     if (!syncReady || !syncState.key) return undefined;
@@ -87,6 +101,73 @@ function App() {
     }, 900);
     return () => window.clearTimeout(timer);
   }, [data, syncReady, syncState.key]);
+  useEffect(() => {
+    if (!authUser || !cloudSyncReadyRef.current) return undefined;
+    const timer = window.setTimeout(() => {
+      setAuthStatus('syncing');
+      pushCloudData(data, cloudUpdatedAtRef.current).then(({ updatedAt }) => {
+        cloudUpdatedAtRef.current = updatedAt;
+        setCloudUpdatedAt(updatedAt);
+        setAuthStatus('signed_in');
+        setAuthError(undefined);
+      }).catch((error: unknown) => {
+        const value = error instanceof AuthApiError ? error : new AuthApiError('No se pudo sincronizar con D1.', 0);
+        if (value.status === 401) {
+          cloudSyncReadyRef.current = false;
+          setAuthUser(undefined);
+          setAuthStatus('signed_out');
+        } else {
+          setAuthStatus('error');
+        }
+        setAuthError(value.message);
+      });
+    }, 900);
+    return () => window.clearTimeout(timer);
+  }, [authUser, data]);
+  useEffect(() => {
+    let cancelled = false;
+    currentUser().then(async (user) => {
+      if (cancelled) return;
+      if (!user) {
+        setAuthStatus('signed_out');
+        return;
+      }
+      authUserRef.current = user;
+      setAuthUser(user);
+      listPasskeys().then(setPasskeys).catch(() => undefined);
+      setAuthStatus('syncing');
+      try {
+        const remote = await pullCloudData();
+        if (cancelled) return;
+        if (remote.data) {
+          const localHasActivity = data.sessions.length > 0 || data.progress.length > 0 || data.checkins.length > 0 || data.onboardingComplete;
+          const keepLocal = localHasActivity && window.confirm('Ya hay una copia de Radian en tu cuenta. ¿Quieres conservar los datos de este dispositivo y subirlos a la nube?');
+          if (keepLocal) {
+            const saved = await pushCloudData(data, remote.updatedAt);
+            cloudUpdatedAtRef.current = saved.updatedAt;
+            setCloudUpdatedAt(saved.updatedAt);
+          } else {
+            setData(migrateData(remote.data));
+            if (remote.updatedAt) cloudUpdatedAtRef.current = remote.updatedAt;
+            setCloudUpdatedAt(remote.updatedAt);
+          }
+        } else {
+          const saved = await pushCloudData(data);
+          cloudUpdatedAtRef.current = saved.updatedAt;
+          setCloudUpdatedAt(saved.updatedAt);
+        }
+        cloudSyncReadyRef.current = true;
+        setAuthStatus('signed_in');
+        setAuthError(undefined);
+      } catch (error: unknown) {
+        if (cancelled) return;
+        cloudSyncReadyRef.current = false;
+        setAuthStatus('error');
+        setAuthError(error instanceof AuthApiError ? error.message : 'No se pudo cargar la cuenta en la nube.');
+      }
+    }).catch(() => { if (!cancelled) setAuthStatus('signed_out'); });
+    return () => { cancelled = true; };
+  }, []);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     document.documentElement.dataset.textSize = data.profile.largeText ? 'large' : 'normal';
@@ -111,6 +192,7 @@ function App() {
       setRestRemaining(remaining);
       if (remaining === 0) {
         setRestUntil(null);
+        setRestPaused(false);
         if ('vibrate' in navigator) navigator.vibrate?.(90);
         setToast('Descanso terminado');
       }
@@ -129,6 +211,22 @@ function App() {
   const startRest = (seconds: number): void => {
     setRestUntil(Date.now() + seconds * 1000);
     setRestRemaining(seconds);
+    setRestPaused(false);
+  };
+  const pauseRest = (): void => {
+    if (restRemaining <= 0) return;
+    setRestUntil(null);
+    setRestPaused(true);
+  };
+  const resumeRest = (): void => {
+    if (restRemaining <= 0) return;
+    setRestUntil(Date.now() + restRemaining * 1000);
+    setRestPaused(false);
+  };
+  const adjustRest = (seconds: number): void => {
+    const next = Math.max(1, restRemaining + seconds);
+    setRestRemaining(next);
+    setRestUntil(restPaused ? null : Date.now() + next * 1000);
   };
   useEffect(() => setData((current) => migrateData(current)), []);
   const todayDay = data.plan.days.find((day) => day.weekday === currentWeekday());
@@ -241,12 +339,43 @@ function App() {
     setExitDialogOpen(false);
     setRestUntil(null);
     setRestRemaining(0);
+    setRestPaused(false);
     setView('routine');
     setToast('Sesión guardada para retomarla cuando quieras');
   };
 
   const updateRoutineDay = (dayId: string, updater: (day: WorkoutDay) => WorkoutDay): void => {
     updateData((current) => ({ ...current, plan: { ...current.plan, version: current.plan.version + 1, days: current.plan.days.map((day) => day.id === dayId ? updater(day) : day) } }));
+  };
+
+  const addRoutineExercise = (dayId: string, definition: ExerciseDefinition): void => {
+    updateRoutineDay(dayId, (day) => ({
+      ...day,
+      exercises: [...day.exercises, {
+        id: `${dayId}-${definition.id}-${Date.now()}`,
+        exerciseId: definition.id,
+        name: definition.name,
+        sets: 3,
+        repMin: 8,
+        repMax: 12,
+        restSeconds: 90,
+        active: true,
+        warmupSets: 0,
+        progressionPolicy: 'double',
+        progressionIncrementKg: 2.5,
+        imageUrl: definition.imageUrl,
+        imagePosition: definition.imagePosition,
+      }],
+    }));
+    setToast(`${definition.name} añadido a la rutina`);
+  };
+
+  const removeRoutineExercise = (dayId: string, exerciseId: string): void => {
+    const day = data.plan.days.find((item) => item.id === dayId);
+    const exercise = day?.exercises.find((item) => item.id === exerciseId);
+    if (!day || !exercise || !window.confirm(`¿Quitar ${exercise.name} de esta rutina?`)) return;
+    updateRoutineDay(dayId, (current) => ({ ...current, exercises: current.exercises.filter((item) => item.id !== exerciseId) }));
+    setToast('Ejercicio quitado de la rutina');
   };
 
   const addProgress = (entry: Omit<ProgressEntry, 'id' | 'date'>): void => {
@@ -364,25 +493,149 @@ function App() {
     setToast('Perfil inicial guardado');
   };
 
+  const repeatOnboarding = (): void => {
+    setView('today');
+    updateData((current) => ({ ...current, onboardingComplete: false }));
+  };
+
+  const hydrateAccount = async (user: AuthUser, localSnapshot: AppData): Promise<void> => {
+    authUserRef.current = user;
+    setAuthUser(user);
+    setAuthStatus('syncing');
+    setAuthError(undefined);
+    cloudSyncReadyRef.current = false;
+    const remote = await pullCloudData();
+    if (remote.data) {
+      const localHasActivity = localSnapshot.sessions.length > 0 || localSnapshot.progress.length > 0 || localSnapshot.checkins.length > 0 || localSnapshot.onboardingComplete;
+      const keepLocal = localHasActivity && window.confirm('Ya hay una copia de Radian en tu cuenta. ¿Quieres conservar los datos de este dispositivo y subirlos a la nube?');
+      if (keepLocal) {
+        const saved = await pushCloudData(localSnapshot, remote.updatedAt);
+        cloudUpdatedAtRef.current = saved.updatedAt;
+        setCloudUpdatedAt(saved.updatedAt);
+      } else {
+        setData(migrateData(remote.data));
+        if (remote.updatedAt) cloudUpdatedAtRef.current = remote.updatedAt;
+        setCloudUpdatedAt(remote.updatedAt);
+      }
+    } else {
+      const saved = await pushCloudData(localSnapshot);
+      cloudUpdatedAtRef.current = saved.updatedAt;
+      setCloudUpdatedAt(saved.updatedAt);
+    }
+    cloudSyncReadyRef.current = true;
+    setAuthStatus('signed_in');
+    listPasskeys().then(setPasskeys).catch(() => undefined);
+    setToast(`Cuenta conectada como ${user.displayName}`);
+  };
+
+  const handleRegisterPasskey = async (displayName: string, passkeyLabel: string): Promise<void> => {
+    setAuthStatus('registering');
+    setAuthError(undefined);
+    try {
+      const user = await registerPasskey(displayName, passkeyLabel);
+      await hydrateAccount(user, data);
+    } catch (error: unknown) {
+      cloudSyncReadyRef.current = false;
+      setAuthStatus('signed_out');
+      setAuthError(error instanceof AuthApiError ? error.message : 'No se pudo crear la cuenta con passkey.');
+    }
+  };
+
+  const handleLoginPasskey = async (): Promise<void> => {
+    setAuthStatus('signing_in');
+    setAuthError(undefined);
+    try {
+      const user = await loginWithPasskey();
+      await hydrateAccount(user, data);
+    } catch (error: unknown) {
+      cloudSyncReadyRef.current = false;
+      setAuthStatus('signed_out');
+      setAuthError(error instanceof AuthApiError ? error.message : 'No se pudo iniciar sesión con passkey.');
+    }
+  };
+
+  const handleAddPasskey = async (passkeyLabel: string): Promise<void> => {
+    setAuthStatus('registering');
+    setAuthError(undefined);
+    try {
+      await addPasskey(passkeyLabel);
+      listPasskeys().then(setPasskeys).catch(() => undefined);
+      setAuthStatus('signed_in');
+      setToast('Nueva passkey añadida');
+    } catch (error: unknown) {
+      setAuthStatus(authUserRef.current ? 'signed_in' : 'signed_out');
+      setAuthError(error instanceof AuthApiError ? error.message : 'No se pudo añadir la passkey.');
+    }
+  };
+
+  const handleRenamePasskey = async (credentialId: string, label: string): Promise<void> => {
+    try {
+      await renamePasskey(credentialId, label);
+      setPasskeys(await listPasskeys());
+      setToast('Nombre de passkey actualizado');
+    } catch (error: unknown) {
+      setAuthError(error instanceof AuthApiError ? error.message : 'No se pudo renombrar la passkey.');
+    }
+  };
+
+  const handleRevokePasskey = async (credentialId: string): Promise<void> => {
+    if (!window.confirm('¿Revocar esta passkey? Tendrás que usar otra para volver a entrar.')) return;
+    try {
+      await revokePasskey(credentialId);
+      setPasskeys(await listPasskeys());
+      setToast('Passkey revocada');
+    } catch (error: unknown) {
+      setAuthError(error instanceof AuthApiError ? error.message : 'No se pudo revocar la passkey.');
+    }
+  };
+
+  const handleLogout = async (): Promise<void> => {
+    try { await logout(); } catch { /* La sesión local puede cerrarse aunque la red falle. */ }
+    cloudSyncReadyRef.current = false;
+    authUserRef.current = undefined;
+    setAuthUser(undefined);
+    setPasskeys([]);
+    setCloudUpdatedAt(undefined);
+    setAuthStatus('signed_out');
+    setAuthError(undefined);
+    setToast('Sesión cerrada; tus datos siguen en este dispositivo');
+  };
+
+  const handleLogoutEverywhere = async (): Promise<void> => {
+    try {
+      await logoutEverywhere();
+      cloudSyncReadyRef.current = false;
+      authUserRef.current = undefined;
+      setAuthUser(undefined);
+      setPasskeys([]);
+      setCloudUpdatedAt(undefined);
+      setAuthStatus('signed_out');
+      setToast('Sesión cerrada en todos los dispositivos');
+    } catch (error: unknown) {
+      setAuthError(error instanceof AuthApiError ? error.message : 'No se pudo cerrar la sesión en todos los dispositivos.');
+    }
+  };
+
   return (
     <div className="app-shell">
       <a className="skip-link" href="#main-content">Ir al contenido</a>
       <header className="topbar">
         <div className="brand-lockup"><span className="brand-mark">R</span><span>radian</span></div>
-        <div className="connection-state" aria-label="Los datos se guardan primero en este dispositivo"><span className="status-dot" /> local-first</div>
+        <div className="connection-state" aria-label={authUser ? 'Cuenta protegida con passkey y sincronizada con D1' : 'Los datos se guardan primero en este dispositivo'}><span className="status-dot" /> {authUser ? authStatus === 'syncing' ? 'sincronizando' : 'D1 · passkey' : 'local-first'}</div>
       </header>
       <main className="app-main" id="main-content">
+        {view === 'profile' && <AccountPanel user={authUser} passkeys={passkeys} status={authStatus} error={authError} cloudUpdatedAt={cloudUpdatedAt} onRegister={handleRegisterPasskey} onLogin={handleLoginPasskey} onAddPasskey={handleAddPasskey} onRenamePasskey={handleRenamePasskey} onRevokePasskey={handleRevokePasskey} onLogout={handleLogout} onLogoutEverywhere={handleLogoutEverywhere} />}
         {activeSession && view !== 'today' && <ResumeSessionBanner session={activeSession} onResume={() => setView('today')} />}
         {view === 'today' && <TodayView data={data} todayDay={todayDay} activeSession={activeSession} restRemaining={restRemaining} screenWakeLockActive={screenWakeLockActive} onStart={startSession} onComplete={completeExercise} onDraft={updateExerciseDraft} onSwapExercise={swapSessionExercise} onRest={() => startRest(activeSession?.plannedExercises[activeSession.activeExerciseIndex]?.restSeconds ?? 90)} onNavigate={setView} onUndo={undoLastSessionChange} canUndo={Boolean(lastSessionChange)} onExit={leaveSession} />}
-        {view === 'routine' && <RoutineView data={data} activeDay={activeDay} onDayChange={setActiveDayId} onUpdateDay={updateRoutineDay} />}
+        {view === 'routine' && <RoutineView data={data} activeDay={activeDay} onDayChange={setActiveDayId} onUpdateDay={updateRoutineDay} onAddExercise={addRoutineExercise} onRemoveExercise={removeRoutineExercise} />}
         {view === 'progress' && <ProgressView data={data} onAddProgress={addProgress} onAddCheckin={addCheckin} onCopySummary={() => copyCoachSummary(data, setToast)} />}
-        {view === 'profile' && <ProfileView data={data} theme={theme} onThemeChange={changeTheme} onUpdateProfile={(profile) => updateData((current) => ({ ...current, profile: { ...current.profile, ...profile } }))} onImport={(next) => { setData(next); setToast('Copia restaurada'); }} syncState={syncState} syncStatus={syncStatus} syncError={syncError} onConnectSync={connectSync} onUploadSync={uploadSync} onDownloadSync={downloadSync} onDisconnectSync={disconnectSync} onRevokeSync={revokeSync} onInstall={installPrompt ? installApp : undefined} isInstalled={isInstalled} />}
+        {view === 'profile' && <ProfileView data={data} theme={theme} onThemeChange={changeTheme} onUpdateProfile={(profile) => updateData((current) => ({ ...current, profile: { ...current.profile, ...profile } }))} onRepeatOnboarding={repeatOnboarding} onImport={(next) => { setData(next); setToast('Copia restaurada'); }} syncState={syncState} syncStatus={syncStatus} syncError={syncError} onConnectSync={connectSync} onUploadSync={uploadSync} onDownloadSync={downloadSync} onDisconnectSync={disconnectSync} onRevokeSync={revokeSync} onInstall={installPrompt ? installApp : undefined} isInstalled={isInstalled} />}
       </main>
       <BottomNav view={view} onChange={setView} />
       {exitDialogOpen && <SessionExitDialog onCancel={() => setExitDialogOpen(false)} onConfirm={confirmLeaveSession} />}
       {(restRemaining > 0 || toast) && <div className="floating-feedback" aria-live="polite">
         {toast && <div className="toast" role="status"><Check size={16} />{toast}</div>}
-        {restRemaining > 0 && <div className="rest-float"><Timer size={17} /><div><strong>{formatDuration(restRemaining)}</strong><span>descanso en curso</span></div><button className="icon-button" aria-label="Cerrar temporizador" onClick={() => { setRestUntil(null); setRestRemaining(0); }}><X size={17} /></button></div>}
+        {restRemaining > 0 && <div className="rest-float"><Timer size={17} /><div><strong>{formatDuration(restRemaining)}</strong><span>{restPaused ? 'descanso pausado' : 'descanso en curso'}</span></div><div className="rest-controls"><button type="button" aria-label="Restar 15 segundos" onClick={() => adjustRest(-15)}><Minus size={14} /></button><button type="button" aria-label={restPaused ? 'Reanudar descanso' : 'Pausar descanso'} onClick={restPaused ? resumeRest : pauseRest}>{restPaused ? <Play size={14} fill="currentColor" /> : <Pause size={14} />}</button><button type="button" aria-label="Añadir 30 segundos" onClick={() => adjustRest(30)}><Plus size={14} /></button><button type="button" aria-label="Cerrar temporizador" onClick={() => { setRestUntil(null); setRestRemaining(0); setRestPaused(false); }}><X size={17} /></button></div></div>}
       </div>}
       {!data.onboardingComplete && <OnboardingDialog profile={data.profile} onComplete={completeOnboarding} />}
     </div>
@@ -469,7 +722,7 @@ function ActiveSession({ session, restRemaining, screenWakeLockActive, previousE
     const hasRecordedInputs = exercise.setLogs.some((set) => set.completed || set.weightKg !== undefined || set.actualReps !== undefined);
     const source = hasRecordedInputs ? exercise.setLogs : previousExercise?.setLogs;
     const legacy = hasRecordedInputs ? exercise : previousExercise;
-    setSetLogs(createSetLogs(exercise.sets, exercise.repMin, source, legacy, { warmupSets: exercise.warmupSets, defaultActualReps: previousExercise?.setLogs.map((set) => set.actualReps) }));
+    setSetLogs(createSetLogs(exercise.sets, exercise.repMin, source, legacy, { warmupSets: exercise.warmupSets, defaultActualReps: previousExercise?.setLogs.map((set) => set.actualReps), copyCompleted: !previousExercise || hasRecordedInputs }));
     setDiscomfort(exercise?.discomfort ?? false);
     setNote(exercise?.discomfortNote ?? '');
     setPendingDifficulty(exercise?.difficulty);
@@ -487,7 +740,7 @@ function ActiveSession({ session, restRemaining, screenWakeLockActive, previousE
   };
   const copyPrevious = (): void => {
     if (!previousExercise) return;
-    const nextLogs = createSetLogs(exercise.sets, exercise.repMin, previousExercise.setLogs, previousExercise, { warmupSets: exercise.warmupSets });
+    const nextLogs = createSetLogs(exercise.sets, exercise.repMin, previousExercise.setLogs, previousExercise, { warmupSets: exercise.warmupSets, copyCompleted: false });
     setSetLogs(nextLogs);
     onDraft(session.id, exercise.plannedExerciseId, { setLogs: nextLogs });
   };
@@ -548,7 +801,7 @@ function ExerciseThumb({ src, position, alt, large = false }: { src?: string; po
   return <div className={large ? 'exercise-thumb large' : 'exercise-thumb'}>{src && !failed ? usesAtlas ? <div className="exercise-thumb-image" style={atlasStyle} role="img" aria-label={alt} /> : <img src={src} alt={alt} loading="lazy" onError={() => setFailed(true)} /> : <div className="exercise-thumb-fallback" aria-label={alt}><Dumbbell size={large ? 30 : 20} /></div>}</div>;
 }
 
-function RoutineView({ data, activeDay, onDayChange, onUpdateDay }: { data: AppData; activeDay: WorkoutDay; onDayChange: (id: string) => void; onUpdateDay: (dayId: string, updater: (day: WorkoutDay) => WorkoutDay) => void }) {
+function RoutineView({ data, activeDay, onDayChange, onUpdateDay, onAddExercise, onRemoveExercise }: { data: AppData; activeDay: WorkoutDay; onDayChange: (id: string) => void; onUpdateDay: (dayId: string, updater: (day: WorkoutDay) => WorkoutDay) => void; onAddExercise: (dayId: string, exercise: ExerciseDefinition) => void; onRemoveExercise: (dayId: string, exerciseId: string) => void }) {
   const [editingName, setEditingName] = useState(false);
   const [expandedExerciseId, setExpandedExerciseId] = useState<string | undefined>(() => activeDay.exercises.find((exercise) => exercise.active)?.id);
   const [libraryOpen, setLibraryOpen] = useState(false);
@@ -564,10 +817,10 @@ function RoutineView({ data, activeDay, onDayChange, onUpdateDay }: { data: AppD
     onUpdateDay(activeDay.id, (day) => ({ ...day, exercises: day.exercises.map((item) => item.id === targetId ? { ...item, exerciseId: replacement.id, name: replacement.name, imageUrl: replacement.imageUrl, imagePosition: replacement.imagePosition } : item) }));
     setLibraryOpen(false);
   };
-  return <section className="view-section"><PageHeader eyebrow="programación" title="Tu rutina" action={<button className="icon-button subtle" aria-label="Abrir biblioteca de ejercicios" onClick={() => openLibrary()}><Search size={19} /></button>} /><div className="day-tabs" role="tablist">{data.plan.days.map((day) => <button key={day.id} role="tab" aria-selected={activeDay.id === day.id} className={activeDay.id === day.id ? 'day-tab selected' : 'day-tab'} onClick={() => { onDayChange(day.id); setEditingName(false); }}><span>{day.shortLabel}</span><small>{displayWorkoutName(day.name).split(',')[0]}</small></button>)}</div><section className="routine-intro"><div>{editingName ? <input className="title-input" value={activeDay.name} onChange={(event) => onUpdateDay(activeDay.id, (day) => ({ ...day, name: event.target.value }))} onBlur={() => setEditingName(false)} autoFocus /> : <h2>{displayWorkoutName(activeDay.name)}</h2>}<p>{activeDay.focus} · ~{data.profile.sessionMinutes} min</p></div><button className="icon-button subtle" aria-label="Editar nombre del entrenamiento" onClick={() => setEditingName(true)}><MoreHorizontal size={19} /></button></section>{libraryOpen && <ExerciseLibrary exercises={data.exercises} plannedExercises={activeDay.exercises} targetId={libraryTargetId} onTargetChange={setLibraryTargetId} onSelect={replaceFromLibrary} onClose={() => setLibraryOpen(false)} />}<div className="routine-list">{activeDay.exercises.map((exercise, index) => <RoutineExercise key={exercise.id} exercise={exercise} index={index} exerciseOptions={data.exercises} alternatives={compatibleAlternatives(data.exercises, exercise.exerciseId)} guidance={exerciseGuidance[exercise.exerciseId]} lastSession={latestExercise(data.sessions, exercise.exerciseId)} progressionAction={progressionAction(exercise.exerciseId, data.sessions, exercise)} expanded={expandedExerciseId === exercise.id} onOpenLibrary={() => openLibrary(exercise.id)} onToggle={() => setExpandedExerciseId((current) => current === exercise.id ? undefined : exercise.id)} onChange={(patch) => onUpdateDay(activeDay.id, (day) => ({ ...day, exercises: day.exercises.map((item) => item.id === exercise.id ? { ...item, ...patch } : item) }))} onMove={(direction) => onUpdateDay(activeDay.id, (day) => ({ ...day, exercises: moveExercise(day.exercises, index, direction) }))} />)}</div><p className="history-note"><History size={15} /> Las sesiones guardadas conservan la rutina que tenían al empezar.</p></section>;
+  return <section className="view-section"><PageHeader eyebrow="programación" title="Tu rutina" action={<button className="icon-button subtle" aria-label="Abrir biblioteca de ejercicios" onClick={() => openLibrary()}><Search size={19} /></button>} /><div className="day-tabs" role="tablist">{data.plan.days.map((day) => <button key={day.id} role="tab" aria-selected={activeDay.id === day.id} className={activeDay.id === day.id ? 'day-tab selected' : 'day-tab'} onClick={() => { onDayChange(day.id); setEditingName(false); }}><span>{day.shortLabel}</span><small>{displayWorkoutName(day.name).split(',')[0]}</small></button>)}</div><section className="routine-intro"><div>{editingName ? <input className="title-input" value={activeDay.name} onChange={(event) => onUpdateDay(activeDay.id, (day) => ({ ...day, name: event.target.value }))} onBlur={() => setEditingName(false)} autoFocus /> : <h2>{displayWorkoutName(activeDay.name)}</h2>}<p>{activeDay.focus} · ~{data.profile.sessionMinutes} min</p></div><button className="icon-button subtle" aria-label="Editar nombre del entrenamiento" onClick={() => setEditingName(true)}><MoreHorizontal size={19} /></button></section>{libraryOpen && <ExerciseLibrary exercises={data.exercises} plannedExercises={activeDay.exercises} targetId={libraryTargetId} onTargetChange={setLibraryTargetId} onSelect={replaceFromLibrary} onAdd={(exercise) => { onAddExercise(activeDay.id, exercise); setLibraryOpen(false); }} onClose={() => setLibraryOpen(false)} />}<div className="routine-list">{activeDay.exercises.map((exercise, index) => <RoutineExercise key={exercise.id} exercise={exercise} index={index} exerciseOptions={data.exercises} alternatives={compatibleAlternatives(data.exercises, exercise.exerciseId)} guidance={exerciseGuidance[exercise.exerciseId]} lastSession={latestExercise(data.sessions, exercise.exerciseId)} progressionAction={progressionAction(exercise.exerciseId, data.sessions, exercise)} expanded={expandedExerciseId === exercise.id} onOpenLibrary={() => openLibrary(exercise.id)} onToggle={() => setExpandedExerciseId((current) => current === exercise.id ? undefined : exercise.id)} onChange={(patch) => onUpdateDay(activeDay.id, (day) => ({ ...day, exercises: day.exercises.map((item) => item.id === exercise.id ? { ...item, ...patch } : item) }))} onMove={(direction) => onUpdateDay(activeDay.id, (day) => ({ ...day, exercises: moveExercise(day.exercises, index, direction) }))} onRemove={() => onRemoveExercise(activeDay.id, exercise.id)} />)}</div><button type="button" className="secondary-button routine-add-button" onClick={() => openLibrary()}><Plus size={16} /> Añadir ejercicio</button><p className="history-note"><History size={15} /> Las sesiones guardadas conservan la rutina que tenían al empezar.</p></section>;
 }
 
-function ExerciseLibrary({ exercises, plannedExercises, targetId, onTargetChange, onSelect, onClose }: { exercises: ExerciseDefinition[]; plannedExercises: PlannedExercise[]; targetId?: string; onTargetChange: (id: string) => void; onSelect: (targetId: string, replacement: ExerciseDefinition) => void; onClose: () => void }) {
+function ExerciseLibrary({ exercises, plannedExercises, targetId, onTargetChange, onSelect, onAdd, onClose }: { exercises: ExerciseDefinition[]; plannedExercises: PlannedExercise[]; targetId?: string; onTargetChange: (id: string) => void; onSelect: (targetId: string, replacement: ExerciseDefinition) => void; onAdd: (exercise: ExerciseDefinition) => void; onClose: () => void }) {
   const [query, setQuery] = useState('');
   const [muscleGroup, setMuscleGroup] = useState('');
   const [equipment, setEquipment] = useState('');
@@ -575,12 +828,12 @@ function ExerciseLibrary({ exercises, plannedExercises, targetId, onTargetChange
   const muscles = Array.from(new Set(exercises.map((exercise) => exercise.muscleGroup))).sort((a, b) => a.localeCompare(b, 'es'));
   const equipmentOptions = Array.from(new Set(exercises.map((exercise) => exercise.equipment))).sort();
   const results = exercises.filter((exercise) => exerciseMatches(exercise, query, muscleGroup, equipment)).sort((a, b) => a.name.localeCompare(b.name, 'es'));
-  return <section className="exercise-library" aria-label="Biblioteca de ejercicios"><div className="exercise-library-header"><div><p className="eyebrow">biblioteca personal</p><h2>Encuentra una variante</h2><p>Filtra por zona o material y sustituye solo este bloque de la rutina.</p></div><button className="icon-button subtle" type="button" aria-label="Cerrar biblioteca" onClick={onClose}><X size={19} /></button></div><label className="library-target">Cambiar ejercicio de<select value={target ?? ''} onChange={(event) => onTargetChange(event.target.value)}>{plannedExercises.map((exercise) => <option key={exercise.id} value={exercise.id}>{exercise.name}</option>)}</select></label><div className="library-filters"><label className="library-search"><Search size={16} /><span className="sr-only">Buscar ejercicio</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar press, polea, dorsal…" /></label><label><span className="sr-only">Filtrar por músculo</span><select value={muscleGroup} onChange={(event) => setMuscleGroup(event.target.value)}><option value="">Todos los músculos</option>{muscles.map((muscle) => <option key={muscle} value={muscle}>{muscle}</option>)}</select></label><label><span className="sr-only">Filtrar por material</span><select value={equipment} onChange={(event) => setEquipment(event.target.value)}><option value="">Todo el material</option>{equipmentOptions.map((item) => <option key={item} value={item}>{equipmentLabel(item as ExerciseDefinition['equipment'])}</option>)}</select></label></div><p className="library-results-count">{results.length} ejercicios disponibles</p><div className="library-results">{results.map((exercise) => <button type="button" className="library-result" key={exercise.id} onClick={() => target && onSelect(target, exercise)}><ExerciseThumb src={exercise.imageUrl} position={exercise.imagePosition} alt={`Referencia de ${exercise.name}`} /><span><strong>{exercise.name}</strong><small>{exercise.muscleGroup} · {equipmentLabel(exercise.equipment)}</small></span></button>)}</div>{results.length === 0 && <p className="library-empty">No hay ejercicios con estos filtros.</p>}</section>;
+  return <section className="exercise-library" aria-label="Biblioteca de ejercicios"><div className="exercise-library-header"><div><p className="eyebrow">biblioteca personal</p><h2>Encuentra una variante</h2><p>Filtra por zona o material. Puedes sustituir un bloque o añadir uno nuevo.</p></div><button className="icon-button subtle" type="button" aria-label="Cerrar biblioteca" onClick={onClose}><X size={19} /></button></div>{plannedExercises.length > 0 && <label className="library-target">Cambiar ejercicio de<select value={target ?? ''} onChange={(event) => onTargetChange(event.target.value)}>{plannedExercises.map((exercise) => <option key={exercise.id} value={exercise.id}>{exercise.name}</option>)}</select></label>}<div className="library-filters"><label className="library-search"><Search size={16} /><span className="sr-only">Buscar ejercicio</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar press, polea, dorsal…" /></label><label><span className="sr-only">Filtrar por músculo</span><select value={muscleGroup} onChange={(event) => setMuscleGroup(event.target.value)}><option value="">Todos los músculos</option>{muscles.map((muscle) => <option key={muscle} value={muscle}>{muscle}</option>)}</select></label><label><span className="sr-only">Filtrar por material</span><select value={equipment} onChange={(event) => setEquipment(event.target.value)}><option value="">Todo el material</option>{equipmentOptions.map((item) => <option key={item} value={item}>{equipmentLabel(item as ExerciseDefinition['equipment'])}</option>)}</select></label></div><p className="library-results-count">{results.length} ejercicios disponibles</p><div className="library-results">{results.map((exercise) => <div className="library-result-row" key={exercise.id}><button type="button" className="library-result" disabled={!target} onClick={() => target && onSelect(target, exercise)}><ExerciseThumb src={exercise.imageUrl} position={exercise.imagePosition} alt={`Referencia de ${exercise.name}`} /><span><strong>{exercise.name}</strong><small>{equipmentLabel(exercise.equipment)} · {target ? 'sustituir' : 'seleccionar'}</small></span></button><button type="button" className="library-add-button" onClick={() => onAdd(exercise)}><Plus size={14} /> Añadir</button></div>)}</div>{results.length === 0 && <p className="library-empty">No hay ejercicios con estos filtros.</p>}</section>;
 }
 
-function RoutineExercise({ exercise, index, exerciseOptions, alternatives, guidance, lastSession, progressionAction: action, expanded, onOpenLibrary, onToggle, onChange, onMove }: { exercise: PlannedExercise; index: number; exerciseOptions: ExerciseDefinition[]; alternatives: ExerciseDefinition[]; guidance?: ExerciseGuidance; lastSession?: ExerciseSession; progressionAction?: ReturnType<typeof progressionAction>; expanded: boolean; onOpenLibrary: () => void; onToggle: () => void; onChange: (patch: Partial<PlannedExercise>) => void; onMove: (direction: -1 | 1) => void }) {
+function RoutineExercise({ exercise, index, exerciseOptions, alternatives, guidance, lastSession, progressionAction: action, expanded, onOpenLibrary, onToggle, onChange, onMove, onRemove }: { exercise: PlannedExercise; index: number; exerciseOptions: ExerciseDefinition[]; alternatives: ExerciseDefinition[]; guidance?: ExerciseGuidance; lastSession?: ExerciseSession; progressionAction?: ReturnType<typeof progressionAction>; expanded: boolean; onOpenLibrary: () => void; onToggle: () => void; onChange: (patch: Partial<PlannedExercise>) => void; onMove: (direction: -1 | 1) => void; onRemove: () => void }) {
   const detail = guidance ?? { cues: ['Mantén una postura estable.', 'Mueve la carga sin impulso.', 'Controla el regreso.'] };
-  return <article className={exercise.active ? 'routine-exercise' : 'routine-exercise is-off'}><div className="routine-number">{String(index + 1).padStart(2, '0')}</div><button type="button" className="routine-thumb-button" onClick={onToggle} aria-label={`${expanded ? 'Ocultar' : 'Ver'} imagen grande de ${exercise.name}`} aria-expanded={expanded}><ExerciseThumb src={exercise.imageUrl} position={exercise.imagePosition} alt={`Referencia de ${exercise.name}`} /></button><div className="routine-exercise-content"><div className="routine-exercise-title"><div className="routine-exercise-name"><select className="exercise-select" value={exercise.exerciseId} aria-label={`Cambiar ${exercise.name}`} onChange={(event) => { const replacement = exerciseOptions.find((item) => item.id === event.target.value); if (replacement) onChange({ exerciseId: replacement.id, name: replacement.name, imageUrl: replacement.imageUrl, imagePosition: replacement.imagePosition }); }}><option value={exercise.exerciseId}>{exercise.name}</option>{exerciseOptions.filter((item) => item.id !== exercise.exerciseId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><p>{exercise.active ? 'Activo en la sesión' : 'Pausado'}</p><button type="button" className="routine-library-button" onClick={onOpenLibrary}><Search size={13} /> Buscar en biblioteca</button></div><div className="routine-title-actions"><button type="button" className="routine-image-trigger" onClick={onToggle} aria-expanded={expanded}>{expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}<span>{expanded ? 'Ocultar imagen' : 'Ver imagen'}</span></button><button type="button" className={exercise.active ? 'toggle on' : 'toggle'} aria-label={exercise.active ? `Desactivar ${exercise.name}` : `Activar ${exercise.name}`} aria-pressed={exercise.active} onClick={() => onChange({ active: !exercise.active })}><span /></button></div></div>{expanded && <div className="routine-visual-guide"><ExerciseThumb src={exercise.imageUrl} position={exercise.imagePosition} alt={`Imagen ampliada de ${exercise.name}`} large /><div className="routine-cues"><p className="eyebrow">cómo hacerlo</p><ol>{detail.cues.map((cue, cueIndex) => <li key={cue}><span>{cueIndex + 1}</span>{cue}</li>)}</ol></div></div>}<div className="routine-fields"><label>Series<input inputMode="numeric" value={exercise.sets} onChange={(event) => onChange({ sets: clampNumber(event.target.value, 1, 8) })} /></label><label>Reps<input inputMode="numeric" value={`${exercise.repMin}-${exercise.repMax}`} onChange={(event) => { const [min, max] = event.target.value.split(/[–-]/).map(Number); if (Number.isFinite(min) && Number.isFinite(max)) onChange({ repMin: min, repMax: max }); }} /></label><label>Descanso<input inputMode="numeric" value={exercise.restSeconds / 60} onChange={(event) => onChange({ restSeconds: clampNumber(event.target.value, 0.5, 4) * 60 })} /></label></div><div className="routine-progression-fields"><label>Calentamiento<select value={exercise.warmupSets ?? 0} onChange={(event) => onChange({ warmupSets: clampNumber(event.target.value, 0, 3) })}><option value="0">Ninguno</option><option value="1">1 serie</option><option value="2">2 series</option><option value="3">3 series</option></select></label><label>Regla de progresión<select value={exercise.progressionPolicy ?? 'double'} onChange={(event) => onChange({ progressionPolicy: event.target.value as ProgressionPolicy })}><option value="double">Doble progresión</option><option value="linear">Lineal</option><option value="off">Manual</option></select></label><label>Salto de carga<input inputMode="decimal" value={exercise.progressionIncrementKg ?? 2.5} onChange={(event) => onChange({ progressionIncrementKg: clampNumber(event.target.value, 0.5, 10) })} /></label></div>{alternatives.length > 0 && <div className="routine-alternatives"><span>Alternativas compatibles</span><div>{alternatives.slice(0, 3).map((replacement) => <button type="button" key={replacement.id} onClick={() => onChange({ exerciseId: replacement.id, name: replacement.name, imageUrl: replacement.imageUrl, imagePosition: replacement.imagePosition })}>{replacement.name}</button>)}</div></div>}{lastSession && <p className="routine-history"><History size={14} /> Última vez: {formatExerciseSummary(lastSession)}</p>}{action && <div className={`routine-next-action ${action.tone}`}><Gauge size={14} /><div><strong>{action.title}</strong><span>{action.detail}</span></div></div>}<div className="move-actions"><button type="button" onClick={() => onMove(-1)} disabled={index === 0}><ArrowUp size={14} /> Subir</button><button type="button" onClick={() => onMove(1)}><ArrowDown size={14} /> Bajar</button></div></div></article>;
+  return <article className={exercise.active ? 'routine-exercise' : 'routine-exercise is-off'}><div className="routine-number">{String(index + 1).padStart(2, '0')}</div><button type="button" className="routine-thumb-button" onClick={onToggle} aria-label={`${expanded ? 'Ocultar' : 'Ver'} imagen grande de ${exercise.name}`} aria-expanded={expanded}><ExerciseThumb src={exercise.imageUrl} position={exercise.imagePosition} alt={`Referencia de ${exercise.name}`} /></button><div className="routine-exercise-content"><div className="routine-exercise-title"><div className="routine-exercise-name"><select className="exercise-select" value={exercise.exerciseId} aria-label={`Cambiar ${exercise.name}`} onChange={(event) => { const replacement = exerciseOptions.find((item) => item.id === event.target.value); if (replacement) onChange({ exerciseId: replacement.id, name: replacement.name, imageUrl: replacement.imageUrl, imagePosition: replacement.imagePosition }); }}><option value={exercise.exerciseId}>{exercise.name}</option>{exerciseOptions.filter((item) => item.id !== exercise.exerciseId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><p>{exercise.active ? 'Activo en la sesión' : 'Pausado'}</p><button type="button" className="routine-library-button" onClick={onOpenLibrary}><Search size={13} /> Buscar en biblioteca</button></div><div className="routine-title-actions"><button type="button" className="routine-image-trigger" onClick={onToggle} aria-expanded={expanded}>{expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}<span>{expanded ? 'Ocultar imagen' : 'Ver imagen'}</span></button><button type="button" className={exercise.active ? 'toggle on' : 'toggle'} aria-label={exercise.active ? `Desactivar ${exercise.name}` : `Activar ${exercise.name}`} aria-pressed={exercise.active} onClick={() => onChange({ active: !exercise.active })}><span /></button></div></div>{expanded && <div className="routine-visual-guide"><ExerciseThumb src={exercise.imageUrl} position={exercise.imagePosition} alt={`Imagen ampliada de ${exercise.name}`} large /><div className="routine-cues"><p className="eyebrow">cómo hacerlo</p><ol>{detail.cues.map((cue, cueIndex) => <li key={cue}><span>{cueIndex + 1}</span>{cue}</li>)}</ol></div></div>}<div className="routine-fields"><label>Series<input inputMode="numeric" value={exercise.sets} onChange={(event) => onChange({ sets: clampNumber(event.target.value, 1, 8) })} /></label><label>Reps<input inputMode="numeric" value={`${exercise.repMin}-${exercise.repMax}`} onChange={(event) => { const [min, max] = event.target.value.split(/[–-]/).map(Number); if (Number.isFinite(min) && Number.isFinite(max)) onChange({ repMin: min, repMax: max }); }} /></label><label>Descanso<input inputMode="numeric" value={exercise.restSeconds / 60} onChange={(event) => onChange({ restSeconds: clampNumber(event.target.value, 0.5, 4) * 60 })} /></label></div><div className="routine-progression-fields"><label>Calentamiento<select value={exercise.warmupSets ?? 0} onChange={(event) => onChange({ warmupSets: clampNumber(event.target.value, 0, 3) })}><option value="0">Ninguno</option><option value="1">1 serie</option><option value="2">2 series</option><option value="3">3 series</option></select></label><label>Regla de progresión<select value={exercise.progressionPolicy ?? 'double'} onChange={(event) => onChange({ progressionPolicy: event.target.value as ProgressionPolicy })}><option value="double">Doble progresión</option><option value="linear">Lineal</option><option value="off">Manual</option></select></label><label>Salto de carga<input inputMode="decimal" value={exercise.progressionIncrementKg ?? 2.5} onChange={(event) => onChange({ progressionIncrementKg: clampNumber(event.target.value, 0.5, 10) })} /></label></div>{alternatives.length > 0 && <div className="routine-alternatives"><span>Alternativas compatibles</span><div>{alternatives.slice(0, 3).map((replacement) => <button type="button" key={replacement.id} onClick={() => onChange({ exerciseId: replacement.id, name: replacement.name, imageUrl: replacement.imageUrl, imagePosition: replacement.imagePosition })}>{replacement.name}</button>)}</div></div>}{lastSession && <p className="routine-history"><History size={14} /> Última vez: {formatExerciseSummary(lastSession)}</p>}{action && <div className={`routine-next-action ${action.tone}`}><Gauge size={14} /><div><strong>{action.title}</strong><span>{action.detail}</span></div></div>}<div className="move-actions"><button type="button" onClick={() => onMove(-1)} disabled={index === 0}><ArrowUp size={14} /> Subir</button><button type="button" onClick={() => onMove(1)}><ArrowDown size={14} /> Bajar</button><button type="button" className="routine-remove-button" onClick={onRemove}><Trash2 size={14} /> Quitar</button></div></div></article>;
 }
 
 function ProgressView({ data, onAddProgress, onAddCheckin, onCopySummary }: { data: AppData; onAddProgress: (entry: Omit<ProgressEntry, 'id' | 'date'>) => void; onAddCheckin: (checkin: Omit<WeeklyCheckin, 'id' | 'createdAt' | 'weekKey'>) => void; onCopySummary: () => void }) {
@@ -724,11 +977,38 @@ function DayPicker({ selected, onChange }: { selected: number[]; onChange: (days
 }
 
 function OnboardingDialog({ profile, onComplete }: { profile: UserProfile; onComplete: (profile: Partial<UserProfile>) => void }) {
-  const [form, setForm] = useState({ goal: profile.goal, sessionMinutes: String(profile.sessionMinutes), experienceLevel: profile.experienceLevel, trainingDays: profile.trainingDays });
-  return <div className="onboarding-backdrop"><section className="onboarding-dialog" role="dialog" aria-modal="true" aria-labelledby="onboarding-title"><div className="onboarding-kicker"><Sparkles size={16} /> primera configuración</div><h2 id="onboarding-title">Vamos a dejarlo a tu medida.</h2><p className="onboarding-lead">Cuatro datos para que la rutina de Hoy encaje contigo desde el primer entrenamiento.</p><form onSubmit={(event) => { event.preventDefault(); onComplete({ goal: form.goal.trim() || profile.goal, sessionMinutes: clampNumber(form.sessionMinutes, 20, 180), experienceLevel: form.experienceLevel, trainingDays: form.trainingDays.length ? form.trainingDays : profile.trainingDays }); }}><label className="onboarding-field">¿Qué quieres conseguir?<input value={form.goal} onChange={(event) => setForm((current) => ({ ...current, goal: event.target.value }))} placeholder="Ej. ganar fuerza" /></label><div className="onboarding-grid"><label className="onboarding-field">Duración habitual<span>minutos</span><input inputMode="numeric" value={form.sessionMinutes} onChange={(event) => setForm((current) => ({ ...current, sessionMinutes: event.target.value }))} /></label><div className="onboarding-field"><span>¿Qué días entrenas?</span><span>elige los tuyos</span><DayPicker selected={form.trainingDays} onChange={(trainingDays) => setForm((current) => ({ ...current, trainingDays }))} /></div></div><fieldset className="experience-options"><legend>Tu punto de partida</legend>{experienceOptions.map((option) => <label key={option.value} className={form.experienceLevel === option.value ? 'experience-option selected' : 'experience-option'}><input type="radio" name="experience" value={option.value} checked={form.experienceLevel === option.value} onChange={() => setForm((current) => ({ ...current, experienceLevel: option.value }))} /><span><strong>{option.label}</strong><small>{option.description}</small></span></label>)}</fieldset><button className="primary-button" type="submit">Guardar y empezar <ChevronRight size={17} /></button></form></section></div>;
+  const [form, setForm] = useState({
+    goal: profile.goal,
+    heightCm: profile.heightCm?.toString() ?? '',
+    currentWeightKg: profile.currentWeightKg?.toString() ?? '',
+    sessionMinutes: String(profile.sessionMinutes),
+    experienceLevel: profile.experienceLevel,
+    trainingDays: profile.trainingDays,
+  });
+  const save = (): void => onComplete({
+    goal: form.goal.trim(),
+    heightCm: numberOrUndefined(form.heightCm),
+    currentWeightKg: numberOrUndefined(form.currentWeightKg),
+    sessionMinutes: clampNumber(form.sessionMinutes, 20, 180),
+    experienceLevel: form.experienceLevel,
+    trainingDays: form.trainingDays.length ? form.trainingDays : profile.trainingDays,
+  });
+  return <div className="onboarding-backdrop"><section className="onboarding-dialog" role="dialog" aria-modal="true" aria-labelledby="onboarding-title"><div className="onboarding-kicker"><Sparkles size={16} /> primera configuración</div><h2 id="onboarding-title">Vamos a dejarlo a tu medida.</h2><p className="onboarding-lead">Cuatro datos para que la rutina de Hoy encaje contigo desde el primer entrenamiento.</p><form onSubmit={(event) => { event.preventDefault(); save(); }}><label className="onboarding-field">¿Qué quieres conseguir?<input value={form.goal} onChange={(event) => setForm((current) => ({ ...current, goal: event.target.value }))} placeholder="Ej. ganar fuerza" /></label><div className="onboarding-grid"><label className="onboarding-field">Duración habitual<span>minutos</span><input inputMode="numeric" value={form.sessionMinutes} onChange={(event) => setForm((current) => ({ ...current, sessionMinutes: event.target.value }))} /></label><div className="onboarding-field"><span>¿Qué días entrenas?</span><span>elige los tuyos</span><DayPicker selected={form.trainingDays} onChange={(trainingDays) => setForm((current) => ({ ...current, trainingDays }))} /></div></div><fieldset className="experience-options"><legend>Tu punto de partida</legend>{experienceOptions.map((option) => <label key={option.value} className={form.experienceLevel === option.value ? 'experience-option selected' : 'experience-option'}><input type="radio" name="experience" value={option.value} checked={form.experienceLevel === option.value} onChange={() => setForm((current) => ({ ...current, experienceLevel: option.value }))} /><span><strong>{option.label}</strong><small>{option.description}</small></span></label>)}</fieldset><div className="onboarding-section"><div className="onboarding-section-heading"><span>Datos opcionales</span><small>No hacen falta para empezar</small></div><div className="onboarding-grid"><label className="onboarding-field">Altura<span>cm · opcional</span><input inputMode="decimal" value={form.heightCm} onChange={(event) => setForm((current) => ({ ...current, heightCm: event.target.value }))} placeholder="-" /></label><label className="onboarding-field">Peso actual<span>kg · opcional</span><input inputMode="decimal" value={form.currentWeightKg} onChange={(event) => setForm((current) => ({ ...current, currentWeightKg: event.target.value }))} placeholder="-" /></label></div><p className="onboarding-privacy"><CloudOff size={15} /> Se guarda todo en este dispositivo. Puedes dejar estos datos vacíos y completarlos más adelante.</p></div><div className="onboarding-actions"><button className="primary-button" type="submit">Guardar y empezar <ChevronRight size={17} /></button><button className="secondary-button" type="button" onClick={() => onComplete({})}>Empezar sin completar</button></div></form></section></div>;
 }
 
-function ProfileView({ data, theme, onThemeChange, onUpdateProfile, onImport, syncState, syncStatus, syncError, onConnectSync, onUploadSync, onDownloadSync, onDisconnectSync, onRevokeSync, onInstall, isInstalled }: { data: AppData; theme: Theme; onThemeChange: (theme: Theme) => void; onUpdateProfile: (profile: Partial<AppData['profile']>) => void; onImport: (data: AppData) => void; syncState: SyncState; syncStatus: SyncStatus; syncError?: string; onConnectSync: (key: string) => void; onUploadSync: () => void; onDownloadSync: () => void; onDisconnectSync: () => void; onRevokeSync: () => void; onInstall?: () => void; isInstalled: boolean }) {
+function AccountPanel({ user, passkeys, status, error, cloudUpdatedAt, onRegister, onLogin, onAddPasskey, onRenamePasskey, onRevokePasskey, onLogout, onLogoutEverywhere }: { user?: AuthUser; passkeys: AuthPasskey[]; status: AuthStatus; error?: string; cloudUpdatedAt?: string; onRegister: (displayName: string, passkeyLabel: string) => void; onLogin: () => void; onAddPasskey: (passkeyLabel: string) => void; onRenamePasskey: (credentialId: string, label: string) => void; onRevokePasskey: (credentialId: string) => void; onLogout: () => void; onLogoutEverywhere: () => void }) {
+  const [displayName, setDisplayName] = useState('');
+  const [passkeyLabel, setPasskeyLabel] = useState('Passkey principal');
+  const [editingId, setEditingId] = useState<string>();
+  const [editingLabel, setEditingLabel] = useState('');
+  const busy = status === 'checking' || status === 'registering' || status === 'signing_in' || status === 'syncing';
+  const statusCopy = status === 'checking' ? 'Comprobando tu cuenta…' : status === 'registering' ? 'Preparando tu passkey…' : status === 'signing_in' ? 'Esperando la confirmación…' : status === 'syncing' ? 'Sincronizando con D1…' : user ? cloudUpdatedAt ? `Sincronizado ${new Date(cloudUpdatedAt).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' })}` : 'Cuenta conectada' : 'Sin cuenta en la nube';
+  const beginEdit = (passkey: AuthPasskey): void => { setEditingId(passkey.credentialId); setEditingLabel(passkey.label); };
+  const saveEdit = (): void => { if (editingId && editingLabel.trim()) onRenamePasskey(editingId, editingLabel.trim()); setEditingId(undefined); };
+  return <section className="profile-section account-section"><div className="section-heading compact"><div><p className="eyebrow">cuenta · opcional</p><h2>{user ? 'Tu cuenta Radian' : 'Sincroniza con passkey'}</h2></div><Fingerprint size={21} /></div>{user ? <><div className="account-identity"><span className="account-avatar"><Fingerprint size={19} /></span><div><strong>{user.displayName}</strong><span>{statusCopy}</span></div></div><p className="section-description">Tus rutinas y sesiones se guardan en D1 y siguen disponibles en este dispositivo aunque estés sin conexión.</p><label className="account-name-field">Nombre de la nueva passkey<input value={passkeyLabel} onChange={(event) => setPasskeyLabel(event.target.value)} placeholder="Ej. iPhone" /></label><div className="account-actions"><button className="primary-button small" type="button" onClick={() => onAddPasskey(passkeyLabel.trim() || 'Passkey')} disabled={busy}><Fingerprint size={15} /> Añadir passkey</button><button className="secondary-button small" type="button" onClick={onLogout}><LogOut size={15} /> Cerrar sesión</button><button className="text-button danger-text" type="button" onClick={onLogoutEverywhere}>Cerrar en todos</button></div><div className="passkey-list"><div className="passkey-list-heading"><strong>Tus dispositivos</strong><span>{passkeys.length} passkey{passkeys.length === 1 ? '' : 's'}</span></div>{passkeys.map((passkey) => <div className="passkey-row" key={passkey.credentialId}>{editingId === passkey.credentialId ? <input value={editingLabel} onChange={(event) => setEditingLabel(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') saveEdit(); if (event.key === 'Escape') setEditingId(undefined); }} autoFocus /> : <div><strong>{passkey.label}</strong><span>{passkey.lastUsedAt ? `Usada ${new Date(passkey.lastUsedAt).toLocaleDateString('es-ES')}` : `Añadida ${new Date(passkey.createdAt).toLocaleDateString('es-ES')}`}</span></div>}<div className="passkey-row-actions">{editingId === passkey.credentialId ? <button type="button" aria-label="Guardar nombre" onClick={saveEdit}><Save size={15} /></button> : <button type="button" aria-label={`Renombrar ${passkey.label}`} onClick={() => beginEdit(passkey)}><Pencil size={15} /></button>}<button type="button" aria-label={`Revocar ${passkey.label}`} onClick={() => onRevokePasskey(passkey.credentialId)} disabled={passkeys.length <= 1}><Trash2 size={15} /></button></div></div>)}</div></> : <><p className="section-description">Usa la huella, Face ID, PIN o el gestor de contraseñas del dispositivo. No necesitas crear ni recordar una contraseña.</p><label className="account-name-field">Nombre para tu perfil<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Ej. Carlos" autoComplete="name" /></label><label className="account-name-field">Nombre de la passkey<input value={passkeyLabel} onChange={(event) => setPasskeyLabel(event.target.value)} placeholder="Ej. iPhone" /></label><div className="account-actions"><button className="primary-button small" type="button" onClick={() => onRegister(displayName.trim(), passkeyLabel.trim() || 'Passkey principal')} disabled={busy || !displayName.trim()}><UserPlus size={15} /> Crear con passkey</button><button className="secondary-button small" type="button" onClick={onLogin} disabled={busy}><LogIn size={15} /> Entrar</button></div><p className="account-status" role="status">{statusCopy}</p></>}{error && <p className="error-message" role="alert">{error}</p>}<p className="sync-security"><LockKeyhole size={13} /> La passkey nunca sale del dispositivo. Radian guarda la clave pública necesaria para verificarla.</p></section>;
+}
+
+function ProfileView({ data, theme, onThemeChange, onUpdateProfile, onRepeatOnboarding, onImport, syncState, syncStatus, syncError, onConnectSync, onUploadSync, onDownloadSync, onDisconnectSync, onRevokeSync, onInstall, isInstalled }: { data: AppData; theme: Theme; onThemeChange: (theme: Theme) => void; onUpdateProfile: (profile: Partial<AppData['profile']>) => void; onRepeatOnboarding: () => void; onImport: (data: AppData) => void; syncState: SyncState; syncStatus: SyncStatus; syncError?: string; onConnectSync: (key: string) => void; onUploadSync: () => void; onDownloadSync: () => void; onDisconnectSync: () => void; onRevokeSync: () => void; onInstall?: () => void; isInstalled: boolean }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [editing, setEditing] = useState(false);
   const [importError, setImportError] = useState<string>();
@@ -736,7 +1016,7 @@ function ProfileView({ data, theme, onThemeChange, onUpdateProfile, onImport, sy
   const save = (): void => { onUpdateProfile(profile); setEditing(false); };
   const exportData = (): void => downloadFile('radian-backup.json', serializeBackup(data), 'application/json');
   const importData = (event: React.ChangeEvent<HTMLInputElement>): void => { const file = event.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => { try { const next = parseBackup(String(reader.result)); setImportError(undefined); if (window.confirm('Esto sustituirá los datos locales actuales. ¿Quieres continuar?')) onImport(next); } catch (error) { setImportError(error instanceof Error ? error.message : 'No se pudo leer la copia.'); } }; reader.readAsText(file); event.target.value = ''; };
-  return <section className="view-section"><PageHeader eyebrow="tu contexto" title="Perfil" action={<button className="icon-button subtle" aria-label="Configuración"><Settings2 size={19} /></button>} /><section className="profile-hero"><div className="profile-avatar">C</div><div><p className="eyebrow light">perfil local</p><h2>Tu punto de partida</h2><p>Solo tú tienes acceso a estos datos.</p></div></section><section className="profile-section"><div className="section-heading compact"><div><p className="eyebrow">base</p><h2>Datos personales</h2></div><button className="text-button" onClick={() => editing ? save() : setEditing(true)}>{editing ? 'Guardar' : 'Editar'}</button></div>{editing ? <div className="profile-form"><NumberField label="Altura" unit="cm" value={String(profile.heightCm)} onChange={(value) => setProfile((current) => ({ ...current, heightCm: Number(value) }))} /><NumberField label="Peso actual" unit="kg" value={String(profile.currentWeightKg)} onChange={(value) => setProfile((current) => ({ ...current, currentWeightKg: Number(value) }))} /><label>Objetivo<input value={profile.goal} onChange={(event) => setProfile((current) => ({ ...current, goal: event.target.value }))} /></label><div className="days-field"><span>Días de entrenamiento</span><span>selecciona los tuyos</span><DayPicker selected={profile.trainingDays} onChange={(trainingDays) => setProfile((current) => ({ ...current, trainingDays }))} /></div><label>Duración por sesión<input inputMode="numeric" value={profile.sessionMinutes} onChange={(event) => setProfile((current) => ({ ...current, sessionMinutes: Number(event.target.value) }))} /></label><label>Nivel<select value={profile.experienceLevel} onChange={(event) => setProfile((current) => ({ ...current, experienceLevel: event.target.value as ExperienceLevel }))}><option value="beginner">Estoy empezando</option><option value="intermediate">Ya tengo base</option><option value="advanced">Tengo experiencia</option></select></label></div> : <div className="profile-facts"><Fact label="Altura" value={`${profile.heightCm} cm`} /><Fact label="Peso actual" value={`${profile.currentWeightKg} kg`} /><Fact label="Objetivo" value={profile.goal} /><Fact label="Gimnasio" value={profile.gym} /><Fact label="Sesiones" value={`${profile.trainingDays.length} días · ${profile.sessionMinutes} min`} /><Fact label="Nivel" value={experienceOptions.find((option) => option.value === profile.experienceLevel)?.label ?? 'Sin definir'} /></div>}</section><section className="profile-section"><div className="section-heading compact"><div><p className="eyebrow">preferencias</p><h2>Cómo usar Radian</h2></div></div><div className="setting-row"><div><strong>Apariencia</strong><span>Se adapta a tu preferencia</span></div><div className="theme-switcher">{(['system', 'light', 'dark'] as Theme[]).map((option) => <button key={option} className={theme === option ? 'selected' : ''} onClick={() => onThemeChange(option)}>{option === 'system' ? 'Auto' : option === 'light' ? <Sun size={16} /> : <Moon size={16} />}</button>)}</div></div><div className="setting-row"><div><strong>Texto grande</strong><span>Mejor lectura en pantalla pequeña</span></div><button type="button" className={data.profile.largeText ? 'toggle on' : 'toggle'} aria-label="Activar texto grande" aria-pressed={data.profile.largeText} onClick={() => onUpdateProfile({ largeText: !data.profile.largeText })}><span /></button></div><div className="setting-row"><div><strong>Datos en este dispositivo</strong><span>Sin analítica ni servicios de terceros</span></div><CloudOff size={19} /></div>{(onInstall || isInstalled) && <div className="setting-row"><div><strong>{isInstalled ? 'Radian está instalada' : 'Instalar Radian'}</strong><span>{isInstalled ? 'Acceso rápido desde tu pantalla de inicio' : 'Ábrela como una app en el móvil'}</span></div>{isInstalled ? <ShieldCheck size={19} /> : <button type="button" className="secondary-button small" onClick={onInstall}>Instalar</button>}</div>}</section><SyncPanel syncState={syncState} syncStatus={syncStatus} syncError={syncError} onConnect={onConnectSync} onUpload={onUploadSync} onDownload={onDownloadSync} onDisconnect={onDisconnectSync} onRevoke={onRevokeSync} /><section className="profile-section"><div className="section-heading compact"><div><p className="eyebrow">copia de seguridad</p><h2>Tus datos</h2></div><FileJson size={20} /></div><p className="section-description">Exporta o restaura todo el contenido de Radian como un archivo JSON. Haz una copia de vez en cuando.</p><div className="backup-actions"><button className="secondary-button" onClick={exportData}><Download size={16} /> Exportar datos</button><button className="secondary-button" onClick={() => fileRef.current?.click()}><Upload size={16} /> Importar datos</button><input ref={fileRef} type="file" accept="application/json,.json" onChange={importData} hidden /></div>{importError && <p className="error-message" role="alert">{importError}</p>}</section><section className="profile-section nutrition-section"><div className="section-heading compact"><div><p className="eyebrow">contexto nutricional</p><h2>Sin contar calorías</h2></div><Info size={19} /></div><p className="section-description">Este contexto queda guardado para futuras revisiones, pero Radian no te pide registrar comidas.</p>{editing ? <textarea value={profile.nutritionContext} onChange={(event) => setProfile((current) => ({ ...current, nutritionContext: event.target.value }))} rows={5} /> : <p className="nutrition-copy">{profile.nutritionContext}</p>}</section></section>;
+  return <section className="view-section"><PageHeader eyebrow="tu contexto" title="Perfil" action={<button className="icon-button subtle" aria-label="Configuración"><Settings2 size={19} /></button>} /><section className="profile-hero"><div className="profile-avatar">C</div><div><p className="eyebrow light">perfil local</p><h2>Tu punto de partida</h2><p>Solo tú tienes acceso a estos datos.</p></div></section><section className="profile-section"><div className="section-heading compact"><div><p className="eyebrow">base</p><h2>Datos personales</h2></div><button className="text-button" onClick={() => editing ? save() : setEditing(true)}>{editing ? 'Guardar' : 'Editar'}</button></div>{editing ? <div className="profile-form"><NumberField label="Altura" unit="cm · opcional" value={profile.heightCm?.toString() ?? ''} onChange={(value) => setProfile((current) => ({ ...current, heightCm: numberOrUndefined(value) }))} /><NumberField label="Peso actual" unit="kg · opcional" value={profile.currentWeightKg?.toString() ?? ''} onChange={(value) => setProfile((current) => ({ ...current, currentWeightKg: numberOrUndefined(value) }))} /><label>Objetivo<input value={profile.goal} onChange={(event) => setProfile((current) => ({ ...current, goal: event.target.value }))} /></label><div className="days-field"><span>Días de entrenamiento</span><span>selecciona los tuyos</span><DayPicker selected={profile.trainingDays} onChange={(trainingDays) => setProfile((current) => ({ ...current, trainingDays }))} /></div><label>Duración por sesión<input inputMode="numeric" value={profile.sessionMinutes} onChange={(event) => setProfile((current) => ({ ...current, sessionMinutes: Number(event.target.value) }))} /></label><label>Nivel<select value={profile.experienceLevel} onChange={(event) => setProfile((current) => ({ ...current, experienceLevel: event.target.value as ExperienceLevel }))}><option value="beginner">Estoy empezando</option><option value="intermediate">Ya tengo base</option><option value="advanced">Tengo experiencia</option></select></label></div> : <div className="profile-facts"><Fact label="Altura" value={profile.heightCm !== undefined ? `${profile.heightCm} cm` : 'Sin registrar'} /><Fact label="Peso actual" value={profile.currentWeightKg !== undefined ? `${profile.currentWeightKg} kg` : 'Sin registrar'} /><Fact label="Objetivo" value={profile.goal || 'Sin definir'} /><Fact label="Gimnasio" value={profile.gym || 'Sin definir'} /><Fact label="Sesiones" value={`${profile.trainingDays.length} días · ${profile.sessionMinutes} min`} /><Fact label="Nivel" value={experienceOptions.find((option) => option.value === profile.experienceLevel)?.label ?? 'Sin definir'} /></div>}</section><section className="profile-section"><div className="section-heading compact"><div><p className="eyebrow">preferencias</p><h2>Cómo usar Radian</h2></div></div><div className="setting-row"><div><strong>Apariencia</strong><span>Se adapta a tu preferencia</span></div><div className="theme-switcher">{(['system', 'light', 'dark'] as Theme[]).map((option) => <button key={option} className={theme === option ? 'selected' : ''} onClick={() => onThemeChange(option)}>{option === 'system' ? 'Auto' : option === 'light' ? <Sun size={16} /> : <Moon size={16} />}</button>)}</div></div><div className="setting-row"><div><strong>Texto grande</strong><span>Mejor lectura en pantalla pequeña</span></div><button type="button" className={data.profile.largeText ? 'toggle on' : 'toggle'} aria-label="Activar texto grande" aria-pressed={data.profile.largeText} onClick={() => onUpdateProfile({ largeText: !data.profile.largeText })}><span /></button></div><div className="setting-row"><div><strong>Datos en este dispositivo</strong><span>Sin analítica ni servicios de terceros</span></div><CloudOff size={19} /></div><div className="setting-row"><div><strong>Configuración inicial</strong><span>Puedes cambiar tus datos cuando quieras.</span></div><button type="button" className="secondary-button small" onClick={onRepeatOnboarding}><Sparkles size={15} /> Repetir</button></div>{(onInstall || isInstalled) && <div className="setting-row"><div><strong>{isInstalled ? 'Radian está instalada' : 'Instalar Radian'}</strong><span>{isInstalled ? 'Acceso rápido desde tu pantalla de inicio' : 'Ábrela como una app en el móvil'}</span></div>{isInstalled ? <ShieldCheck size={19} /> : <button type="button" className="secondary-button small" onClick={onInstall}>Instalar</button>}</div>}</section><SyncPanel syncState={syncState} syncStatus={syncStatus} syncError={syncError} onConnect={onConnectSync} onUpload={onUploadSync} onDownload={onDownloadSync} onDisconnect={onDisconnectSync} onRevoke={onRevokeSync} /><section className="profile-section"><div className="section-heading compact"><div><p className="eyebrow">copia de seguridad</p><h2>Tus datos</h2></div><FileJson size={20} /></div><p className="section-description">Exporta o restaura todo el contenido de Radian como un archivo JSON. Haz una copia de vez en cuando.</p><div className="backup-actions"><button className="secondary-button" onClick={exportData}><Download size={16} /> Exportar datos</button><button className="secondary-button" onClick={() => fileRef.current?.click()}><Upload size={16} /> Importar datos</button><input ref={fileRef} type="file" accept="application/json,.json" onChange={importData} hidden /></div>{importError && <p className="error-message" role="alert">{importError}</p>}</section><section className="profile-section nutrition-section"><div className="section-heading compact"><div><p className="eyebrow">contexto nutricional</p><h2>Sin contar calorías</h2></div><Info size={19} /></div><p className="section-description">Este contexto queda guardado para futuras revisiones, pero Radian no te pide registrar comidas.</p>{editing ? <textarea value={profile.nutritionContext} onChange={(event) => setProfile((current) => ({ ...current, nutritionContext: event.target.value }))} rows={5} /> : <p className="nutrition-copy">{profile.nutritionContext || 'Sin contexto guardado.'}</p>}</section></section>;
 }
 
 function SyncPanel({ syncState, syncStatus, syncError, onConnect, onUpload, onDownload, onDisconnect, onRevoke }: { syncState: SyncState; syncStatus: SyncStatus; syncError?: string; onConnect: (key: string) => void; onUpload: () => void; onDownload: () => void; onDisconnect: () => void; onRevoke: () => void }) {
