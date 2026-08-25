@@ -8,25 +8,11 @@
     "WEBAUTHN_ORIGIN": "https://radian.nidr0x.win",
     "WEBAUTHN_RP_NAME": "Radian"
   },
-  "observability": {
-    "enabled": true,
-    "head_sampling_rate": 1
-  },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "radian-prod",
       "database_id": "fd8d11e7-7a8f-4614-b152-52834589822e"
-    }
-  ],
-  "ratelimits": [
-    {
-      "name": "AUTH_RATE_LIMITER",
-      "namespace_id": "2026082501",
-      "simple": {
-        "limit": 20,
-        "period": 60
-      }
     }
   ]
 }

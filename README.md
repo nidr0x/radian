@@ -76,7 +76,7 @@ El código funciona como llave de acceso a esa copia. El contenido se cifra en e
 
 El modo local no necesita variables secretas ni una base de datos. Si activas las cuentas passkey, el despliegue necesita la base D1 y los secretos descritos abajo.
 
-Las Functions de autenticación tienen un límite distribuido de 20 solicitudes por minuto y dirección IP por ruta. El binding `AUTH_RATE_LIMITER` está definido en `wrangler.jsonc`; si falta en un entorno local, la autenticación permanece operativa para facilitar el desarrollo.
+Las Functions de autenticación aceptan un binding opcional `AUTH_RATE_LIMITER` cuando el entorno lo ofrece; si falta, la autenticación permanece operativa para facilitar el desarrollo. Pages dispone además de logs y métricas de Functions desde el panel de Cloudflare.
 
 ## Decisiones del MVP
 
