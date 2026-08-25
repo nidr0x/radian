@@ -1,10 +1,13 @@
 import { generateRegistrationOptions } from '@simplewebauthn/server';
-import { challengeExpiry, getWebAuthnConfig, json, randomId, readJson, requireDatabase } from '../../../lib/auth';
+import { challengeExpiry, enforceAuthRateLimit, getWebAuthnConfig, json, pruneChallenges, randomId, readJson, requireDatabase } from '../../../lib/auth';
 import type { SyncContext } from '../../../types';
 
 export const onRequestPost = async (context: SyncContext): Promise<Response> => {
+  const rateLimitResponse = await enforceAuthRateLimit(context, 'register-options');
+  if (rateLimitResponse) return rateLimitResponse;
   const database = requireDatabase(context);
   if (database instanceof Response) return database;
+  await pruneChallenges(database);
   const body = await readJson(context.request);
   const displayName = typeof body.displayName === 'string' ? body.displayName.trim().slice(0, 60) : '';
   const passkeyLabel = typeof body.passkeyLabel === 'string' ? body.passkeyLabel.trim().slice(0, 60) : '';

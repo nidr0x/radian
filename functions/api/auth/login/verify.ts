@@ -1,5 +1,5 @@
 import { verifyAuthenticationResponse } from '@simplewebauthn/server';
-import { consumeChallenge, getWebAuthnConfig, issueSessionCookie, isRecord, json, readJson, requireDatabase } from '../../../lib/auth';
+import { consumeChallenge, enforceAuthRateLimit, getWebAuthnConfig, issueSessionCookie, isRecord, json, readJson, requireDatabase } from '../../../lib/auth';
 import type { SyncContext } from '../../../types';
 
 interface PasskeyRow {
@@ -11,6 +11,8 @@ interface PasskeyRow {
 }
 
 export const onRequestPost = async (context: SyncContext): Promise<Response> => {
+  const rateLimitResponse = await enforceAuthRateLimit(context, 'login-verify');
+  if (rateLimitResponse) return rateLimitResponse;
   const database = requireDatabase(context);
   if (database instanceof Response) return database;
   const body = await readJson(context.request);

@@ -1,8 +1,10 @@
 import { verifyRegistrationResponse } from '@simplewebauthn/server';
-import { consumeChallenge, getAuthenticatedContext, getWebAuthnConfig, issueSessionCookie, isRecord, json, readJson, requireDatabase } from '../../../lib/auth';
+import { consumeChallenge, enforceAuthRateLimit, getAuthenticatedContext, getWebAuthnConfig, issueSessionCookie, isRecord, json, readJson, requireDatabase } from '../../../lib/auth';
 import type { SyncContext } from '../../../types';
 
 export const onRequestPost = async (context: SyncContext): Promise<Response> => {
+  const rateLimitResponse = await enforceAuthRateLimit(context, 'register-verify');
+  if (rateLimitResponse) return rateLimitResponse;
   const database = requireDatabase(context);
   if (database instanceof Response) return database;
   const body = await readJson(context.request);

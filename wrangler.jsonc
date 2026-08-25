@@ -3,11 +3,25 @@
   "name": "radian",
   "pages_build_output_dir": "./dist",
   "compatibility_date": "2026-08-24",
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "radian-prod",
       "database_id": "fd8d11e7-7a8f-4614-b152-52834589822e"
+    }
+  ],
+  "ratelimits": [
+    {
+      "name": "AUTH_RATE_LIMITER",
+      "namespace_id": "2026082501",
+      "simple": {
+        "limit": 20,
+        "period": 60
+      }
     }
   ]
 }

@@ -15,8 +15,13 @@ export interface D1DatabaseLike {
   batch(statements: D1PreparedStatementLike[]): Promise<D1ResultLike[]>;
 }
 
+export interface RateLimiterLike {
+  limit(options: { key: string }): Promise<{ success: boolean }>;
+}
+
 export interface SyncEnv {
   DB?: D1DatabaseLike;
+  AUTH_RATE_LIMITER?: RateLimiterLike;
   SESSION_SECRET?: string;
   WEBAUTHN_RP_ID?: string;
   WEBAUTHN_RP_NAME?: string;

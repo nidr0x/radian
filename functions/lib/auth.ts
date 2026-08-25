@@ -39,6 +39,19 @@ export const isRecord = (value: unknown): value is Record<string, unknown> => ty
 export const requireDatabase = (context: SyncContext): D1DatabaseLike | Response => context.env.DB
   ?? json({ error: 'database_unavailable', message: 'La cuenta en la nube todavía no está configurada.' }, 503);
 
+export const enforceAuthRateLimit = async (context: SyncContext, route: string): Promise<Response | undefined> => {
+  const limiter = context.env.AUTH_RATE_LIMITER;
+  if (!limiter) return undefined;
+  const client = context.request.headers.get('CF-Connecting-IP') ?? 'unknown';
+  try {
+    const result = await limiter.limit({ key: `auth:${route}:${client}` });
+    if (!result.success) return json({ error: 'rate_limited', message: 'Demasiados intentos. Espera un minuto y vuelve a intentarlo.' }, 429, { 'Retry-After': '60' });
+  } catch {
+    // A temporary limiter failure must not take authentication offline.
+  }
+  return undefined;
+};
+
 const encodeBase64Url = (bytes: Uint8Array): string => {
   let binary = '';
   for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -136,3 +149,10 @@ export const consumeChallenge = async (db: D1DatabaseLike, id: string, kind: Cha
 };
 
 export const challengeExpiry = (): string => new Date(Date.now() + CHALLENGE_TTL_MS).toISOString();
+
+export const pruneChallenges = async (database: D1DatabaseLike): Promise<void> => {
+  const now = new Date();
+  await database.prepare(
+    'DELETE FROM auth_challenges WHERE expires_at <= ? OR (used_at IS NOT NULL AND used_at <= ?)',
+  ).bind(now.toISOString(), new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString()).run();
+};
