@@ -29,14 +29,23 @@ El proyecto incluye `wrangler.jsonc`, el fallback para la SPA y cabeceras de seg
 - Build output directory: `dist`
 - Production branch: `master`
 
-También puedes desplegar la carpeta generada con Wrangler:
+El repositorio está preparado para usar la integración GitHub de Cloudflare Pages. Configura el proyecto `radian` con:
+
+- Repositorio: `nidr0x/radian`
+- Rama de producción: `master`
+- Comando de build: `npm ci && npm run build`
+- Directorio de salida: `dist`
+
+Pages se encargará de los despliegues de producción y de las previews. GitHub Actions conserva las comprobaciones de TypeScript, Functions, tests y build, pero no necesita credenciales de Cloudflare.
+
+Como alternativa puntual, puedes desplegar la carpeta generada con Wrangler:
 
 ```bash
   npm run build
   npx wrangler pages deploy dist --project-name=radian
 ```
 
-El repositorio incluye un workflow de GitHub Actions. Cada push a `master` ejecuta las comprobaciones, construye la PWA y publica una nueva versión en Cloudflare Pages.
+El repositorio incluye un workflow de GitHub Actions. Cada push a `master` y cada pull request ejecutan las comprobaciones, pero la publicación la realiza la integración Git de Cloudflare Pages.
 
 La aplicación expone `GET /api/health` para comprobar que la Function está activa y que puede consultar D1. Tras un despliegue, puedes verificarlo con:
 
