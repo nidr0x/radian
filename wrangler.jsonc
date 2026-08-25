@@ -3,6 +3,11 @@
   "name": "radian",
   "pages_build_output_dir": "./dist",
   "compatibility_date": "2026-08-24",
+  "vars": {
+    "WEBAUTHN_RP_ID": "radian.nidr0x.win",
+    "WEBAUTHN_ORIGIN": "https://radian.nidr0x.win",
+    "WEBAUTHN_RP_NAME": "Radian"
+  },
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
