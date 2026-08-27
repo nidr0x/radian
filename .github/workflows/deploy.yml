@@ -35,6 +35,7 @@ jobs:
           npm run lint
           npm run lint:functions
           npm test -- --run
+          git diff --check
 
       - name: Build
         run: npm run build

@@ -1,8 +1,10 @@
 import { generateRegistrationOptions } from '@simplewebauthn/server';
-import { challengeExpiry, enforceAuthRateLimit, getWebAuthnConfig, json, pruneChallenges, randomId, readJson, requireDatabase } from '../../../lib/auth';
+import { challengeExpiry, enforceAuthRateLimit, getWebAuthnConfig, json, pruneChallenges, randomId, readJson, requireAuthConfiguration, requireDatabase } from '../../../lib/auth';
 import type { SyncContext } from '../../../types';
 
 export const onRequestPost = async (context: SyncContext): Promise<Response> => {
+  const configurationError = requireAuthConfiguration(context);
+  if (configurationError) return configurationError;
   const rateLimitResponse = await enforceAuthRateLimit(context, 'register-options');
   if (rateLimitResponse) return rateLimitResponse;
   const database = requireDatabase(context);

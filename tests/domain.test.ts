@@ -7,6 +7,7 @@ import { bestRecordForExercise, detectPersonalRecord } from '../src/lib/records'
 import { summarizeSession } from '../src/lib/sessionSummary';
 import { createSession, createSetLogs, migrateData, parseBackup, serializeBackup, snapshotMatchesPlan } from '../src/lib/storage';
 import { buildWeeklySummary, weeklySummaryText } from '../src/lib/weeklySummary';
+import { scheduledWorkoutDays } from '../src/lib/date';
 import type { WorkoutSession } from '../src/types';
 
 describe('motor de recomendaciones', () => {
@@ -87,6 +88,14 @@ describe('motor de recomendaciones', () => {
 });
 
 describe('persistencia y backups', () => {
+  it('aplica los días elegidos a las plantillas sin cambiar sus identificadores', () => {
+    const data = defaultData();
+    const scheduled = scheduledWorkoutDays(data.plan.days, [2, 4]);
+    expect(scheduled.map((day) => day.weekday)).toEqual([2, 4]);
+    expect(scheduled.map((day) => day.id)).toEqual([data.plan.days[0].id, data.plan.days[1].id]);
+    expect(scheduledWorkoutDays(data.plan.days, [7])[0]?.weekday).toBe(0);
+  });
+
   it('empieza con un perfil neutro y medidas opcionales', () => {
     const data = defaultData();
     expect(data.profile.heightCm).toBeUndefined();
@@ -234,6 +243,18 @@ describe('resumen semanal', () => {
     expect(summary.difficultyCounts.hard).toBe(0);
     expect(summary.energy).toBe('high');
     expect(weeklySummaryText(data, new Date('2026-08-20T12:00:00'))).toContain('1/4 sesiones completadas');
+  });
+
+  it('ordena las medidas por fecha aunque el almacenamiento llegue desordenado', () => {
+    const data = defaultData();
+    data.progress = [
+      { id: 'newer', date: '2026-08-20', weightKg: 79 },
+      { id: 'older', date: '2026-08-18', weightKg: 80 },
+    ];
+    const summary = buildWeeklySummary(data, new Date('2026-08-20T12:00:00'));
+    expect(summary.weightStart).toBe(80);
+    expect(summary.weightEnd).toBe(79);
+    expect(weeklySummaryText(data, new Date('2026-08-20T12:00:00'))).toContain('Peso actual: 79 kg');
   });
 });
 

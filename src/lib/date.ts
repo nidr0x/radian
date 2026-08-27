@@ -1,5 +1,23 @@
+import type { WorkoutDay } from '../types';
+
 export const dayNames = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 export const shortDayNames = ['D', 'L', 'M', 'X', 'J', 'V', 'S'];
+
+export const normalizeTrainingDays = (days: number[]): number[] => Array.from(new Set(days
+  .filter((day) => Number.isInteger(day) && day >= 0 && day <= 7)
+  .map((day) => day === 7 ? 0 : day)))
+  .sort((a, b) => a - b);
+
+export const scheduledWorkoutDays = (days: WorkoutDay[], trainingDays: number[]): WorkoutDay[] => {
+  const templates = [...days].sort((a, b) => a.weekday - b.weekday);
+  const selectedDays = normalizeTrainingDays(trainingDays).slice(0, templates.length);
+  if (selectedDays.length === 0) return templates;
+  return templates.slice(0, selectedDays.length).map((day, index) => ({
+    ...day,
+    weekday: selectedDays[index],
+    shortLabel: shortDayNames[selectedDays[index]],
+  }));
+};
 
 export const dateKey = (date = new Date()): string => {
   const year = date.getFullYear();

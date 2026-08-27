@@ -1,4 +1,4 @@
-import type { D1DatabaseLike, SyncContext } from '../types';
+import type { D1DatabaseLike, D1ResultLike, SyncContext } from '../types';
 
 export interface AuthUser {
   id: string;
@@ -8,6 +8,9 @@ export interface AuthUser {
 
 export interface AuthenticatedContext extends SyncContext {
   user: AuthUser;
+  sessionId: string;
+  sessionCredentialId?: string;
+  sessionReauthenticatedAt?: string;
 }
 
 export interface ChallengeRow {
@@ -20,9 +23,17 @@ export interface ChallengeRow {
   passkeyLabel?: string;
 }
 
+export interface StepUpChallengeRow {
+  id: string;
+  challenge: string;
+  userId: string;
+}
+
 const SESSION_COOKIE = 'radian_session';
+const SECURE_SESSION_COOKIE = '__Host-radian_session';
 const SESSION_DAYS = 30;
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
+const REAUTH_TTL_MS = 10 * 60 * 1000;
 
 export const json = (body: unknown, status = 200, extraHeaders: Record<string, string> = {}): Response => new Response(JSON.stringify(body), {
   status,
@@ -39,15 +50,50 @@ export const isRecord = (value: unknown): value is Record<string, unknown> => ty
 export const requireDatabase = (context: SyncContext): D1DatabaseLike | Response => context.env.DB
   ?? json({ error: 'database_unavailable', message: 'La cuenta en la nube todavía no está configurada.' }, 503);
 
-export const enforceAuthRateLimit = async (context: SyncContext, route: string): Promise<Response | undefined> => {
+const isLocalRequest = (request: Request): boolean => {
+  const hostname = new URL(request.url).hostname;
+  return hostname === 'localhost' || hostname === '127.0.0.1';
+};
+
+const clientAddress = (context: SyncContext): string => context.request.headers.get('CF-Connecting-IP') ?? 'unknown';
+
+const rateLimitMax = (route: string): number => {
+  if (route.endsWith('-options')) return 30;
+  if (route.startsWith('sync-')) return 120;
+  if (route === 'passkeys-list') return 60;
+  return 10;
+};
+
+export const enforceAuthRateLimit = async (context: SyncContext, route: string, subject?: string): Promise<Response | undefined> => {
+  const key = `auth:${route}:${clientAddress(context)}${subject ? `:${subject}` : ''}`;
   const limiter = context.env.AUTH_RATE_LIMITER;
-  if (!limiter) return undefined;
-  const client = context.request.headers.get('CF-Connecting-IP') ?? 'unknown';
+  if (limiter) {
+    try {
+      const result = await limiter.limit({ key });
+      if (!result.success) return json({ error: 'rate_limited', message: 'Demasiados intentos. Espera un minuto y vuelve a intentarlo.' }, 429, { 'Retry-After': '60' });
+      return undefined;
+    } catch {
+      // Fall back to D1 so authentication does not become unbounded if the edge limiter is unavailable.
+    }
+  }
+
+  const database = requireDatabase(context);
+  if (database instanceof Response) return json({ error: 'rate_limit_unavailable', message: 'La protección de autenticación no está disponible.' }, 503);
+  const now = new Date();
+  const windowStartedAt = new Date(now.getTime() - 60 * 1000).toISOString();
   try {
-    const result = await limiter.limit({ key: `auth:${route}:${client}` });
-    if (!result.success) return json({ error: 'rate_limited', message: 'Demasiados intentos. Espera un minuto y vuelve a intentarlo.' }, 429, { 'Retry-After': '60' });
+    await database.prepare(
+      `INSERT INTO auth_rate_limits (key, window_started_at, attempts)
+       VALUES (?, ?, 1)
+       ON CONFLICT(key) DO UPDATE SET
+         attempts = CASE WHEN auth_rate_limits.window_started_at <= ? THEN 1 ELSE auth_rate_limits.attempts + 1 END,
+         window_started_at = CASE WHEN auth_rate_limits.window_started_at <= ? THEN excluded.window_started_at ELSE auth_rate_limits.window_started_at END`,
+    ).bind(key, now.toISOString(), windowStartedAt, windowStartedAt).run();
+    const row = await database.prepare('SELECT attempts, window_started_at AS windowStartedAt FROM auth_rate_limits WHERE key = ?').bind(key).first<{ attempts: number; windowStartedAt: string }>();
+    if (!row) return json({ error: 'rate_limit_unavailable', message: 'La protección de autenticación no está disponible.' }, 503);
+    if (row.attempts > rateLimitMax(route)) return json({ error: 'rate_limited', message: 'Demasiados intentos. Espera un minuto y vuelve a intentarlo.' }, 429, { 'Retry-After': '60' });
   } catch {
-    // A temporary limiter failure must not take authentication offline.
+    return json({ error: 'rate_limit_unavailable', message: 'La protección de autenticación no está disponible.' }, 503);
   }
   return undefined;
 };
@@ -84,12 +130,12 @@ const verifyHmac = async (secret: string, payload: string, signature: Uint8Array
 
 const authConfig = (context: SyncContext): { rpId: string; origin: string; rpName: string; sessionSecret: string } => {
   const url = new URL(context.request.url);
-  const isLocal = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+  const isLocal = isLocalRequest(context.request);
   return {
-    rpId: context.env.WEBAUTHN_RP_ID ?? url.hostname,
-    origin: context.env.WEBAUTHN_ORIGIN ?? url.origin,
-    rpName: context.env.WEBAUTHN_RP_NAME ?? 'Radian',
-    sessionSecret: context.env.SESSION_SECRET ?? (isLocal ? 'radian-local-development-secret' : ''),
+    rpId: context.env.WEBAUTHN_RP_ID?.trim() || url.hostname,
+    origin: context.env.WEBAUTHN_ORIGIN?.trim() || url.origin,
+    rpName: context.env.WEBAUTHN_RP_NAME?.trim() || 'Radian',
+    sessionSecret: context.env.SESSION_SECRET?.trim() || (isLocal ? 'radian-local-development-secret' : ''),
   };
 };
 
@@ -98,44 +144,134 @@ export const getWebAuthnConfig = (context: SyncContext): { rpId: string; origin:
   return { rpId: config.rpId, origin: config.origin, rpName: config.rpName };
 };
 
-const getCookie = (request: Request, name: string): string | undefined => request.headers.get('Cookie')?.split(';').map((value) => value.trim()).find((value) => value.startsWith(`${name}=`))?.slice(name.length + 1);
+export const requireAuthConfiguration = (context: SyncContext): Response | undefined => {
+  const config = authConfig(context);
+  const requestUrl = new URL(context.request.url);
+  let configuredOrigin: URL;
+  try {
+    configuredOrigin = new URL(config.origin);
+  } catch {
+    return json({ error: 'auth_configuration_unavailable', message: 'La configuración de autenticación no es válida.' }, 503);
+  }
+  const validRpId = config.rpId === requestUrl.hostname || requestUrl.hostname.endsWith(`.${config.rpId}`);
+  const validOrigin = configuredOrigin.origin === requestUrl.origin;
+  const secureTransport = requestUrl.protocol === 'https:' || isLocalRequest(context.request);
+  if (!config.sessionSecret || !validRpId || !validOrigin || !secureTransport) {
+    return json({ error: 'auth_configuration_unavailable', message: 'La autenticación no está configurada para este entorno.' }, 503);
+  }
+  return undefined;
+};
 
-const userFromSession = async (context: SyncContext, db: D1DatabaseLike): Promise<AuthUser | undefined> => {
-  const token = getCookie(context.request, SESSION_COOKIE);
-  const secret = authConfig(context).sessionSecret;
-  if (!token || !secret) return undefined;
+const getCookie = (request: Request, names: string[]): string | undefined => {
+  const cookies = request.headers.get('Cookie')?.split(';').map((value) => value.trim()) ?? [];
+  for (const name of names) {
+    const value = cookies.find((cookie) => cookie.startsWith(`${name}=`));
+    if (value) return value.slice(name.length + 1);
+  }
+  return undefined;
+};
+
+interface SessionRow {
+  sessionId: string;
+  id: string;
+  displayName: string;
+  createdAt: string;
+  sessionVersion: number;
+  disabled: number;
+  credentialId?: string;
+  reauthenticatedAt?: string;
+}
+
+const sessionFromRequest = async (context: SyncContext, db: D1DatabaseLike): Promise<SessionRow | undefined> => {
+  const config = authConfig(context);
+  const token = getCookie(context.request, [SECURE_SESSION_COOKIE, SESSION_COOKIE]);
+  if (!token || !config.sessionSecret) return undefined;
   const separator = token.lastIndexOf('.');
   if (separator < 0) return undefined;
   const payload = token.slice(0, separator);
   let validSignature = false;
-  try { validSignature = await verifyHmac(secret, payload, decodeBase64Url(token.slice(separator + 1))); } catch { return undefined; }
+  try { validSignature = await verifyHmac(config.sessionSecret, payload, decodeBase64Url(token.slice(separator + 1))); } catch { return undefined; }
   if (!validSignature) return undefined;
-  const [userId, expiry, sessionVersion] = payload.split(':');
-  if (!userId || !expiry || Number(expiry) < Date.now() || !sessionVersion) return undefined;
+  const [sessionId, expiry, sessionVersion] = payload.split(':');
+  if (!sessionId || !expiry || !sessionVersion || !/^\d+$/.test(expiry) || Number(expiry) <= Date.now()) return undefined;
   const row = await db.prepare(
-    'SELECT id, display_name AS displayName, created_at AS createdAt, session_version AS sessionVersion, disabled FROM users WHERE id = ?',
-  ).bind(userId).first<{ id: string; displayName: string; createdAt: string; sessionVersion: number; disabled: number }>();
+    `SELECT s.id AS sessionId, u.id, u.display_name AS displayName, u.created_at AS createdAt,
+            u.session_version AS sessionVersion, u.disabled, s.credential_id AS credentialId,
+            s.reauthenticated_at AS reauthenticatedAt
+       FROM auth_sessions s JOIN users u ON u.id = s.user_id
+      WHERE s.id = ? AND s.revoked_at IS NULL AND s.expires_at > ?`,
+  ).bind(sessionId, new Date().toISOString()).first<SessionRow>();
   if (!row || row.disabled === 1 || String(row.sessionVersion) !== sessionVersion) return undefined;
-  return { id: row.id, displayName: row.displayName, createdAt: row.createdAt };
+  return row;
 };
+
+const userFromSession = async (context: SyncContext, db: D1DatabaseLike): Promise<SessionRow | undefined> => sessionFromRequest(context, db);
 
 export const getAuthenticatedContext = async (context: SyncContext): Promise<AuthenticatedContext | Response> => {
+  const configurationError = requireAuthConfiguration(context);
+  if (configurationError) return configurationError;
   const database = requireDatabase(context);
   if (database instanceof Response) return database;
-  const user = await userFromSession(context, database);
-  return user ? { ...context, user } : json({ error: 'not_authenticated', message: 'Inicia sesión con tu passkey para continuar.' }, 401);
+  const session = await userFromSession(context, database);
+  return session ? {
+    ...context,
+    user: { id: session.id, displayName: session.displayName, createdAt: session.createdAt },
+    sessionId: session.sessionId,
+    sessionCredentialId: session.credentialId,
+    sessionReauthenticatedAt: session.reauthenticatedAt,
+  } : json({ error: 'not_authenticated', message: 'Inicia sesión con tu passkey para continuar.' }, 401);
 };
 
-export const issueSessionCookie = async (context: SyncContext, userId: string, sessionVersion: number): Promise<string> => {
+export const requireRecentReauthentication = (context: AuthenticatedContext): Response | undefined => {
+  const reauthenticatedAt = context.sessionReauthenticatedAt ? Date.parse(context.sessionReauthenticatedAt) : NaN;
+  if (!Number.isFinite(reauthenticatedAt) || Date.now() - reauthenticatedAt > REAUTH_TTL_MS) {
+    return json({ error: 'reauthentication_required', message: 'Vuelve a verificar tu passkey para confirmar este cambio.' }, 403);
+  }
+  return undefined;
+};
+
+export const issueSessionCookie = async (context: SyncContext, userId: string, sessionVersion: number, credentialId?: string): Promise<string> => {
+  const configurationError = requireAuthConfiguration(context);
+  if (configurationError) throw new Error('AUTH_CONFIGURATION_INVALID');
+  const database = requireDatabase(context);
+  if (database instanceof Response) throw new Error('DATABASE_UNAVAILABLE');
   const config = authConfig(context);
-  if (!config.sessionSecret) throw new Error('SESSION_SECRET is required in production');
-  const payload = `${userId}:${Date.now() + SESSION_DAYS * 86400000}:${sessionVersion}`;
+  const sessionId = randomId();
+  const expiresAt = new Date(Date.now() + SESSION_DAYS * 86400000).toISOString();
+  await database.prepare(
+    'INSERT INTO auth_sessions (id, user_id, credential_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?)',
+  ).bind(sessionId, userId, credentialId ?? null, new Date().toISOString(), expiresAt).run();
+  const payload = `${sessionId}:${Date.parse(expiresAt)}:${sessionVersion}`;
   const signature = encodeBase64Url(new Uint8Array(await signHmac(config.sessionSecret, payload)));
-  const secure = config.origin.startsWith('https://') ? ' Secure;' : '';
-  return `${SESSION_COOKIE}=${payload}.${signature}; Path=/; Max-Age=${SESSION_DAYS * 86400}; HttpOnly; SameSite=Lax;${secure}`;
+  const secure = isLocalRequest(context.request) ? '' : ' Secure;';
+  const cookieName = isLocalRequest(context.request) ? SESSION_COOKIE : SECURE_SESSION_COOKIE;
+  return `${cookieName}=${payload}.${signature}; Path=/; Max-Age=${SESSION_DAYS * 86400}; HttpOnly; SameSite=Lax;${secure}`;
 };
 
-export const clearSessionCookie = (context: SyncContext): string => `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax;${authConfig(context).origin.startsWith('https://') ? ' Secure;' : ''}`;
+export const clearSessionCookie = (context: SyncContext): string => {
+  const secure = isLocalRequest(context.request) ? '' : ' Secure;';
+  const cookieName = isLocalRequest(context.request) ? SESSION_COOKIE : SECURE_SESSION_COOKIE;
+  return `${cookieName}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax;${secure}`;
+};
+
+export const revokeCurrentSession = async (context: SyncContext): Promise<boolean> => {
+  const database = requireDatabase(context);
+  if (database instanceof Response) return false;
+  const session = await sessionFromRequest(context, database);
+  if (!session) return false;
+  const result = await database.prepare('UPDATE auth_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL').bind(new Date().toISOString(), session.sessionId).run();
+  return (result.meta?.changes ?? 0) === 1;
+};
+
+export const revokeCredentialSessions = async (database: D1DatabaseLike, credentialId: string): Promise<D1ResultLike> => database.prepare(
+  'UPDATE auth_sessions SET revoked_at = ? WHERE credential_id = ? AND revoked_at IS NULL',
+).bind(new Date().toISOString(), credentialId).run();
+
+export const markSessionReauthenticated = async (context: AuthenticatedContext): Promise<void> => {
+  const database = requireDatabase(context);
+  if (database instanceof Response) throw new Error('DATABASE_UNAVAILABLE');
+  await database.prepare('UPDATE auth_sessions SET reauthenticated_at = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL').bind(new Date().toISOString(), context.sessionId, context.user.id).run();
+};
 
 export const consumeChallenge = async (db: D1DatabaseLike, id: string, kind: ChallengeRow['kind']): Promise<ChallengeRow | undefined> => {
   const usedAt = new Date().toISOString();
@@ -148,11 +284,25 @@ export const consumeChallenge = async (db: D1DatabaseLike, id: string, kind: Cha
   ).bind(id).first<ChallengeRow>()) ?? undefined;
 };
 
+export const consumeStepUpChallenge = async (db: D1DatabaseLike, id: string, userId: string): Promise<StepUpChallengeRow | undefined> => {
+  const usedAt = new Date().toISOString();
+  const result = await db.prepare(
+    'UPDATE auth_step_up_challenges SET used_at = ? WHERE id = ? AND user_id = ? AND used_at IS NULL AND expires_at > ?',
+  ).bind(usedAt, id, userId, usedAt).run();
+  if ((result.meta?.changes ?? 0) !== 1) return undefined;
+  return (await db.prepare('SELECT id, challenge, user_id AS userId FROM auth_step_up_challenges WHERE id = ?').bind(id).first<StepUpChallengeRow>()) ?? undefined;
+};
+
 export const challengeExpiry = (): string => new Date(Date.now() + CHALLENGE_TTL_MS).toISOString();
 
 export const pruneChallenges = async (database: D1DatabaseLike): Promise<void> => {
   const now = new Date();
-  await database.prepare(
-    'DELETE FROM auth_challenges WHERE expires_at <= ? OR (used_at IS NOT NULL AND used_at <= ?)',
-  ).bind(now.toISOString(), new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString()).run();
+  const oldUsedAt = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+  const oldRateLimitAt = new Date(now.getTime() - 2 * 60 * 60 * 1000).toISOString();
+  await database.batch([
+    database.prepare('DELETE FROM auth_challenges WHERE expires_at <= ? OR (used_at IS NOT NULL AND used_at <= ?)').bind(now.toISOString(), oldUsedAt),
+    database.prepare('DELETE FROM auth_step_up_challenges WHERE expires_at <= ? OR (used_at IS NOT NULL AND used_at <= ?)').bind(now.toISOString(), oldUsedAt),
+    database.prepare('DELETE FROM auth_rate_limits WHERE window_started_at <= ?').bind(oldRateLimitAt),
+    database.prepare('DELETE FROM auth_sessions WHERE expires_at <= ? OR (revoked_at IS NOT NULL AND revoked_at <= ?)').bind(now.toISOString(), oldUsedAt),
+  ]);
 };

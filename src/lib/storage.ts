@@ -171,8 +171,13 @@ export const loadData = (): AppData => {
   }
 };
 
-export const persistData = (data: AppData): void => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+export const persistData = (data: AppData): boolean => {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 export const serializeBackup = (data: AppData): string => JSON.stringify({ app: 'radian', exportedAt: new Date().toISOString(), data } satisfies BackupPayload, null, 2);

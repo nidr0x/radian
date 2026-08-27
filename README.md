@@ -38,6 +38,8 @@ El repositorio está preparado para usar la integración GitHub de Cloudflare Pa
 
 Pages se encargará de los despliegues de producción y de las previews. GitHub Actions conserva las comprobaciones de TypeScript, Functions, tests y build, pero no necesita credenciales de Cloudflare.
 
+Producción y preview son entornos separados. Producción usa el binding `DB` de `radian-prod`, su propio secreto de sesión y el origin `https://radian.nidr0x.win`. Cada preview debe usar otro D1, otro secreto de sesión y variables WebAuthn derivadas de su hostname; nunca copies los valores de producción a una preview. La configuración de `wrangler.jsonc` deja las variables de preview sin fijar para que la Function valide el hostname de la URL recibida. En el panel de Pages, configura el binding D1 y el secreto por entorno antes de probar autenticación en una preview.
+
 Como alternativa puntual, puedes desplegar la carpeta generada con Wrangler:
 
 ```bash
@@ -63,11 +65,11 @@ La app sigue funcionando sin backend. Si quieres compartir los datos entre el m�
    npx wrangler d1 create radian-prod
    ```
 
-2. En Cloudflare Pages, añade una vinculación D1 llamada `DB` a los entornos de producción y preview, usando esa base. El despliegue oficial de Radian ya usa `radian-prod` y tiene configurado su identificador en `wrangler.jsonc`.
+2. En Cloudflare Pages, añade una vinculación D1 llamada `DB` a producción y otra vinculación `DB` a preview, usando bases distintas. El despliegue oficial de Radian usa `radian-prod` en producción; la base de preview debe ser independiente.
 3. Aplica la migración en remoto:
 
    ```bash
-   npx wrangler d1 migrations apply radian-prod --remote
+   npx wrangler d1 migrations apply radian-prod --remote --env production
    ```
 
 4. En Radian, abre `Perfil → Sincronizar dispositivos`, genera un código y conecta el primer dispositivo. Introduce el mismo código en el segundo y elige si quieres descargar la copia remota o subir sus datos locales.
@@ -76,7 +78,7 @@ El código funciona como llave de acceso a esa copia. El contenido se cifra en e
 
 El modo local no necesita variables secretas ni una base de datos. Si activas las cuentas passkey, el despliegue necesita la base D1 y los secretos descritos abajo.
 
-Las Functions de autenticación aceptan un binding opcional `AUTH_RATE_LIMITER` cuando el entorno lo ofrece; si falta, la autenticación permanece operativa para facilitar el desarrollo. Pages dispone además de logs y métricas de Functions desde el panel de Cloudflare.
+Las Functions de autenticación usan `AUTH_RATE_LIMITER` cuando el entorno lo ofrece. Si ese binding no está disponible, aplican un límite por IP y ruta en D1; si tampoco existe D1, responden con error controlado en lugar de aceptar intentos sin límite. Pages dispone además de logs y métricas de Functions desde el panel de Cloudflare.
 
 ## Decisiones del MVP
 
@@ -101,10 +103,21 @@ Radian puede seguir funcionando sin cuenta y guardar los datos en el dispositivo
 Para preparar el entorno de Cloudflare:
 
 1. Crea una base de datos D1 llamada `radian-prod` y sustituye el identificador de ejemplo en `wrangler.jsonc` por el suyo. En el despliegue oficial, la base ya está creada y configurada.
-2. Aplica las migraciones con `npx wrangler d1 migrations apply radian-prod --remote` (incluye `0001_sync_records.sql`, `0002_accounts.sql` y `0003_passkey_management.sql`).
+2. Aplica las migraciones con `npx wrangler d1 migrations apply radian-prod --remote --env production` (incluye `0001_sync_records.sql` a `0004_auth_hardening.sql`). Repite el proceso con la base de preview usando el entorno de preview.
 3. Configura en Pages Functions los secretos `SESSION_SECRET` y, en producción, `WEBAUTHN_RP_ID`, `WEBAUTHN_ORIGIN` y `WEBAUTHN_RP_NAME`.
 4. Para `radian.nidr0x.win`, usa `WEBAUTHN_RP_ID=radian.nidr0x.win` y `WEBAUTHN_ORIGIN=https://radian.nidr0x.win`.
 
-`SESSION_SECRET` debe ser aleatorio y mantenerse estable entre despliegues. Los retos WebAuthn caducados o consumidos se limpian al solicitar nuevas opciones de registro o acceso. D1 ofrece recuperación automática mediante Time Travel; conviene revisar periódicamente su retención desde Cloudflare antes de publicar cambios destructivos.
+`SESSION_SECRET` debe ser aleatorio y mantenerse estable entre despliegues. Los retos WebAuthn caducados o consumidos, los límites antiguos y las sesiones expiradas se limpian al solicitar nuevas opciones. Las sesiones son opacas, revocables y quedan vinculadas a la versión de sesión del usuario. Añadir, renombrar o revocar una passkey exige una verificación reciente con otra passkey; revocar una passkey invalida las sesiones que se crearon con ella. D1 ofrece recuperación automática mediante Time Travel; conviene revisar periódicamente su retención desde Cloudflare antes de publicar cambios destructivos.
 
 La passkey nunca se almacena en Radian: el dispositivo conserva la clave privada y D1 solo guarda la clave pública, el contador de uso y una etiqueta elegida por ti. Desde Perfil puedes añadir, renombrar o revocar dispositivos; siempre debe quedar al menos una passkey activa. El acceso local sigue disponible si no se configura la nube.
+
+## Validación en móvil
+
+Haz estas comprobaciones después de publicar una versión en el entorno correspondiente, usando siempre su hostname HTTPS:
+
+- En iPhone con Safari: crea una cuenta con Face ID, cierra sesión, vuelve a entrar, añade una passkey desde otro dispositivo y confirma que la nueva etiqueta aparece en Perfil.
+- En Android con Chrome: repite el alta usando huella, PIN o el gestor de credenciales, cierra sesión y valida el acceso desde el mismo dispositivo.
+- En Perfil: renombra una passkey y revócala después de la verificación adicional; comprueba que una sesión creada con la passkey revocada deja de ser válida y que la última passkey no se puede borrar.
+- Abre la cuenta en dos navegadores, usa `Cerrar en todos` y confirma que el segundo navegador vuelve a pedir autenticación.
+- Empareja dos dispositivos con el código de sincronización, comprueba que el contenido remoto no se puede leer con un código incorrecto y provoca una edición simultánea para verificar el conflicto.
+- En una preview, confirma que la Function usa su origin WebAuthn, su D1 y su secreto propios, y que nunca muestra datos de producción.

@@ -99,8 +99,13 @@ export const loadSyncState = (): SyncState => {
   }
 };
 
-export const persistSyncState = (state: SyncState): void => {
-  localStorage.setItem(SYNC_SETTINGS_KEY, JSON.stringify(state));
+export const persistSyncState = (state: SyncState): boolean => {
+  try {
+    localStorage.setItem(SYNC_SETTINGS_KEY, JSON.stringify(state));
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 const readResponse = async (response: Response): Promise<Record<string, unknown>> => {

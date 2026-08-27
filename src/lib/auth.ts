@@ -50,7 +50,7 @@ const ensureWebAuthn = (): void => {
 
 export const currentUser = async (): Promise<AuthUser | undefined> => {
   const response = await fetch('/api/auth/me', { credentials: 'include', headers: { Accept: 'application/json' } });
-  if (response.status === 401 || response.status === 503) return undefined;
+  if (response.status === 401) return undefined;
   const body = await readResponse(response);
   return isRecord(body.user) && typeof body.user.id === 'string' && typeof body.user.displayName === 'string' && typeof body.user.createdAt === 'string'
     ? { id: body.user.id, displayName: body.user.displayName, createdAt: body.user.createdAt }
@@ -67,8 +67,16 @@ export const registerPasskey = async (displayName: string, passkeyLabel = 'Passk
   return verified.user as unknown as AuthUser;
 };
 
+export const reauthenticate = async (): Promise<void> => {
+  ensureWebAuthn();
+  const optionsResponse = await post('/api/auth/reauth/options');
+  const credential: AuthenticationResponseJSON = await startAuthentication({ optionsJSON: optionsResponse.options as PublicKeyCredentialRequestOptionsJSON });
+  await post('/api/auth/reauth/verify', { challengeId: optionsResponse.challengeId, credential });
+};
+
 export const addPasskey = async (passkeyLabel = 'Passkey'): Promise<void> => {
   ensureWebAuthn();
+  await reauthenticate();
   const optionsResponse = await post('/api/auth/passkeys/options', { passkeyLabel });
   const credential: RegistrationResponseJSON = await startRegistration({ optionsJSON: optionsResponse.options as PublicKeyCredentialCreationOptionsJSON });
   await post('/api/auth/register/verify', { challengeId: optionsResponse.challengeId, credential });
@@ -84,7 +92,10 @@ export const loginWithPasskey = async (): Promise<AuthUser> => {
   return verified.user as unknown as AuthUser;
 };
 
-export const logout = async (): Promise<void> => { await post('/api/auth/logout'); };
+export const logout = async (): Promise<boolean> => {
+  const body = await post('/api/auth/logout');
+  return body.remoteRevoked === true;
+};
 export const logoutEverywhere = async (): Promise<void> => { await post('/api/auth/logout/all'); };
 
 export const listPasskeys = async (): Promise<AuthPasskey[]> => {
@@ -98,10 +109,12 @@ export const listPasskeys = async (): Promise<AuthPasskey[]> => {
 };
 
 export const renamePasskey = async (credentialId: string, label: string): Promise<void> => {
+  await reauthenticate();
   await request('/api/auth/passkeys', { method: 'PATCH', body: JSON.stringify({ credentialId, label }) });
 };
 
 export const revokePasskey = async (credentialId: string): Promise<void> => {
+  await reauthenticate();
   await request('/api/auth/passkeys', { method: 'DELETE', body: JSON.stringify({ credentialId }) });
 };
 

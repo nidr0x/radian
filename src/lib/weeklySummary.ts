@@ -1,4 +1,4 @@
-import { dateKey, formatDate, weekKey } from './date';
+import { dateKey, formatDate, normalizeTrainingDays, weekKey } from './date';
 import { overallFeedback, recommendationFor } from './recommendations';
 import { isWorkSet } from './progression';
 import type { AppData, Difficulty, Energy, WorkoutSession } from '../types';
@@ -36,7 +36,7 @@ const sessionsInWeek = (sessions: WorkoutSession[], start: Date, end: Date): Wor
 
 const measureEntriesInWeek = (data: AppData, start: Date, end: Date) => data.progress
   .filter((entry) => entry.date >= dateKey(start) && entry.date <= dateKey(end))
-  .sort((a, b) => a.date.localeCompare(b.date));
+  .sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
 
 const volumeFor = (sessions: WorkoutSession[]): number => sessions.reduce((total, session) => total + session.plannedExercises.reduce((exerciseTotal, exercise) => exerciseTotal + exercise.setLogs.reduce((setTotal, set) => setTotal + (isWorkSet(set) && set.completed ? (set.weightKg ?? 0) * (set.actualReps ?? 0) : 0), 0), 0), 0);
 
@@ -65,12 +65,13 @@ export const buildWeeklySummary = (data: AppData, now = new Date()): WeeklySumma
     .filter((exerciseId) => recommendationFor(exerciseId, data.sessions)?.tone === 'positive')
     .map((exerciseId) => exerciseNames.get(exerciseId) ?? exerciseId)
     .slice(0, 3);
+  const orderedProgress = [...data.progress].sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
   const measures = measureEntriesInWeek(data, start, end);
-  const previousMeasure = data.progress.filter((entry) => entry.date < dateKey(start)).at(-1);
+  const previousMeasure = orderedProgress.filter((entry) => entry.date < dateKey(start)).at(-1);
   const firstMeasure = measures[0] ?? previousMeasure;
-  const lastMeasure = measures.at(-1) ?? data.progress.at(-1);
+  const lastMeasure = measures.at(-1) ?? orderedProgress.at(-1);
   const checkin = data.checkins.find((entry) => entry.weekKey === weekKey(now));
-  const targetSessions = Math.max(data.profile.trainingDays.length, 1);
+  const targetSessions = Math.max(Math.min(normalizeTrainingDays(data.profile.trainingDays).length, data.plan.days.length), 1);
   const feedback = overallFeedback(sessions);
   const remainingSessions = Math.max(targetSessions - sessions.length, 0);
 
@@ -121,7 +122,7 @@ export const weeklySummaryText = (data: AppData, now = new Date()): string => {
     '',
     'CONTEXTO',
     `Objetivo: ${data.profile.goal || 'sin definir'}`,
-    `Peso actual: ${formatMeasure(data.profile.currentWeightKg, 'kg')}`,
+    `Peso actual: ${formatMeasure(summary.weightEnd ?? data.profile.currentWeightKg, 'kg')}`,
     '',
     'ADHERENCIA',
     `${summary.completedSessions}/${summary.targetSessions} sesiones completadas`,

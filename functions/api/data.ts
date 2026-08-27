@@ -11,6 +11,15 @@ const validAppData = (value: unknown): boolean => isRecord(value)
 
 interface UserDataRow { payload: string; updatedAt: string }
 
+const conflictResponse = (row: UserDataRow | null): Response => {
+  if (!row) return json({ error: 'conflict', message: 'La copia remota se ha eliminado en otro dispositivo.', data: null, updatedAt: null }, 409);
+  try {
+    return json({ error: 'conflict', message: 'Hay una copia más reciente en otro dispositivo.', data: JSON.parse(row.payload), updatedAt: row.updatedAt }, 409);
+  } catch {
+    return json({ error: 'invalid_record', message: 'Los datos guardados no se pueden leer.' }, 500);
+  }
+};
+
 export const onRequestGet = async (context: SyncContext): Promise<Response> => {
   const authenticated = await getAuthenticatedContext(context);
   if (authenticated instanceof Response) return authenticated;
@@ -27,13 +36,20 @@ export const onRequestPut = async (context: SyncContext): Promise<Response> => {
   let body: unknown;
   try { body = JSON.parse(bodyText); } catch { return json({ error: 'invalid_json', message: 'El contenido enviado no es válido.' }, 400); }
   if (!isRecord(body) || !validAppData(body.data)) return json({ error: 'invalid_payload', message: 'Faltan datos válidos de Radian.' }, 400);
-  const current = await authenticated.env.DB!.prepare('SELECT payload, updated_at AS updatedAt FROM user_data WHERE user_id = ?').bind(authenticated.user.id).first<UserDataRow>();
+  const database = authenticated.env.DB!;
+  const current = await database.prepare('SELECT payload, updated_at AS updatedAt FROM user_data WHERE user_id = ?').bind(authenticated.user.id).first<UserDataRow>();
   const baseUpdatedAt = typeof body.baseUpdatedAt === 'string' ? body.baseUpdatedAt : undefined;
-  if (current && current.updatedAt !== baseUpdatedAt) return json({ error: 'conflict', message: 'Hay una copia más reciente en otro dispositivo.', data: JSON.parse(current.payload), updatedAt: current.updatedAt }, 409);
+  if (current && current.updatedAt !== baseUpdatedAt) return conflictResponse(current);
+  if (!current && baseUpdatedAt) return conflictResponse(null);
   const updatedAt = new Date().toISOString();
-  await authenticated.env.DB!.prepare(
+  const result = await database.prepare(
     `INSERT INTO user_data (user_id, payload, updated_at) VALUES (?, ?, ?)
-     ON CONFLICT(user_id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at`,
-  ).bind(authenticated.user.id, JSON.stringify(body.data), updatedAt).run();
+     ON CONFLICT(user_id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at
+     WHERE user_data.updated_at = ?`,
+  ).bind(authenticated.user.id, JSON.stringify(body.data), updatedAt, baseUpdatedAt ?? '').run();
+  if ((result.meta?.changes ?? 0) !== 1) {
+    const latest = await database.prepare('SELECT payload, updated_at AS updatedAt FROM user_data WHERE user_id = ?').bind(authenticated.user.id).first<UserDataRow>();
+    return conflictResponse(latest);
+  }
   return json({ updatedAt });
 };

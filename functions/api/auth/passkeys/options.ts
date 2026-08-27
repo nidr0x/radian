@@ -1,13 +1,18 @@
 import { generateRegistrationOptions } from '@simplewebauthn/server';
-import { challengeExpiry, getAuthenticatedContext, getWebAuthnConfig, json, randomId, readJson } from '../../../lib/auth';
+import { challengeExpiry, enforceAuthRateLimit, getAuthenticatedContext, getWebAuthnConfig, json, pruneChallenges, randomId, readJson, requireRecentReauthentication } from '../../../lib/auth';
 import type { SyncContext } from '../../../types';
 
 interface ExistingCredential { credentialId: string; transports: string }
 
 export const onRequestPost = async (context: SyncContext): Promise<Response> => {
+  const rateLimitResponse = await enforceAuthRateLimit(context, 'passkeys-options');
+  if (rateLimitResponse) return rateLimitResponse;
   const authenticated = await getAuthenticatedContext(context);
   if (authenticated instanceof Response) return authenticated;
+  const reauthenticationError = requireRecentReauthentication(authenticated);
+  if (reauthenticationError) return reauthenticationError;
   const database = authenticated.env.DB!;
+  await pruneChallenges(database);
   const body = await readJson(context.request);
   const passkeyLabel = typeof body.passkeyLabel === 'string' ? body.passkeyLabel.trim().slice(0, 60) : '';
   const existing = await database.prepare('SELECT credential_id AS credentialId, transports FROM passkeys WHERE user_id = ?').bind(authenticated.user.id).all<ExistingCredential>();

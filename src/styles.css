@@ -823,3 +823,37 @@ h3 { font-weight: 650; letter-spacing: -.02em; }
 .passkey-row-actions button:hover { color: var(--ink); background: var(--surface); }
 .passkey-row-actions button:last-child { color: var(--danger); }
 .passkey-row-actions button:disabled { cursor: not-allowed; opacity: .35; }
+
+/* Mobile training controls keep a comfortable touch target and reserve room
+   for long exercise names before the hero progress badge. */
+.storage-warning { display: flex; gap: 8px; align-items: center; max-width: min(100%, 380px); padding: 11px 14px; border: 1px solid color-mix(in srgb, var(--warning) 42%, var(--line)); border-radius: 13px; color: var(--warning); background: var(--surface); box-shadow: var(--shadow); font-size: 11px; font-weight: 700; }
+.storage-warning svg { flex: 0 0 auto; }
+.cloud-conflict { display: grid; gap: 7px; border-color: color-mix(in srgb, var(--warning) 46%, var(--line)); background: color-mix(in srgb, var(--warning) 9%, var(--surface)); }
+.cloud-conflict > strong { color: var(--ink); font-size: 13px; }
+.cloud-conflict > span { color: var(--muted); font-size: 11px; line-height: 1.4; }
+.set-complete, .set-quick-action, .library-add-button, .routine-alternatives button, .alternative-actions .secondary-button, .passkey-row-actions button { min-height: 44px; }
+.set-complete { width: 44px; height: 44px; }
+.rest-controls button { width: 44px; height: 44px; border-radius: 11px; }
+
+@media (max-width: 560px) {
+  .set-log-heading { align-items: flex-start; flex-direction: column; }
+  .set-log-heading-actions { width: 100%; justify-content: flex-start; }
+  .set-log-heading-actions .text-button { min-height: 44px; }
+  .cloud-conflict .account-actions { align-items: stretch; flex-direction: column; }
+  .cloud-conflict .account-actions button { width: 100%; }
+}
+
+@media (max-width: 480px) {
+  .today-hero { min-height: 220px; }
+  .hero-copy { min-width: 0; padding-bottom: 38px; }
+  .hero-copy h2, .hero-copy p { overflow-wrap: anywhere; }
+  .hero-progress { right: 14px; bottom: 14px; }
+  .set-log-row { grid-template-columns: 26px 52px minmax(0, 1fr) minmax(0, 1fr) 44px; gap: 5px; padding: 8px 5px; }
+  .set-log-row input { min-height: 44px; font-size: 16px; }
+}
+
+@media (max-width: 380px) {
+  .active-exercise-card { padding-inline: 12px; }
+  .set-log-row { grid-template-columns: 22px 45px minmax(0, 1fr) minmax(0, 1fr) 44px; gap: 4px; }
+  .set-log-target { font-size: 8px; }
+}

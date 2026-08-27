@@ -1,5 +1,5 @@
 import { verifyAuthenticationResponse } from '@simplewebauthn/server';
-import { consumeChallenge, enforceAuthRateLimit, getWebAuthnConfig, issueSessionCookie, isRecord, json, readJson, requireDatabase } from '../../../lib/auth';
+import { consumeChallenge, enforceAuthRateLimit, getWebAuthnConfig, issueSessionCookie, isRecord, json, readJson, requireAuthConfiguration, requireDatabase } from '../../../lib/auth';
 import type { SyncContext } from '../../../types';
 
 interface PasskeyRow {
@@ -11,6 +11,8 @@ interface PasskeyRow {
 }
 
 export const onRequestPost = async (context: SyncContext): Promise<Response> => {
+  const configurationError = requireAuthConfiguration(context);
+  if (configurationError) return configurationError;
   const rateLimitResponse = await enforceAuthRateLimit(context, 'login-verify');
   if (rateLimitResponse) return rateLimitResponse;
   const database = requireDatabase(context);
@@ -48,7 +50,12 @@ export const onRequestPost = async (context: SyncContext): Promise<Response> => 
     return json({ error: 'verification_failed', message: 'No se ha podido verificar esta passkey.' }, 400);
   }
   if (!verification.verified) return json({ error: 'verification_failed', message: 'No se ha podido verificar esta passkey.' }, 400);
-  await database.prepare('UPDATE passkeys SET counter = ?, last_used_at = ? WHERE credential_id = ?').bind(verification.authenticationInfo.newCounter, new Date().toISOString(), passkey.credentialId).run();
-  const cookie = await issueSessionCookie(context, user.id, user.sessionVersion);
-  return json({ user: { id: user.id, displayName: user.displayName, createdAt: user.createdAt } }, 200, { 'Set-Cookie': cookie });
+  const counterUpdate = await database.prepare('UPDATE passkeys SET counter = ?, last_used_at = ? WHERE credential_id = ? AND counter = ?').bind(verification.authenticationInfo.newCounter, new Date().toISOString(), passkey.credentialId, passkey.counter).run();
+  if ((counterUpdate.meta?.changes ?? 0) !== 1) return json({ error: 'credential_changed', message: 'La passkey ha cambiado mientras se verificaba. Inténtalo de nuevo.' }, 409);
+  try {
+    const cookie = await issueSessionCookie(context, user.id, user.sessionVersion, passkey.credentialId);
+    return json({ user: { id: user.id, displayName: user.displayName, createdAt: user.createdAt } }, 200, { 'Set-Cookie': cookie });
+  } catch {
+    return json({ error: 'auth_unavailable', message: 'No se ha podido crear la sesión.' }, 503);
+  }
 };

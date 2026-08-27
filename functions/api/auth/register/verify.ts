@@ -1,8 +1,10 @@
 import { verifyRegistrationResponse } from '@simplewebauthn/server';
-import { consumeChallenge, enforceAuthRateLimit, getAuthenticatedContext, getWebAuthnConfig, issueSessionCookie, isRecord, json, readJson, requireDatabase } from '../../../lib/auth';
+import { consumeChallenge, enforceAuthRateLimit, getAuthenticatedContext, getWebAuthnConfig, issueSessionCookie, isRecord, json, readJson, requireAuthConfiguration, requireDatabase, requireRecentReauthentication } from '../../../lib/auth';
 import type { SyncContext } from '../../../types';
 
 export const onRequestPost = async (context: SyncContext): Promise<Response> => {
+  const configurationError = requireAuthConfiguration(context);
+  if (configurationError) return configurationError;
   const rateLimitResponse = await enforceAuthRateLimit(context, 'register-verify');
   if (rateLimitResponse) return rateLimitResponse;
   const database = requireDatabase(context);
@@ -16,6 +18,8 @@ export const onRequestPost = async (context: SyncContext): Promise<Response> => 
   if (challenge.mode === 'add_passkey') {
     const authenticated = await getAuthenticatedContext(context);
     if (authenticated instanceof Response || authenticated.user.id !== challenge.userId) return json({ error: 'not_authenticated', message: 'Vuelve a iniciar sesión para añadir una passkey.' }, 401);
+    const reauthenticationError = requireRecentReauthentication(authenticated);
+    if (reauthenticationError) return reauthenticationError;
   }
   const { rpId, origin } = getWebAuthnConfig(context);
   let verification;
@@ -49,6 +53,11 @@ export const onRequestPost = async (context: SyncContext): Promise<Response> => 
     return json({ error: 'credential_exists', message: 'Esta passkey ya está registrada.' }, 409);
   }
   const sessionVersion = challenge.mode === 'add_passkey' ? (await database.prepare('SELECT session_version AS sessionVersion FROM users WHERE id = ?').bind(challenge.userId).first<{ sessionVersion: number }>())?.sessionVersion ?? 0 : 0;
-  const cookie = await issueSessionCookie(context, challenge.userId, sessionVersion);
-  return json({ user: { id: challenge.userId, displayName: challenge.displayName, createdAt } }, 201, { 'Set-Cookie': cookie });
+  try {
+    const credentialId = registered.id;
+    const cookie = await issueSessionCookie(context, challenge.userId, sessionVersion, credentialId);
+    return json({ user: { id: challenge.userId, displayName: challenge.displayName, createdAt } }, 201, { 'Set-Cookie': cookie });
+  } catch {
+    return json({ error: 'auth_unavailable', message: 'No se ha podido crear la sesión.' }, 503);
+  }
 };
