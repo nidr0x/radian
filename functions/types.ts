@@ -88,6 +88,13 @@ export interface McpReplaceRoutineOperation {
   exercises: ExerciseDefinition[];
 }
 
+export interface McpWorkoutValidationContext {
+  exercises?: Array<Pick<ExerciseDefinition, 'id'>>;
+  plan?: {
+    days?: Array<Pick<WorkoutPlan['days'][number], 'id'>>;
+  };
+}
+
 export interface McpRecordWorkoutOperation {
   kind: 'record_workout';
   workout: WorkoutSession;

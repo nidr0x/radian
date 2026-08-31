@@ -1,5 +1,4 @@
 import { migrateData } from '../../src/lib/storage';
-import { defaultData } from '../../src/data/initialPlan';
 import type {
   AppData,
   Difficulty,
@@ -13,7 +12,13 @@ import type {
   WeeklyCheckin,
   WorkoutSession,
 } from '../../src/types';
-import type { McpPreviewableChange, McpProfilePatch, McpWriteOperation, McpWriteRequest } from '../types';
+import type {
+  McpPreviewableChange,
+  McpProfilePatch,
+  McpWorkoutValidationContext,
+  McpWriteOperation,
+  McpWriteRequest,
+} from '../types';
 
 const MAX_PAYLOAD_BYTES = 900_000;
 const APP_DATA_KEYS = ['schemaVersion', 'onboardingComplete', 'profile', 'exercises', 'plan', 'sessions', 'progress', 'checkins'] as const;
@@ -242,12 +247,12 @@ const validatePlannedExercise = (exercise: Record<string, unknown>, label: strin
   if (exercise.imagePosition !== undefined) assertString(exercise.imagePosition, `${label}.imagePosition`, { allowEmpty: true, maxLength: 64 });
 };
 
-const validateExerciseSession = (exercise: Record<string, unknown>, label: string, knownExerciseIds: Set<string>): void => {
+const validateExerciseSession = (exercise: Record<string, unknown>, label: string, knownExerciseIds?: Set<string>): void => {
   assertAllowedKeys(exercise, EXERCISE_SESSION_KEYS, label);
   assertRequiredKeys(exercise, ['plannedExerciseId', 'exerciseId', 'name', 'sets', 'repMin', 'repMax', 'restSeconds', 'warmupSets', 'progressionPolicy', 'progressionIncrementKg', 'completed', 'setLogs', 'discomfort'], label);
   assertId(exercise.plannedExerciseId, `${label}.plannedExerciseId`);
   const exerciseId = assertId(exercise.exerciseId, `${label}.exerciseId`);
-  if (!knownExerciseIds.has(exerciseId)) throw new Error(`${label}.exerciseId no existe en el catálogo.`);
+  if (knownExerciseIds && !knownExerciseIds.has(exerciseId)) throw new Error(`${label}.exerciseId no existe en el catálogo.`);
   assertString(exercise.name, `${label}.name`, { allowEmpty: false, maxLength: 160 });
   assertInteger(exercise.sets, `${label}.sets`, 1, 12);
   const repMin = assertInteger(exercise.repMin, `${label}.repMin`, 1, 100);
@@ -299,14 +304,14 @@ const validateWorkoutPlan = (plan: Record<string, unknown>, knownExerciseIds: Se
   plan.days.forEach((day, index) => validateWorkoutDay(assertRecord(day, `plan.days[${index}]`), index, knownExerciseIds, seenIds));
 };
 
-const validateWorkoutSession = (session: Record<string, unknown>, index: number, knownDayIds: Set<string>, knownExerciseIds: Set<string>, seenIds: Set<string>): void => {
+const validateWorkoutSession = (session: Record<string, unknown>, index: number, knownDayIds: Set<string> | undefined, knownExerciseIds: Set<string> | undefined, seenIds: Set<string>): void => {
   assertAllowedKeys(session, SESSION_KEYS, `sessions[${index}]`);
   assertRequiredKeys(session, SESSION_KEYS, `sessions[${index}]`);
   const id = assertId(session.id, `sessions[${index}].id`);
   if (seenIds.has(id)) throw new Error(`sessions[${index}].id está duplicado.`);
   seenIds.add(id);
   const workoutDayId = assertId(session.workoutDayId, `sessions[${index}].workoutDayId`);
-  if (!knownDayIds.has(workoutDayId)) throw new Error(`sessions[${index}].workoutDayId no existe en el plan.`);
+  if (knownDayIds && !knownDayIds.has(workoutDayId)) throw new Error(`sessions[${index}].workoutDayId no existe en el plan.`);
   assertDateKey(session.dateKey, `sessions[${index}].dateKey`);
   assertIsoTimestamp(session.startedAt, `sessions[${index}].startedAt`);
   if (session.completedAt !== undefined) assertIsoTimestamp(session.completedAt, `sessions[${index}].completedAt`);
@@ -453,7 +458,14 @@ const validatePreviewableChange = (value: unknown): McpPreviewableChange => {
   return { kind };
 };
 
-export const validateMcpWriteOperation = (value: unknown): McpWriteOperation => {
+const buildWorkoutValidationSets = (context?: McpWorkoutValidationContext): { knownDayIds?: Set<string>; knownExerciseIds?: Set<string> } => {
+  if (!context) return {};
+  const knownDayIds = context.plan?.days ? new Set(context.plan.days.map((day) => day.id)) : undefined;
+  const knownExerciseIds = context.exercises ? new Set(context.exercises.map((exercise) => exercise.id)) : undefined;
+  return { knownDayIds, knownExerciseIds };
+};
+
+export const validateMcpWriteOperation = (value: unknown, context?: McpWorkoutValidationContext): McpWriteOperation => {
   const operation = assertRecord(value, 'operation');
   const kind = assertString(operation.kind, 'operation.kind', { allowEmpty: false, maxLength: 40 }) as McpWriteOperation['kind'];
   if (!OPERATION_KINDS.has(kind)) throw new Error('operation.kind no es válido.');
@@ -482,9 +494,7 @@ export const validateMcpWriteOperation = (value: unknown): McpWriteOperation => 
   if (kind === 'record_workout') {
     assertAllowedKeys(operation, ['kind', 'workout'], 'operation');
     const workout = assertRecord(operation.workout, 'operation.workout');
-    const current = defaultData();
-    const knownDayIds = new Set(current.plan.days.map((day) => day.id));
-    const knownExerciseIds = new Set(current.exercises.map((exercise) => exercise.id));
+    const { knownDayIds, knownExerciseIds } = buildWorkoutValidationSets(context);
     validateWorkoutSession(workout, 0, knownDayIds, knownExerciseIds, new Set());
     return { kind, workout: operation.workout as WorkoutSession };
   }

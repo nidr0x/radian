@@ -171,11 +171,10 @@ describe('puente MCP remoto de Radian', () => {
     expect(() => validateMcpAppData(malformed)).toThrow(/válid|plan\.days|exercises/i);
   });
 
-  it('valida record_workout usando plannedExercises y el catálogo real', () => {
-    const session = structuredClone(defaultData()).plan.days[0];
+  it('valida record_workout sin asumir el catálogo inicial y usa contexto opcional para semántica', () => {
     const validWorkout = {
       id: 'session-2026-08-31',
-      workoutDayId: session.id,
+      workoutDayId: 'custom-day',
       dateKey: '2026-08-31',
       startedAt: '2026-08-31T20:00:00.000Z',
       completedAt: '2026-08-31T21:00:00.000Z',
@@ -183,16 +182,16 @@ describe('puente MCP remoto de Radian', () => {
       activeExerciseIndex: 0,
       plannedExercises: [
         {
-          plannedExerciseId: session.exercises[0].id,
-          exerciseId: session.exercises[0].exerciseId,
-          name: session.exercises[0].name,
-          sets: session.exercises[0].sets,
-          repMin: session.exercises[0].repMin,
-          repMax: session.exercises[0].repMax,
-          restSeconds: session.exercises[0].restSeconds,
-          warmupSets: session.exercises[0].warmupSets ?? 0,
-          progressionPolicy: session.exercises[0].progressionPolicy ?? 'double',
-          progressionIncrementKg: session.exercises[0].progressionIncrementKg ?? 2.5,
+          plannedExerciseId: 'custom-plan-1',
+          exerciseId: 'custom-exercise-1',
+          name: 'Press convergente personalizado',
+          sets: 3,
+          repMin: 8,
+          repMax: 10,
+          restSeconds: 120,
+          warmupSets: 1,
+          progressionPolicy: 'double',
+          progressionIncrementKg: 2.5,
           completed: true,
           discomfort: false,
           setLogs: [
@@ -206,9 +205,17 @@ describe('puente MCP remoto de Radian', () => {
     };
     expect(() => validateMcpWriteOperation({ kind: 'record_workout', workout: validWorkout })).not.toThrow();
 
+    const validationContext = {
+      plan: {
+        days: [{ id: 'custom-day' }],
+      },
+      exercises: [{ id: 'custom-exercise-1' }],
+    };
+    expect(() => validateMcpWriteOperation({ kind: 'record_workout', workout: validWorkout }, validationContext)).not.toThrow();
+
     const invalidWorkout = structuredClone(validWorkout);
     invalidWorkout.plannedExercises[0].exerciseId = 'invented-exercise';
-    expect(() => validateMcpWriteOperation({ kind: 'record_workout', workout: invalidWorkout })).toThrow(/exerciseId|catálogo|válid/i);
+    expect(() => validateMcpWriteOperation({ kind: 'record_workout', workout: invalidWorkout }, validationContext)).toThrow(/exerciseId|catálogo|válid/i);
   });
 
   it('valida el ámbito de lectura y las URLs de retorno OAuth', () => {
