@@ -42,3 +42,15 @@ jobs:
 
       - name: Build Pages Functions
         run: npx wrangler pages functions build functions
+
+      - name: Smoke test production
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        run: |
+          for attempt in $(seq 1 12); do
+            if npm run smoke:prod; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Production smoke test failed after 120 seconds."
+          exit 1

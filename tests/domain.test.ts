@@ -245,6 +245,27 @@ describe('resumen semanal', () => {
     expect(weeklySummaryText(data, new Date('2026-08-20T12:00:00'))).toContain('1/4 sesiones completadas');
   });
 
+  it('incluye contexto del gimnasio y detalle por ejercicio para revisarlo con ChatGPT', () => {
+    const data = defaultData();
+    data.profile.gym = 'Evanfit Picanya';
+    const session = createSession(data.plan.days[0], '2026-08-18', new Date('2026-08-18T10:00:00Z'));
+    session.status = 'completed';
+    session.completedAt = '2026-08-18T11:00:00.000Z';
+    session.plannedExercises[0].completed = true;
+    session.plannedExercises[0].difficulty = 'good';
+    const workSet = session.plannedExercises[0].setLogs.find(isWorkSet);
+    if (!workSet) throw new Error('Expected a work set');
+    Object.assign(workSet, { actualReps: 10, weightKg: 40, completed: true });
+    data.sessions = [session];
+
+    const text = weeklySummaryText(data, new Date('2026-08-20T12:00:00'));
+
+    expect(text).toContain('Gimnasio: Evanfit Picanya');
+    expect(text).toContain('DETALLE DE EJERCICIOS');
+    expect(text).toContain('Press inclinado en máquina');
+    expect(text).toContain('40 kg × 10 reps');
+  });
+
   it('ordena las medidas por fecha aunque el almacenamiento llegue desordenado', () => {
     const data = defaultData();
     data.progress = [

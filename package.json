@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "tsc --noEmit",
     "lint:functions": "tsc --noEmit -p tsconfig.functions.json",
+    "smoke:prod": "node scripts/smoke-prod.mjs",
     "test": "vitest run"
   },
   "dependencies": {

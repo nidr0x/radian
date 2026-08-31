@@ -41,6 +41,16 @@ const measureEntriesInWeek = (data: AppData, start: Date, end: Date) => data.pro
 const volumeFor = (sessions: WorkoutSession[]): number => sessions.reduce((total, session) => total + session.plannedExercises.reduce((exerciseTotal, exercise) => exerciseTotal + exercise.setLogs.reduce((setTotal, set) => setTotal + (isWorkSet(set) && set.completed ? (set.weightKg ?? 0) * (set.actualReps ?? 0) : 0), 0), 0), 0);
 
 const energyLabel = (energy?: Energy): string => energy === 'high' ? 'alta' : energy === 'low' ? 'baja' : energy ? 'normal' : 'sin registrar';
+const difficultyLabel = (difficulty?: Difficulty): string => difficulty === 'easy' ? 'Fácil' : difficulty === 'good' ? 'Bien' : difficulty === 'hard' ? 'Difícil' : difficulty === 'incomplete' ? 'No pude' : 'sin valorar';
+
+const exerciseDetailLines = (sessions: WorkoutSession[]): string[] => sessions.flatMap((session) => session.plannedExercises.map((exercise) => {
+  const workSets = exercise.setLogs.filter(isWorkSet);
+  const completedSets = workSets.filter((set) => set.completed);
+  const setDetails = completedSets.map((set) => `${set.weightKg === undefined ? '-' : `${set.weightKg} kg`} × ${set.actualReps === undefined ? '-' : `${set.actualReps} reps`}`).join(', ');
+  const result = setDetails || `${completedSets.length}/${workSets.length} series`;
+  const discomfort = exercise.discomfort ? ' · molestias registradas' : '';
+  return `${session.dateKey} · ${exercise.name} · ${difficultyLabel(exercise.difficulty)} · ${result}${discomfort}`;
+}));
 
 export const buildWeeklySummary = (data: AppData, now = new Date()): WeeklySummary => {
   const start = dateFromKey(weekKey(now));
@@ -116,12 +126,17 @@ const formatMeasure = (value: number | undefined, unit: string): string => value
 
 export const weeklySummaryText = (data: AppData, now = new Date()): string => {
   const summary = buildWeeklySummary(data, now);
+  const start = dateFromKey(weekKey(now));
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  const sessions = sessionsInWeek(data.sessions, start, end);
   const lines = [
     'RADIAN | REVISIÓN SEMANAL',
     summary.periodLabel,
     '',
     'CONTEXTO',
     `Objetivo: ${data.profile.goal || 'sin definir'}`,
+    `Gimnasio: ${data.profile.gym || 'sin definir'}`,
     `Peso actual: ${formatMeasure(summary.weightEnd ?? data.profile.currentWeightKg, 'kg')}`,
     '',
     'ADHERENCIA',
@@ -142,6 +157,8 @@ export const weeklySummaryText = (data: AppData, now = new Date()): string => {
     summary.feedback,
     `Próximo foco: ${summary.focus}`,
   ];
+  const details = exerciseDetailLines(sessions);
+  if (details.length) lines.push('', 'DETALLE DE EJERCICIOS', ...details);
   if (summary.progressingExercises.length) lines.push(`Margen de progresión: ${summary.progressingExercises.join(', ')}`);
   if (summary.feeling) lines.push(`Sensación: ${summary.feeling}`);
   if (summary.note) lines.push(`Nota: ${summary.note}`);
