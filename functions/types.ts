@@ -19,6 +19,35 @@ export interface RateLimiterLike {
   limit(options: { key: string }): Promise<{ success: boolean }>;
 }
 
+export interface McpRevisionRow {
+  id: string;
+  userId: string;
+  payload: unknown;
+  source: string;
+  createdAt: string;
+  expiresAt: string;
+  restoredAt: string | null;
+}
+
+export interface McpPendingChangeRow {
+  id: string;
+  userId: string;
+  clientId: string;
+  kind: string;
+  payload: unknown;
+  baseUpdatedAt: string;
+  summary: unknown;
+  createdAt: string;
+  expiresAt: string;
+  usedAt: string | null;
+}
+
+export interface McpMutationResult {
+  updatedAt: string;
+  summary: Record<string, unknown>;
+  revisionId?: string;
+}
+
 export interface SyncEnv {
   DB?: D1DatabaseLike;
   AUTH_RATE_LIMITER?: RateLimiterLike;
