@@ -101,7 +101,8 @@ describe('protecciones de Pages Functions', () => {
   it('aplica cabeceras de seguridad también a las respuestas de Functions', async () => {
     const response = await onRequestMiddleware({ request: request(), env: {}, next: async () => new Response('ok') });
     expect(response.headers.get('X-Frame-Options')).toBe('DENY');
-    expect(response.headers.get('Content-Security-Policy')).toContain("default-src 'none'");
+    expect(response.headers.get('Content-Security-Policy')).toContain("default-src 'self'");
+    expect(response.headers.get('Content-Security-Policy')).toContain("script-src 'self'");
     expect(response.headers.get('Strict-Transport-Security')).toContain('max-age=31536000');
   });
 
