@@ -1,4 +1,4 @@
-import { mcpJson, mcpOrigin, MCP_READ_SCOPE } from '../lib/mcpAuth';
+import { mcpJson, mcpOrigin, MCP_READ_SCOPE, MCP_WRITE_SCOPE } from '../lib/mcpAuth';
 import type { SyncContext } from '../types';
 
 export const onRequestGet = (context: SyncContext): Response => {
@@ -6,7 +6,7 @@ export const onRequestGet = (context: SyncContext): Response => {
   return mcpJson({
     resource: `${origin}/api/mcp`,
     authorization_servers: [origin],
-    scopes_supported: [MCP_READ_SCOPE],
+    scopes_supported: [MCP_READ_SCOPE, MCP_WRITE_SCOPE],
     bearer_methods_supported: ['header'],
   });
 };

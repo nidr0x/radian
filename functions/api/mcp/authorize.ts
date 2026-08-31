@@ -21,26 +21,37 @@ import {
 } from '../../lib/mcpAuth';
 import type { SyncContext } from '../../types';
 
-const consentPage = (values: { requestId: string; csrfToken: string; clientName: string }): string => `<!doctype html>
+export const consentPage = (values: { requestId: string; csrfToken: string; clientName: string; scope: string }): string => {
+  const writeRequested = values.scope.split(/\s+/).includes(MCP_WRITE_SCOPE);
+  const scopeSummary = writeRequested ? 'lectura y modificación' : 'solo lectura';
+  const scopeDetail = writeRequested
+    ? '<li><strong>Leer</strong>: revisar perfil, rutina, sesiones, medidas y recomendaciones.</li><li><strong>Modificar</strong>: crear o actualizar datos de entrenamiento dentro de tu cuenta.</li>'
+    : '<li><strong>Leer</strong>: revisar perfil, rutina, sesiones, medidas y recomendaciones.</li>';
+  const consentButton = writeRequested ? 'Permitir leer y modificar' : 'Permitir solo lectura';
+  const scopeIntro = writeRequested
+    ? 'El alcance solicitado incluye lectura y, si lo autorizas, modificación de tus datos.'
+    : 'El alcance solicitado solo permite consultar tus datos.';
+
+  return `<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Autorizar Radian</title></head>
 <body style="font-family:system-ui,sans-serif;max-width:30rem;margin:3rem auto;padding:1.5rem;line-height:1.5;color:#152019;background:#f7faf6">
   <main style="background:white;border:1px solid #d9e2da;border-radius:1rem;padding:1.5rem;box-shadow:0 1rem 3rem #15201912">
-    <p style="text-transform:uppercase;letter-spacing:.12em;font-size:.72rem;color:#5f7565">Radian · acceso de solo lectura</p>
+    <p style="text-transform:uppercase;letter-spacing:.12em;font-size:.72rem;color:#5f7565">Radian · acceso de ${scopeSummary}</p>
     <h1 style="font-size:1.7rem;margin:.5rem 0 1rem">Autorizar consulta de entrenamientos</h1>
     <p><strong>${escapeHtml(values.clientName)}</strong> quiere consultar tu perfil, rutina, sesiones, medidas y recomendaciones.</p>
-    <p>El alcance solicitado puede incluir lectura y, si lo autorizas, modificación de tus datos. Solo accederá a tu cuenta y nunca a la de otra persona.</p>
+    <p>${scopeIntro} Solo accederá a tu cuenta y nunca a la de otra persona.</p>
     <ul style="margin:1rem 0;padding-left:1.25rem">
-      <li><strong>Leer</strong>: revisar perfil, rutina, sesiones, medidas y recomendaciones.</li>
-      <li><strong>Modificar</strong>: crear o actualizar datos de entrenamiento dentro de tu cuenta.</li>
+      ${scopeDetail}
     </ul>
     <form method="post" action="/api/mcp/authorize" style="display:grid;gap:.75rem;margin-top:1.5rem">
       <input type="hidden" name="request_id" value="${escapeHtml(values.requestId)}">
       <input type="hidden" name="csrf_token" value="${escapeHtml(values.csrfToken)}">
-      <button name="decision" value="approve" type="submit" style="border:0;border-radius:.7rem;padding:.8rem 1rem;background:#244d2e;color:white;font:inherit;cursor:pointer">Permitir leer y modificar</button>
+      <button name="decision" value="approve" type="submit" style="border:0;border-radius:.7rem;padding:.8rem 1rem;background:#244d2e;color:white;font:inherit;cursor:pointer">${consentButton}</button>
       <button name="decision" value="deny" type="submit" style="border:1px solid #b8c7ba;border-radius:.7rem;padding:.8rem 1rem;background:white;color:#244d2e;font:inherit;cursor:pointer">Cancelar</button>
     </form>
   </main>
 </body></html>`;
+};
 
 const loginPage = (): string => `<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Inicia sesión en Radian</title></head>
@@ -81,7 +92,7 @@ export const onRequestGet = async (context: SyncContext): Promise<Response> => {
   const requestId = randomId(18);
   const csrfToken = randomId(24);
   await storeAuthorizationRequest(database, { id: requestId, clientId, userId: authenticated.user.id, redirectUri, codeChallenge, scope, state, csrfTokenHash: await sha256(csrfToken) });
-  return htmlResponse(consentPage({ requestId, csrfToken, clientName: client.clientName }));
+  return htmlResponse(consentPage({ requestId, csrfToken, clientName: client.clientName, scope }));
 };
 
 export const onRequestPost = async (context: SyncContext): Promise<Response> => {

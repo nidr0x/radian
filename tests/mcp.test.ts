@@ -5,6 +5,8 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import { defaultData } from '../src/data/initialPlan';
 import { handleMcpTool, MCP_TOOL_DEFINITIONS } from '../functions/lib/mcp';
 import { hasMcpScope, isAllowedRedirectUri, normalizeScope } from '../functions/lib/mcpAuth';
+import { consentPage } from '../functions/api/mcp/authorize';
+import { onRequestGet as onProtectedResourceGet } from '../functions/.well-known/oauth-protected-resource';
 import type { McpPendingChangeRow, McpRevisionRow } from '../functions/types';
 
 const loadMigration = (): string => readFileSync(resolve(process.cwd(), 'migrations/0006_mcp_revisions.sql'), 'utf8');
@@ -71,6 +73,28 @@ describe('puente MCP remoto de Radian', () => {
     expect(normalizeScope('radian:write')).toBeUndefined();
     expect(hasMcpScope('radian:read', 'radian:write')).toBe(false);
     expect(hasMcpScope('radian:read radian:write', 'radian:write')).toBe(true);
+  });
+
+  it('anuncia lectura y escritura en la metadata del recurso protegido', () => {
+    const response = onProtectedResourceGet({
+      request: new Request('https://radian.nidr0x.win/.well-known/oauth-protected-resource'),
+      env: {},
+    });
+    return response.json().then((body: { scopes_supported: string[] }) => {
+      expect(body.scopes_supported).toEqual(['radian:read', 'radian:write']);
+    });
+  });
+
+  it('ajusta el consentimiento al scope solicitado', () => {
+    const readOnly = consentPage({ requestId: 'req', csrfToken: 'csrf', clientName: 'Cliente', scope: 'radian:read' });
+    const readWrite = consentPage({ requestId: 'req', csrfToken: 'csrf', clientName: 'Cliente', scope: 'radian:read radian:write' });
+    expect(readOnly).toContain('Radian · acceso de solo lectura');
+    expect(readOnly).toContain('El alcance solicitado solo permite consultar tus datos.');
+    expect(readOnly).toContain('Permitir solo lectura');
+    expect(readOnly).not.toContain('Permitir leer y modificar');
+    expect(readWrite).toContain('Radian · acceso de lectura y modificación');
+    expect(readWrite).toContain('El alcance solicitado incluye lectura y, si lo autorizas, modificación de tus datos.');
+    expect(readWrite).toContain('Permitir leer y modificar');
   });
 
   it('expone contratos de filas para revisiones y propuestas pendientes', () => {
