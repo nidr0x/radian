@@ -26,6 +26,7 @@ export interface SyncEnv {
   WEBAUTHN_RP_ID?: string;
   WEBAUTHN_RP_NAME?: string;
   WEBAUTHN_ORIGIN?: string;
+  MCP_ORIGIN?: string;
 }
 
 export interface SyncContext {

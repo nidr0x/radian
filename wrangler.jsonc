@@ -8,7 +8,8 @@
       "vars": {
         "WEBAUTHN_RP_ID": "radian.nidr0x.win",
         "WEBAUTHN_ORIGIN": "https://radian.nidr0x.win",
-        "WEBAUTHN_RP_NAME": "Radian"
+        "WEBAUTHN_RP_NAME": "Radian",
+        "MCP_ORIGIN": "https://radian.nidr0x.win"
       },
       "d1_databases": [
         {
@@ -23,7 +24,14 @@
         "WEBAUTHN_RP_ID": "",
         "WEBAUTHN_ORIGIN": "",
         "WEBAUTHN_RP_NAME": "Radian Preview"
-      }
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "radian-preview",
+          "database_id": "d4a268ff-4bf3-45b3-b241-0766109670b7"
+        }
+      ]
     }
   }
 }

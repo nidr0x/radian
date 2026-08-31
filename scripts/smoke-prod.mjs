@@ -35,4 +35,23 @@ if (health.ok !== true) {
   fail('El endpoint de salud no indicó que el servicio esté operativo.');
 }
 
-console.log(`Smoke OK: ${baseUrl} · frontend y backend disponibles.`);
+const oauthMetadataResponse = await fetch(`${baseUrl}/.well-known/oauth-authorization-server`, { cache: 'no-store', redirect: 'follow' });
+if (!oauthMetadataResponse.ok) {
+  fail(`Los metadatos OAuth respondieron ${oauthMetadataResponse.status}.`);
+}
+
+const oauthMetadata = await oauthMetadataResponse.json();
+if (oauthMetadata.issuer !== baseUrl || oauthMetadata.authorization_endpoint !== `${baseUrl}/api/mcp/authorize` || oauthMetadata.token_endpoint !== `${baseUrl}/api/mcp/token`) {
+  fail('Los metadatos OAuth no apuntan a los endpoints públicos de producción.');
+}
+
+const mcpResponse = await fetch(`${baseUrl}/api/mcp`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ jsonrpc: '2.0', id: 'smoke', method: 'initialize', params: { protocolVersion: '2025-06-18' } }),
+});
+if (mcpResponse.status !== 401 || !mcpResponse.headers.get('www-authenticate')?.includes('/.well-known/oauth-protected-resource')) {
+  fail(`El endpoint MCP no está protegido correctamente (respondió ${mcpResponse.status}).`);
+}
+
+console.log(`Smoke OK: ${baseUrl} · frontend, backend y MCP OAuth disponibles.`);

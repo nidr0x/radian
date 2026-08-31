@@ -113,6 +113,20 @@ Examples: `what did I do for press last week?`, `what is my best estimated 1RM f
 
 Run the server smoke test with `node --test mcp/radian-mcp.smoke.mjs`.
 
+## Remote MCP for ChatGPT (optional, read-only)
+
+Radian also exposes a remote MCP server at `https://radian.nidr0x.win/api/mcp`. Unlike the local server above, it reads the authenticated account copy from D1 and never accepts write operations. OAuth with PKCE keeps the connection tied to the Radian account that approves it; ChatGPT does not receive a Radian password or passkey.
+
+To connect it from ChatGPT on the web:
+
+1. Create the account in Radian, sign in with your passkey, and use `Perfil → Sincronizar dispositivos` so the account has a current copy in D1.
+2. Enable Developer mode in ChatGPT if your plan or workspace provides it, then create a custom app from `Settings → Apps`.
+3. Enter `Radian` as the app name and `https://radian.nidr0x.win/api/mcp` as the MCP server URL. Leave authentication on OAuth and scan the server metadata.
+4. Complete the Radian passkey login and approve the read-only consent screen. ChatGPT will then discover the tools automatically.
+5. Ask questions such as `resume mis entrenamientos de esta semana`, `cómo va mi press banca`, or `qué me recomiendas para la próxima sesión`.
+
+The remote tools are limited to profile, weekly coaching, workouts, exercise history, bodyweight, and progression recommendations. They are scoped to the account that authorized the connection, and the server rejects requests without a valid access token. Availability of custom MCP apps and Developer mode depends on the ChatGPT plan and workspace policy.
+
 The authentication Functions use `AUTH_RATE_LIMITER` when the environment provides it. If that binding is unavailable, they apply a per-IP, per-route limit in D1. If D1 is unavailable too, they return a controlled error instead of allowing unlimited attempts. Pages also provides Function logs and metrics in the Cloudflare dashboard.
 
 ## MVP decisions
@@ -139,8 +153,8 @@ Radian can work without an account and keep data on the device. If you want to s
 To prepare the Cloudflare environment:
 
 1. Create a D1 database named `radian-prod` and replace the example identifier in `wrangler.jsonc` with your own. The official deployment already has this database created and configured.
-2. Apply the migrations with `npx wrangler d1 migrations apply radian-prod --remote --env production` (from `0001_sync_records.sql` through `0004_auth_hardening.sql`). Repeat the process with the preview database using the preview environment.
-3. Configure the `SESSION_SECRET` secret in Pages Functions and, in production, `WEBAUTHN_RP_ID`, `WEBAUTHN_ORIGIN`, and `WEBAUTHN_RP_NAME`.
+2. Apply the migrations with `npx wrangler d1 migrations apply radian-prod --remote --env production` (from `0001_sync_records.sql` through `0005_mcp_oauth.sql`). Repeat the process with the preview database using the preview environment.
+3. Configure the `SESSION_SECRET` secret in Pages Functions and, in production, `WEBAUTHN_RP_ID`, `WEBAUTHN_ORIGIN`, `WEBAUTHN_RP_NAME`, and `MCP_ORIGIN`.
 4. For `radian.nidr0x.win`, use `WEBAUTHN_RP_ID=radian.nidr0x.win` and `WEBAUTHN_ORIGIN=https://radian.nidr0x.win`.
 
 `SESSION_SECRET` must be random and remain stable across deployments. Expired or consumed WebAuthn challenges, old rate limits, and expired sessions are cleaned up when new options are requested. Sessions are opaque, revocable, and tied to the user's session version. Adding, renaming, or revoking a passkey requires recent verification with another passkey. Revoking a passkey invalidates the sessions created with it. D1 provides automatic recovery through Time Travel. Review its retention in Cloudflare periodically before publishing destructive changes.
