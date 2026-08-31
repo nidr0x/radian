@@ -78,6 +78,41 @@ El código funciona como llave de acceso a esa copia. El contenido se cifra en e
 
 El modo local no necesita variables secretas ni una base de datos. Si activas las cuentas passkey, el despliegue necesita la base D1 y los secretos descritos abajo.
 
+## Consultar tus entrenamientos con un asistente (MCP, opcional)
+
+Radian incluye un servidor MCP local de solo lectura para clientes como Claude Desktop, Cursor, Cline o Continue. Permite preguntar en lenguaje natural por tu rutina, sesiones, ejercicios, peso, 1RM estimado y balance muscular.
+
+El servidor se ejecuta como un proceso `stdio` iniciado por el cliente y solo lee el archivo que le indiques. No abre ningún puerto, no hace peticiones de red, no escribe datos y no forma parte del bundle web ni del build de Cloudflare Pages. Nunca necesita passkeys, tokens, D1 ni variables secretas.
+
+### Configuración
+
+1. En Radian abre `Perfil → Tus datos → Exportar datos` y guarda el archivo en una ruta local protegida, por ejemplo `/Users/tu-usuario/Documentos/radian-backup.json`. Si entrenas desde varios dispositivos, exporta después de descargar la copia más reciente.
+2. Comprueba que tienes Node.js 18 o posterior instalado.
+3. Añade el servidor a la configuración MCP de tu cliente. En Claude Desktop, por ejemplo, edita `claude_desktop_config.json`:
+
+   ```json
+   {
+     "mcpServers": {
+       "radian": {
+         "command": "node",
+         "args": [
+           "/ruta/al/repositorio/fitness.nidr0x.win/mcp/radian-mcp.mjs"
+         ],
+         "env": {
+           "RADIAN_DATA_FILE": "/Users/tu-usuario/Documentos/radian-backup.json"
+         }
+       }
+     }
+   }
+   ```
+
+   Cursor y otros clientes MCP usan la misma combinación `command` + `args` + `env`. Si el cliente no encuentra `node`, sustituye `command` por la ruta absoluta que devuelva `which node`.
+4. Reinicia el cliente. El servidor vuelve a leer el backup en cada consulta; vuelve a exportarlo desde Radian cuando quieras actualizar lo que puede consultar el asistente.
+
+Ejemplos: `¿qué hice de press la semana pasada?`, `¿cuál es mi mejor estimación de 1RM en prensa?` o `¿qué grupos musculares he trabajado menos esta semana?`. Los resultados solo contienen los datos del backup seleccionado y todas las herramientas son de lectura.
+
+El smoke test del servidor se puede ejecutar con `node --test mcp/radian-mcp.smoke.mjs`.
+
 Las Functions de autenticación usan `AUTH_RATE_LIMITER` cuando el entorno lo ofrece. Si ese binding no está disponible, aplican un límite por IP y ruta en D1; si tampoco existe D1, responden con error controlado en lugar de aceptar intentos sin límite. Pages dispone además de logs y métricas de Functions desde el panel de Cloudflare.
 
 ## Decisiones del MVP
@@ -95,7 +130,7 @@ Las Functions de autenticación usan `AUTH_RATE_LIMITER` cuando el entorno lo of
 - Progreso incluye adherencia semanal, volumen reciente, mejores cargas, sesiones del mes, volumen por grupo muscular y un resumen semanal copiable para revisarlo juntos.
 - Perfil incluye texto grande, instalación PWA cuando el navegador lo permite y estados claros para el modo local y la sincronización.
 
-La primera versión no cuenta calorías, no registra comidas, no incluye cuentas basadas en contraseña ni proveedor de IA. Mantiene el modo local, el código de emparejamiento cifrado y las cuentas opcionales con passkey para la sincronización estructurada en D1.
+La primera versión no cuenta calorías, no registra comidas ni incluye un proveedor de IA integrado en la aplicación. Mantiene el modo local, el código de emparejamiento cifrado, las cuentas opcionales con passkey para la sincronización estructurada en D1 y el servidor MCP local opcional para consultas externas de solo lectura.
 ## Cuenta, D1 y passkeys
 
 Radian puede seguir funcionando sin cuenta y guardar los datos en el dispositivo. Si quieres sincronizar entre dispositivos, la cuenta opcional usa una passkey (WebAuthn) y guarda la copia estructurada en Cloudflare D1.
