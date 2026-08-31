@@ -23,6 +23,16 @@ const openMigratedDatabase = (): DatabaseSync => {
     CREATE TABLE mcp_clients (
       client_id TEXT PRIMARY KEY NOT NULL
     );
+    CREATE TABLE mcp_tokens (
+      token_hash TEXT PRIMARY KEY NOT NULL,
+      token_type TEXT NOT NULL,
+      client_id TEXT NOT NULL REFERENCES mcp_clients(client_id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      scope TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      revoked_at TEXT
+    );
     CREATE TABLE user_data (
       user_id TEXT PRIMARY KEY NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       payload TEXT NOT NULL,
@@ -37,9 +47,28 @@ const run = (database: DatabaseSync, sql: string, ...params: unknown[]): void =>
   database.prepare(sql).run(...params);
 };
 
+const seedActiveAccessToken = (
+  database: DatabaseSync,
+  { userId = 'user-1', clientId = 'client-1', scope = 'radian:read radian:write' }: { userId?: string; clientId?: string; scope?: string } = {},
+): void => {
+  run(
+    database,
+    'INSERT INTO mcp_tokens (token_hash, token_type, client_id, user_id, scope, created_at, expires_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    `token-hash-${userId}-${clientId}`,
+    'access',
+    clientId,
+    userId,
+    scope,
+    '2026-08-31T20:00:00.000Z',
+    '2026-09-01T20:00:00.000Z',
+    null,
+  );
+};
+
 const seedUserData = (database: DatabaseSync, data: AppData, updatedAt = '2026-08-31T21:00:00.000Z'): string => {
   run(database, 'INSERT INTO users (id) VALUES (?)', 'user-1');
   run(database, 'INSERT INTO mcp_clients (client_id) VALUES (?)', 'client-1');
+  seedActiveAccessToken(database);
   run(database, 'INSERT INTO user_data (user_id, payload, updated_at) VALUES (?, ?, ?)', 'user-1', JSON.stringify(data), updatedAt);
   return updatedAt;
 };
@@ -495,6 +524,31 @@ describe('puente MCP remoto de Radian', () => {
 
     const stored = await readStoredPayload(database);
     expect(stored.profile.gym).toBe('Versión nueva');
+    database.close();
+  });
+
+  it('rechaza un clientId válido vinculado a otro usuario sin escribir ni releer datos ajenos', async () => {
+    const database = openMigratedDatabase();
+    const data = defaultData();
+    data.profile.gym = 'Privado';
+    const baseUpdatedAt = seedUserData(database, data);
+    run(database, 'INSERT INTO users (id) VALUES (?)', 'user-2');
+    run(database, 'INSERT INTO mcp_clients (client_id) VALUES (?)', 'client-2');
+    seedActiveAccessToken(database, { userId: 'user-2', clientId: 'client-2' });
+
+    const result = await writeMcpData(d1FromSqlite(database), 'user-1', 'client-2', baseUpdatedAt, {
+      kind: 'update_profile',
+      profile: { gym: 'No debería pasar' },
+    });
+
+    expect(result).toMatchObject({
+      error: 'conflict',
+      updatedAt: null,
+      data: null,
+    });
+
+    const stored = await readStoredPayload(database);
+    expect(stored.profile.gym).toBe('Privado');
     database.close();
   });
 

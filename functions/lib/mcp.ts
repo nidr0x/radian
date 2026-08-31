@@ -4,6 +4,7 @@ import { isWorkSet } from '../../src/lib/progression';
 import { summarizeSession } from '../../src/lib/sessionSummary';
 import { buildWeeklySummary, weeklySummaryText } from '../../src/lib/weeklySummary';
 import type { AppData, ExerciseSession, ProgressEntry, WorkoutSession } from '../../src/types';
+import { MCP_WRITE_SCOPE } from './mcpAuth';
 import { validateMcpAppData, validateMcpWriteOperation } from './mcpWrite';
 import type { D1DatabaseLike, McpLoadedUserData, McpMutationResult, McpWorkoutValidationContext, McpWriteOperation } from '../types';
 
@@ -191,6 +192,28 @@ const needsVersionResult = (loaded: McpLoadedUserData): McpNeedsVersionResult =>
   data: loaded.data ?? null,
 });
 
+const oauthOwnershipConflictResult = (): McpConflictResult => ({
+  error: 'conflict',
+  message: 'El cliente OAuth no tiene una vinculación activa de escritura para este usuario.',
+  updatedAt: null,
+  data: null,
+});
+
+const hasActiveWriteOwnership = async (database: D1DatabaseLike, userId: string, clientId: string): Promise<boolean> => {
+  const row = await database.prepare(
+    `SELECT 1 AS authorized
+       FROM mcp_tokens
+      WHERE user_id = ?
+        AND client_id = ?
+        AND token_type = 'access'
+        AND expires_at > ?
+        AND revoked_at IS NULL
+        AND instr(' ' || scope || ' ', ' ' || ? || ' ') > 0
+      LIMIT 1`,
+  ).bind(userId, clientId, new Date().toISOString(), MCP_WRITE_SCOPE).first<{ authorized: number }>();
+  return row?.authorized === 1;
+};
+
 const workoutValidationContext = (data: AppData): McpWorkoutValidationContext => ({
   exercises: data.exercises.map((exercise) => ({ id: exercise.id })),
   plan: { days: data.plan.days.map((day) => ({ id: day.id })) },
@@ -311,6 +334,7 @@ export const writeMcpData = async (
   baseUpdatedAt: string | undefined,
   operation: McpWriteOperation,
 ): Promise<McpWriteResult> => {
+  if (!await hasActiveWriteOwnership(database, userId, clientId)) return oauthOwnershipConflictResult();
   const current = await loadMcpUserData(database, userId);
   if (!baseUpdatedAt) return needsVersionResult(current);
   if (!current.data || !current.updatedAt) return conflictResult(current);
@@ -328,8 +352,26 @@ export const writeMcpData = async (
     `UPDATE user_data
      SET payload = ?, updated_at = ?
      WHERE user_id = ? AND updated_at = ?
-       AND EXISTS (SELECT 1 FROM mcp_clients WHERE client_id = ?)`,
-  ).bind(JSON.stringify(next), updatedAt, userId, baseUpdatedAt, clientId).run();
+       AND EXISTS (
+         SELECT 1
+           FROM mcp_tokens
+          WHERE user_id = ?
+            AND client_id = ?
+            AND token_type = 'access'
+            AND expires_at > ?
+            AND revoked_at IS NULL
+            AND instr(' ' || scope || ' ', ' ' || ? || ' ') > 0
+       )`,
+  ).bind(
+    JSON.stringify(next),
+    updatedAt,
+    userId,
+    baseUpdatedAt,
+    userId,
+    clientId,
+    updatedAt,
+    MCP_WRITE_SCOPE,
+  ).run();
 
   if ((result.meta?.changes ?? 0) !== 1) {
     return conflictResult(await loadMcpUserData(database, userId));
