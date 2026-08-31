@@ -1,5 +1,5 @@
 import { dateKey, formatDate, normalizeTrainingDays, weekKey } from './date';
-import { overallFeedback, recommendationFor } from './recommendations';
+import { overallFeedback, progressionAction, recommendationFor } from './recommendations';
 import { isWorkSet } from './progression';
 import type { AppData, Difficulty, Energy, WorkoutSession } from '../types';
 
@@ -22,6 +22,15 @@ export interface WeeklySummary {
   feedback: string;
   focus: string;
   focusTone: 'positive' | 'neutral' | 'caution';
+  recommendations: WeeklyRecommendation[];
+}
+
+export interface WeeklyRecommendation {
+  exerciseId: string;
+  name: string;
+  tone: 'positive' | 'neutral' | 'caution';
+  title: string;
+  detail: string;
 }
 
 const emptyDifficultyCounts = (): Record<Difficulty, number> => ({ easy: 0, good: 0, hard: 0, incomplete: 0 });
@@ -51,6 +60,24 @@ const exerciseDetailLines = (sessions: WorkoutSession[]): string[] => sessions.f
   const discomfort = exercise.discomfort ? ' · molestias registradas' : '';
   return `${session.dateKey} · ${exercise.name} · ${difficultyLabel(exercise.difficulty)} · ${result}${discomfort}`;
 }));
+
+const recommendationPriority: Record<WeeklyRecommendation['tone'], number> = { caution: 0, positive: 1, neutral: 2 };
+
+const weeklyRecommendationsFor = (data: AppData): WeeklyRecommendation[] => {
+  const seen = new Set<string>();
+  return data.plan.days
+    .flatMap((day) => day.exercises)
+    .filter((exercise) => exercise.active && !seen.has(exercise.exerciseId) && seen.add(exercise.exerciseId))
+    .map((exercise) => {
+      const action = progressionAction(exercise.exerciseId, data.sessions, exercise);
+      if (action) return { exerciseId: exercise.exerciseId, name: exercise.name, tone: action.tone, title: action.title, detail: action.detail };
+      const recommendation = recommendationFor(exercise.exerciseId, data.sessions);
+      return recommendation ? { exerciseId: exercise.exerciseId, name: exercise.name, tone: recommendation.tone, title: recommendation.label, detail: recommendation.message } : undefined;
+    })
+    .filter((recommendation): recommendation is WeeklyRecommendation => Boolean(recommendation))
+    .sort((a, b) => recommendationPriority[a.tone] - recommendationPriority[b.tone] || a.name.localeCompare(b.name, 'es'))
+    .slice(0, 4);
+};
 
 export const buildWeeklySummary = (data: AppData, now = new Date()): WeeklySummary => {
   const start = dateFromKey(weekKey(now));
@@ -84,6 +111,7 @@ export const buildWeeklySummary = (data: AppData, now = new Date()): WeeklySumma
   const targetSessions = Math.max(Math.min(normalizeTrainingDays(data.profile.trainingDays).length, data.plan.days.length), 1);
   const feedback = overallFeedback(sessions);
   const remainingSessions = Math.max(targetSessions - sessions.length, 0);
+  const recommendations = weeklyRecommendationsFor(data);
 
   let focus = 'Mantén el registro simple y observa cómo responde tu cuerpo.';
   let focusTone: WeeklySummary['focusTone'] = 'neutral';
@@ -92,6 +120,9 @@ export const buildWeeklySummary = (data: AppData, now = new Date()): WeeklySumma
     focusTone = 'caution';
   } else if (difficultyCounts.incomplete > 0 || difficultyCounts.hard > difficultyCounts.easy) {
     focus = 'Repite la programación y busca una ejecución más sólida antes de subir carga.';
+    focusTone = 'caution';
+  } else if (checkin?.energy === 'low') {
+    focus = 'Prioriza recuperar bien esta semana y mantén la carga mientras la energía remonta.';
     focusTone = 'caution';
   } else if (progressingExercises.length > 0) {
     focus = `Hay margen para progresar en ${progressingExercises.slice(0, 2).join(' y ')} si mantienes la técnica.`;
@@ -119,6 +150,7 @@ export const buildWeeklySummary = (data: AppData, now = new Date()): WeeklySumma
     feedback,
     focus,
     focusTone,
+    recommendations,
   };
 };
 
@@ -159,6 +191,9 @@ export const weeklySummaryText = (data: AppData, now = new Date()): string => {
   ];
   const details = exerciseDetailLines(sessions);
   if (details.length) lines.push('', 'DETALLE DE EJERCICIOS', ...details);
+  if (summary.recommendations.length) {
+    lines.push('', 'RECOMENDACIONES PARA LA PRÓXIMA SEMANA', ...summary.recommendations.map((recommendation) => `${recommendation.name}: ${recommendation.title}. ${recommendation.detail}`));
+  }
   if (summary.progressingExercises.length) lines.push(`Margen de progresión: ${summary.progressingExercises.join(', ')}`);
   if (summary.feeling) lines.push(`Sensación: ${summary.feeling}`);
   if (summary.note) lines.push(`Nota: ${summary.note}`);

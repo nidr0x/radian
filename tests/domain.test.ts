@@ -85,6 +85,22 @@ describe('motor de recomendaciones', () => {
     ];
     expect(recommendationFor('incline-press', sessions)?.label).toBe('Ajustar');
   });
+
+  it('resume recomendaciones semanales concretas a partir del historial', () => {
+    const data = defaultData();
+    const sessions = [
+      completedSession('a', '2026-08-10', 'easy'),
+      completedSession('b', '2026-08-17', 'easy'),
+    ];
+    sessions.forEach((session) => session.plannedExercises[0].setLogs.filter(isWorkSet).forEach((set) => Object.assign(set, { actualReps: 12, weightKg: 40, completed: true })));
+    data.sessions = sessions;
+
+    const summary = buildWeeklySummary(data, new Date('2026-08-20T12:00:00'));
+    const recommendation = summary.recommendations.find((item) => item.exerciseId === 'incline-press');
+
+    expect(recommendation).toMatchObject({ tone: 'positive', title: 'Próxima vez: prueba 42,5 kg' });
+    expect(weeklySummaryText(data, new Date('2026-08-20T12:00:00'))).toContain('RECOMENDACIONES PARA LA PRÓXIMA SEMANA');
+  });
 });
 
 describe('persistencia y backups', () => {
