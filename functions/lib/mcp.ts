@@ -3,7 +3,8 @@ import { progressionAction, recommendationFor } from '../../src/lib/recommendati
 import { isWorkSet } from '../../src/lib/progression';
 import { buildWeeklySummary, weeklySummaryText } from '../../src/lib/weeklySummary';
 import type { AppData, ExerciseSession, ProgressEntry, WorkoutSession } from '../../src/types';
-import type { D1DatabaseLike } from '../types';
+import { validateMcpAppData } from './mcpWrite';
+import type { D1DatabaseLike, McpLoadedUserData } from '../types';
 
 const PERIODS = ['this_week', 'last_week', 'last_7_days', 'this_month', 'all_time'] as const;
 type Period = typeof PERIODS[number];
@@ -77,15 +78,19 @@ export const MCP_TOOL_DEFINITIONS = [
   },
 ];
 
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
+const withVersion = (value: Record<string, unknown>, updatedAt?: string): Record<string, unknown> => updatedAt ? { ...value, updatedAt } : value;
 
-export const loadMcpUserData = async (database: D1DatabaseLike, userId: string): Promise<AppData | null> => {
+const normalizeLoadedData = (loaded: AppData | null | McpLoadedUserData): McpLoadedUserData => {
+  if (!loaded) return { data: null };
+  return 'data' in loaded ? loaded : { data: loaded };
+};
+
+export const loadMcpUserData = async (database: D1DatabaseLike, userId: string): Promise<McpLoadedUserData> => {
   const row = await database.prepare('SELECT payload, updated_at AS updatedAt FROM user_data WHERE user_id = ?').bind(userId).first<UserDataRow>();
-  if (!row) return null;
+  if (!row) return { data: null };
   try {
     const parsed: unknown = JSON.parse(row.payload);
-    if (!isRecord(parsed) || !isRecord(parsed.profile) || !isRecord(parsed.plan) || !Array.isArray(parsed.sessions)) throw new Error('invalid');
-    return parsed as unknown as AppData;
+    return { data: validateMcpAppData(parsed), updatedAt: row.updatedAt };
   } catch {
     throw new Error('Los datos de Radian guardados en la nube no se pueden leer.');
   }
@@ -180,20 +185,21 @@ const recommendationsResult = (data: AppData) => {
     .slice(0, 12);
 };
 
-export const handleMcpTool = async (name: string, args: Record<string, unknown>, data: AppData | null): Promise<Record<string, unknown>> => {
+export const handleMcpTool = async (name: string, args: Record<string, unknown>, loaded: AppData | null | McpLoadedUserData): Promise<Record<string, unknown>> => {
+  const { data, updatedAt } = normalizeLoadedData(loaded);
   if (!data) return { message: 'Tu cuenta está conectada, pero todavía no hay una copia de Radian subida a D1.' };
-  if (name === 'get_profile') return profileResult(data);
+  if (name === 'get_profile') return withVersion(profileResult(data), updatedAt);
   if (name === 'get_weekly_coach') {
     const summary = buildWeeklySummary(data);
-    return { ...summary, text: weeklySummaryText(data) };
+    return withVersion({ ...summary, text: weeklySummaryText(data) }, updatedAt);
   }
-  if (name === 'get_recommendations') return { recommendations: recommendationsResult(data) };
+  if (name === 'get_recommendations') return withVersion({ recommendations: recommendationsResult(data) }, updatedAt);
   if (name === 'list_workouts') {
     const range = rangeFor(args);
     const limit = args.limit === undefined ? 20 : args.limit;
     if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > 50) throw new Error('limit debe ser un entero entre 1 y 50.');
     const workouts = sortedSessions(data).filter((session) => inRange(session.dateKey, range)).slice(0, limit).map((session) => sessionResult(data, session));
-    return { ...range, returned: workouts.length, workouts };
+    return withVersion({ ...range, returned: workouts.length, workouts }, updatedAt);
   }
   if (name === 'exercise_history') {
     const query = typeof args.exercise === 'string' ? normalizeText(args.exercise) : '';
@@ -206,14 +212,14 @@ export const handleMcpTool = async (name: string, args: Record<string, unknown>,
       workoutId: session.id,
       ...sessionResult(data, session).exercises.find((item) => item.exerciseId === exercise.exerciseId && item.name === exercise.name),
     }))).slice(0, limit);
-    return { query: args.exercise, ...range, returned: matches.length, matches };
+    return withVersion({ query: args.exercise, ...range, returned: matches.length, matches }, updatedAt);
   }
   if (name === 'get_bodyweight') {
     const range = rangeFor(args);
     const entries = [...data.progress].filter((entry) => inRange(entry.date, range)).sort((a, b) => a.date.localeCompare(b.date));
     const allEntries = [...data.progress].sort((a, b) => a.date.localeCompare(b.date));
     const latest = [...allEntries].reverse().find((entry) => entry.weightKg !== undefined);
-    return { ...range, currentProfileWeightKg: data.profile.currentWeightKg, latestWeightKg: latest?.weightKg, latestDate: latest?.date, entries: entries.map((entry: ProgressEntry) => ({ id: entry.id, date: entry.date, weightKg: entry.weightKg, waistCm: entry.waistCm, chestCm: entry.chestCm, armCm: entry.armCm, hipCm: entry.hipCm })) };
+    return withVersion({ ...range, currentProfileWeightKg: data.profile.currentWeightKg, latestWeightKg: latest?.weightKg, latestDate: latest?.date, entries: entries.map((entry: ProgressEntry) => ({ id: entry.id, date: entry.date, weightKg: entry.weightKg, waistCm: entry.waistCm, chestCm: entry.chestCm, armCm: entry.armCm, hipCm: entry.hipCm })) }, updatedAt);
   }
   throw new Error(`Herramienta no reconocida: ${name}.`);
 };

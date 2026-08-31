@@ -3,11 +3,12 @@ import { DatabaseSync } from 'node:sqlite';
 import { resolve } from 'node:path';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { defaultData } from '../src/data/initialPlan';
-import { handleMcpTool, MCP_TOOL_DEFINITIONS } from '../functions/lib/mcp';
+import { handleMcpTool, loadMcpUserData, MCP_TOOL_DEFINITIONS } from '../functions/lib/mcp';
+import { validateMcpAppData } from '../functions/lib/mcpWrite';
 import { hasMcpScope, isAllowedRedirectUri, normalizeScope } from '../functions/lib/mcpAuth';
 import { consentPage } from '../functions/api/mcp/authorize';
 import { onRequestGet as onProtectedResourceGet } from '../functions/.well-known/oauth-protected-resource';
-import type { McpPendingChangeRow, McpRevisionRow } from '../functions/types';
+import type { D1DatabaseLike, McpPendingChangeRow, McpRevisionRow } from '../functions/types';
 
 const loadMigration = (): string => readFileSync(resolve(process.cwd(), 'migrations/0006_mcp_revisions.sql'), 'utf8');
 
@@ -35,6 +36,38 @@ const run = (database: DatabaseSync, sql: string, ...params: unknown[]): void =>
   database.prepare(sql).run(...params);
 };
 
+const d1FromSqlite = (database: DatabaseSync): D1DatabaseLike => ({
+  prepare(query: string) {
+    const statement = database.prepare(query);
+    let boundValues: unknown[] = [];
+    return {
+      bind(...values: unknown[]) {
+        boundValues = values;
+        return this;
+      },
+      async first<T = Record<string, unknown>>() {
+        return (statement.get(...boundValues) as T | undefined) ?? null;
+      },
+      async all<T = Record<string, unknown>>() {
+        return { results: statement.all(...boundValues) as T[] };
+      },
+      async run() {
+        const result = statement.run(...boundValues);
+        return {
+          success: true,
+          meta: {
+            changes: Number(result.changes ?? 0),
+            last_row_id: Number(result.lastInsertRowid ?? 0),
+          },
+        };
+      },
+    };
+  },
+  async batch() {
+    throw new Error('batch no está implementado en este helper de test');
+  },
+});
+
 describe('puente MCP remoto de Radian', () => {
   it('expone únicamente herramientas de lectura orientadas a entrenamientos', () => {
     expect(MCP_TOOL_DEFINITIONS.map((tool) => tool.name)).toEqual([
@@ -56,6 +89,61 @@ describe('puente MCP remoto de Radian', () => {
       completedSessions: 0,
       text: expect.stringContaining('RADIAN | REVISIÓN SEMANAL'),
     });
+  });
+
+  it('devuelve updatedAt junto al resultado de lectura', async () => {
+    const database = openMigratedDatabase();
+    const data = defaultData();
+    data.profile.gym = 'Evanfit Picanya';
+    run(database, 'INSERT INTO users (id) VALUES (?)', 'user-1');
+    run(database, 'INSERT INTO user_data (user_id, payload, updated_at) VALUES (?, ?, ?)', 'user-1', JSON.stringify(data), '2026-08-31T21:00:00.000Z');
+
+    await expect(loadMcpUserData(d1FromSqlite(database), 'user-1')).resolves.toMatchObject({
+      updatedAt: '2026-08-31T21:00:00.000Z',
+      data: {
+        profile: {
+          gym: 'Evanfit Picanya',
+        },
+      },
+    });
+    database.close();
+  });
+
+  it('rechaza payloads MCP con estructura top-level desconocida', () => {
+    const data = defaultData();
+    expect(() => validateMcpAppData({
+      ...data,
+      extra: true,
+    })).toThrow(/válid|desconoc/i);
+  });
+
+  it('rechaza payloads MCP con IDs, fechas y rangos inválidos', () => {
+    const invalidSessionDate = defaultData();
+    invalidSessionDate.sessions = [{
+      id: 'session 1',
+      workoutDayId: invalidSessionDate.plan.days[0].id,
+      dateKey: '2026-13-40',
+      startedAt: 'not-an-iso-date',
+      completedAt: '2026-08-31T21:00:00.000Z',
+      status: 'completed',
+      activeExerciseIndex: 0,
+      plannedExercises: [],
+    }];
+    expect(() => validateMcpAppData(invalidSessionDate)).toThrow(/id|fecha|iso|válid/i);
+
+    const invalidRange = structuredClone(defaultData());
+    invalidRange.plan.days[0].exercises[0] = {
+      ...invalidRange.plan.days[0].exercises[0],
+      repMin: 12,
+      repMax: 8,
+    };
+    expect(() => validateMcpAppData(invalidRange)).toThrow(/rep|rango|válid/i);
+  });
+
+  it('rechaza payloads MCP de más de 900 KB', () => {
+    const large = defaultData();
+    large.profile.goal = 'x'.repeat(900_001);
+    expect(() => validateMcpAppData(large)).toThrow(/demasiado grande|900/i);
   });
 
   it('valida el ámbito de lectura y las URLs de retorno OAuth', () => {

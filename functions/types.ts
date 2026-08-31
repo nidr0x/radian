@@ -1,3 +1,13 @@
+import type {
+  AppData,
+  ExerciseDefinition,
+  ProgressEntry,
+  UserProfile,
+  WeeklyCheckin,
+  WorkoutPlan,
+  WorkoutSession,
+} from '../src/types';
+
 export interface D1ResultLike {
   success: boolean;
   meta?: { changes?: number; last_row_id?: number };
@@ -46,6 +56,125 @@ export interface McpMutationResult {
   updatedAt: string;
   summary: Record<string, unknown>;
   revisionId?: string;
+}
+
+export interface McpLoadedUserData {
+  data: AppData | null;
+  updatedAt?: string;
+}
+
+export type McpProfilePatch = Partial<Pick<
+UserProfile,
+'goal'
+| 'gym'
+| 'trainingDays'
+| 'sessionMinutes'
+| 'experienceLevel'
+| 'heightCm'
+| 'currentWeightKg'
+| 'nutritionContext'
+| 'largeText'
+| 'theme'
+>>;
+
+export interface McpUpdateProfileOperation {
+  kind: 'update_profile';
+  profile: McpProfilePatch;
+}
+
+export interface McpReplaceRoutineOperation {
+  kind: 'replace_routine';
+  plan: WorkoutPlan;
+  exercises?: ExerciseDefinition[];
+}
+
+export interface McpRecordWorkoutOperation {
+  kind: 'record_workout';
+  workout: WorkoutSession;
+}
+
+export interface McpAddMeasurementOperation {
+  kind: 'add_measurement';
+  entry: ProgressEntry;
+}
+
+export interface McpAddCheckinOperation {
+  kind: 'add_checkin';
+  checkin: WeeklyCheckin;
+}
+
+export interface McpDeleteWorkoutOperation {
+  kind: 'delete_workout';
+  workoutId: string;
+}
+
+export interface McpDeleteMeasurementOperation {
+  kind: 'delete_measurement';
+  measurementId: string;
+}
+
+export interface McpDeleteCheckinOperation {
+  kind: 'delete_checkin';
+  checkinId: string;
+}
+
+export interface McpReplaceAllDataOperation {
+  kind: 'replace_all_data';
+  data: AppData;
+}
+
+export interface McpDeleteAllDataOperation {
+  kind: 'delete_all_data';
+}
+
+export type McpPreviewableChange =
+  | McpDeleteWorkoutOperation
+  | McpDeleteMeasurementOperation
+  | McpDeleteCheckinOperation
+  | McpReplaceAllDataOperation
+  | McpDeleteAllDataOperation;
+
+export interface McpPreviewChangeOperation {
+  kind: 'preview_change';
+  change: McpPreviewableChange;
+}
+
+export interface McpApplyChangeOperation {
+  kind: 'apply_change';
+  changeId: string;
+  confirm: boolean;
+}
+
+export interface McpListRevisionsOperation {
+  kind: 'list_revisions';
+}
+
+export interface McpRestoreRevisionOperation {
+  kind: 'restore_revision';
+  revisionId: string;
+}
+
+export type McpWriteOperation =
+  | McpUpdateProfileOperation
+  | McpReplaceRoutineOperation
+  | McpRecordWorkoutOperation
+  | McpAddMeasurementOperation
+  | McpAddCheckinOperation
+  | McpDeleteWorkoutOperation
+  | McpDeleteMeasurementOperation
+  | McpDeleteCheckinOperation
+  | McpReplaceAllDataOperation
+  | McpDeleteAllDataOperation
+  | McpPreviewChangeOperation
+  | McpApplyChangeOperation
+  | McpListRevisionsOperation
+  | McpRestoreRevisionOperation;
+
+export interface McpWriteRequest {
+  userId: string;
+  clientId: string;
+  baseUpdatedAt?: string;
+  operation: McpWriteOperation;
 }
 
 export interface SyncEnv {
