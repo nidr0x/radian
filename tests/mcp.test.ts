@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { defaultData } from '../src/data/initialPlan';
 import { handleMcpTool, loadMcpUserData, MCP_TOOL_DEFINITIONS } from '../functions/lib/mcp';
-import { validateMcpAppData, validateMcpWriteOperation } from '../functions/lib/mcpWrite';
+import { validateMcpAppData, validateMcpWriteOperation, validateMcpWriteRequest } from '../functions/lib/mcpWrite';
 import { hasMcpScope, isAllowedRedirectUri, normalizeScope } from '../functions/lib/mcpAuth';
 import { consentPage } from '../functions/api/mcp/authorize';
 import { onRequestGet as onProtectedResourceGet } from '../functions/.well-known/oauth-protected-resource';
@@ -216,6 +216,59 @@ describe('puente MCP remoto de Radian', () => {
     const invalidWorkout = structuredClone(validWorkout);
     invalidWorkout.plannedExercises[0].exerciseId = 'invented-exercise';
     expect(() => validateMcpWriteOperation({ kind: 'record_workout', workout: invalidWorkout }, validationContext)).toThrow(/exerciseId|catálogo|válid/i);
+
+    const invalidDayWorkout = structuredClone(validWorkout);
+    invalidDayWorkout.workoutDayId = 'other-day';
+    expect(() => validateMcpWriteOperation({ kind: 'record_workout', workout: invalidDayWorkout }, validationContext)).toThrow(/workoutDayId|plan|válid/i);
+  });
+
+  it('validateMcpWriteRequest falla cerrada para record_workout sin contexto y exige el plan autenticado', () => {
+    const workout = {
+      id: 'session-2026-08-31',
+      workoutDayId: 'custom-day',
+      dateKey: '2026-08-31',
+      startedAt: '2026-08-31T20:00:00.000Z',
+      completedAt: '2026-08-31T21:00:00.000Z',
+      status: 'completed',
+      activeExerciseIndex: 0,
+      plannedExercises: [
+        {
+          plannedExerciseId: 'custom-plan-1',
+          exerciseId: 'custom-exercise-1',
+          name: 'Press convergente personalizado',
+          sets: 3,
+          repMin: 8,
+          repMax: 10,
+          restSeconds: 120,
+          warmupSets: 1,
+          progressionPolicy: 'double',
+          progressionIncrementKg: 2.5,
+          completed: true,
+          discomfort: false,
+          setLogs: [
+            { setNumber: 1, phase: 'warmup', targetReps: 8, actualReps: 8, weightKg: 20, completed: true },
+            { setNumber: 2, phase: 'work', targetReps: 8, actualReps: 10, weightKg: 40, completed: true },
+            { setNumber: 3, phase: 'work', targetReps: 8, actualReps: 9, weightKg: 40, completed: true },
+            { setNumber: 4, phase: 'work', targetReps: 8, actualReps: 8, weightKg: 40, completed: true },
+          ],
+        },
+      ],
+    };
+
+    expect(() => validateMcpWriteRequest({
+      userId: 'user-1',
+      clientId: 'client-1',
+      operation: { kind: 'record_workout', workout },
+    })).toThrow(/contexto|record_workout|plan/i);
+
+    expect(() => validateMcpWriteRequest({
+      userId: 'user-1',
+      clientId: 'client-1',
+      operation: { kind: 'record_workout', workout },
+    }, {
+      plan: { days: [{ id: 'custom-day' }] },
+      exercises: [{ id: 'custom-exercise-1' }],
+    })).not.toThrow();
   });
 
   it('valida el ámbito de lectura y las URLs de retorno OAuth', () => {

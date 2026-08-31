@@ -546,13 +546,18 @@ export const validateMcpWriteOperation = (value: unknown, context?: McpWorkoutVa
   return { kind, revisionId: assertId(operation.revisionId, 'operation.revisionId') };
 };
 
-export const validateMcpWriteRequest = (value: unknown): McpWriteRequest => {
+export const validateMcpWriteRequest = (value: unknown, context?: McpWorkoutValidationContext): McpWriteRequest => {
   const request = assertRecord(value, 'La solicitud MCP');
   assertAllowedKeys(request, ['userId', 'clientId', 'baseUpdatedAt', 'operation'], 'La solicitud MCP');
   assertRequiredKeys(request, ['userId', 'clientId', 'operation'], 'La solicitud MCP');
   const userId = assertId(request.userId, 'userId');
   const clientId = assertId(request.clientId, 'clientId');
   const baseUpdatedAt = request.baseUpdatedAt === undefined ? undefined : assertIsoTimestamp(request.baseUpdatedAt, 'baseUpdatedAt');
-  const operation = validateMcpWriteOperation(request.operation);
+  const operationRecord = assertRecord(request.operation, 'operation');
+  const operationKind = assertString(operationRecord.kind, 'operation.kind', { allowEmpty: false, maxLength: 40 }) as McpWriteOperation['kind'];
+  if (operationKind === 'record_workout' && !context) {
+    throw new Error('record_workout requiere contexto de validación del plan autenticado.');
+  }
+  const operation = validateMcpWriteOperation(operationRecord, context);
   return { userId, clientId, baseUpdatedAt, operation };
 };
