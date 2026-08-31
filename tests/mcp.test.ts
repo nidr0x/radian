@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { defaultData } from '../src/data/initialPlan';
 import { handleMcpTool, MCP_TOOL_DEFINITIONS } from '../functions/lib/mcp';
-import { isAllowedRedirectUri, normalizeScope } from '../functions/lib/mcpAuth';
+import { hasMcpScope, isAllowedRedirectUri, normalizeScope } from '../functions/lib/mcpAuth';
 import type { McpPendingChangeRow, McpRevisionRow } from '../functions/types';
 
 const loadMigration = (): string => readFileSync(resolve(process.cwd(), 'migrations/0006_mcp_revisions.sql'), 'utf8');
@@ -63,6 +63,14 @@ describe('puente MCP remoto de Radian', () => {
     expect(isAllowedRedirectUri('http://localhost:8788/callback')).toBe(true);
     expect(isAllowedRedirectUri('https://example.com/callback#fragment')).toBe(false);
     expect(isAllowedRedirectUri('javascript:alert(1)')).toBe(false);
+  });
+
+  it('separa lectura y escritura en OAuth', () => {
+    expect(normalizeScope('radian:read')).toBe('radian:read');
+    expect(normalizeScope('radian:read radian:write offline_access')).toBe('radian:read radian:write offline_access');
+    expect(normalizeScope('radian:write')).toBeUndefined();
+    expect(hasMcpScope('radian:read', 'radian:write')).toBe(false);
+    expect(hasMcpScope('radian:read radian:write', 'radian:write')).toBe(true);
   });
 
   it('expone contratos de filas para revisiones y propuestas pendientes', () => {

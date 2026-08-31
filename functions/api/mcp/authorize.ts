@@ -5,6 +5,8 @@ import {
   escapeHtml,
   htmlResponse,
   isAllowedRedirectUri,
+  MCP_READ_SCOPE,
+  MCP_WRITE_SCOPE,
   mcpOptions,
   normalizeScope,
   parseForm,
@@ -26,11 +28,15 @@ const consentPage = (values: { requestId: string; csrfToken: string; clientName:
     <p style="text-transform:uppercase;letter-spacing:.12em;font-size:.72rem;color:#5f7565">Radian · acceso de solo lectura</p>
     <h1 style="font-size:1.7rem;margin:.5rem 0 1rem">Autorizar consulta de entrenamientos</h1>
     <p><strong>${escapeHtml(values.clientName)}</strong> quiere consultar tu perfil, rutina, sesiones, medidas y recomendaciones.</p>
-    <p>Solo podrá leer tus datos. No podrá modificarlos ni acceder a los datos de otra cuenta.</p>
+    <p>El alcance solicitado puede incluir lectura y, si lo autorizas, modificación de tus datos. Solo accederá a tu cuenta y nunca a la de otra persona.</p>
+    <ul style="margin:1rem 0;padding-left:1.25rem">
+      <li><strong>Leer</strong>: revisar perfil, rutina, sesiones, medidas y recomendaciones.</li>
+      <li><strong>Modificar</strong>: crear o actualizar datos de entrenamiento dentro de tu cuenta.</li>
+    </ul>
     <form method="post" action="/api/mcp/authorize" style="display:grid;gap:.75rem;margin-top:1.5rem">
       <input type="hidden" name="request_id" value="${escapeHtml(values.requestId)}">
       <input type="hidden" name="csrf_token" value="${escapeHtml(values.csrfToken)}">
-      <button name="decision" value="approve" type="submit" style="border:0;border-radius:.7rem;padding:.8rem 1rem;background:#244d2e;color:white;font:inherit;cursor:pointer">Permitir lectura</button>
+      <button name="decision" value="approve" type="submit" style="border:0;border-radius:.7rem;padding:.8rem 1rem;background:#244d2e;color:white;font:inherit;cursor:pointer">Permitir leer y modificar</button>
       <button name="decision" value="deny" type="submit" style="border:1px solid #b8c7ba;border-radius:.7rem;padding:.8rem 1rem;background:white;color:#244d2e;font:inherit;cursor:pointer">Cancelar</button>
     </form>
   </main>
@@ -64,7 +70,8 @@ export const onRequestGet = async (context: SyncContext): Promise<Response> => {
   const codeChallenge = url.searchParams.get('code_challenge') ?? '';
   if (!/^[A-Za-z0-9_-]{43,128}$/.test(codeChallenge)) return fail('invalid_request', 'El code_challenge no es válido.');
   const scope = normalizeScope(url.searchParams.get('scope') ?? undefined);
-  if (!scope) return fail('invalid_scope', 'El cliente solo puede solicitar lectura de Radian.');
+  if (!scope) return fail('invalid_scope', 'El cliente solo puede solicitar lectura o modificación de Radian.');
+  if (scope.includes(MCP_WRITE_SCOPE) && !scope.includes(MCP_READ_SCOPE)) return fail('invalid_scope', 'La escritura requiere también permiso de lectura.');
 
   const authenticated = await currentMcpUser(context);
   if (authenticated instanceof Response) {

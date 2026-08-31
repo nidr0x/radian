@@ -5,8 +5,9 @@ import type { D1DatabaseLike, SyncContext } from '../types';
 export { randomId } from './auth';
 
 export const MCP_READ_SCOPE = 'radian:read';
+export const MCP_WRITE_SCOPE = 'radian:write';
 export const MCP_OFFLINE_SCOPE = 'offline_access';
-export const MCP_SCOPES = [MCP_READ_SCOPE, MCP_OFFLINE_SCOPE] as const;
+export const MCP_SCOPES = [MCP_READ_SCOPE, MCP_WRITE_SCOPE, MCP_OFFLINE_SCOPE] as const;
 
 const AUTHORIZATION_REQUEST_TTL_MS = 10 * 60 * 1000;
 const AUTHORIZATION_CODE_TTL_MS = 60 * 1000;
@@ -118,8 +119,14 @@ export const normalizeScope = (value: string | undefined): string | undefined =>
   const requested = new Set((value ?? MCP_READ_SCOPE).split(/\s+/).filter(Boolean));
   if (![...requested].every((scope) => MCP_SCOPES.includes(scope as typeof MCP_SCOPES[number]))) return undefined;
   if (!requested.has(MCP_READ_SCOPE)) return undefined;
-  return [MCP_READ_SCOPE, requested.has(MCP_OFFLINE_SCOPE) ? MCP_OFFLINE_SCOPE : undefined].filter(Boolean).join(' ');
+  return [
+    MCP_READ_SCOPE,
+    requested.has(MCP_WRITE_SCOPE) ? MCP_WRITE_SCOPE : undefined,
+    requested.has(MCP_OFFLINE_SCOPE) ? MCP_OFFLINE_SCOPE : undefined,
+  ].filter(Boolean).join(' ');
 };
+
+export const hasMcpScope = (scope: string, requiredScope: string): boolean => scope.split(/\s+/).includes(requiredScope);
 
 export const parseForm = async (request: Request): Promise<URLSearchParams> => new URLSearchParams(await request.text());
 
@@ -256,7 +263,7 @@ export const authenticateMcpRequest = async (context: SyncContext): Promise<McpA
        FROM mcp_tokens
       WHERE token_hash = ? AND token_type = 'access' AND expires_at > ? AND revoked_at IS NULL`,
   ).bind(tokenHash, new Date().toISOString()).first<McpTokenRow>();
-  if (!row || !row.scope.split(/\s+/).includes(MCP_READ_SCOPE)) return mcpUnauthorized(context);
+  if (!row || !hasMcpScope(row.scope, MCP_READ_SCOPE)) return mcpUnauthorized(context);
   return { database, userId: row.userId, scope: row.scope };
 };
 
