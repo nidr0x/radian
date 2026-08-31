@@ -93,6 +93,8 @@ Antes de una sustitución, borrado o restauración se inserta la copia activa en
 
 Los cambios normales también pueden registrar una revisión si sustituyen estructuras completas, como la rutina. Los añadidos de sesiones, mediciones y check-ins no necesitan una copia adicional salvo que el payload completo vaya a reemplazarse.
 
+La misma migración añadirá `mcp_pending_changes` para que la confirmación no dependa de que el cliente conserve o reconstruya el JSON. La tabla guardará `id`, `user_id`, `client_id`, `kind`, `payload`, `base_updated_at`, `summary`, `created_at`, `expires_at` y `used_at`, con claves foráneas a `users` y `mcp_clients`, índice de expiración y consumo atómico de cada propuesta.
+
 ## Flujo de datos
 
 1. El cliente MCP obtiene un token OAuth con `radian:read` o `radian:read radian:write`.
@@ -126,7 +128,7 @@ La documentación explicará dos niveles de permiso: empezar con solo lectura y 
 
 ## Archivos previstos
 
-- `migrations/0006_mcp_revisions.sql`: tabla e índices de revisiones recuperables.
+- `migrations/0006_mcp_revisions.sql`: tablas e índices de revisiones recuperables y propuestas pendientes.
 - `functions/lib/mcpAuth.ts`: alcance de escritura y validación del token.
 - `functions/lib/mcp.ts`: definiciones, validadores, propuestas, mutaciones y restauración.
 - `functions/api/mcp.ts`: autorización de herramientas y respuesta MCP.
