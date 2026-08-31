@@ -6,16 +6,45 @@ import { buildWeeklySummary, weeklySummaryText } from '../../src/lib/weeklySumma
 import type { AppData, ExerciseSession, ProgressEntry, WorkoutSession } from '../../src/types';
 import { MCP_WRITE_SCOPE } from './mcpAuth';
 import { validateMcpAppData, validateMcpWriteOperation } from './mcpWrite';
-import type { D1DatabaseLike, McpLoadedUserData, McpMutationResult, McpWorkoutValidationContext, McpWriteOperation } from '../types';
+import type {
+  D1DatabaseLike,
+  McpLoadedUserData,
+  McpMutationResult,
+  McpPendingChangeRow,
+  McpPreviewableChange,
+  McpRevisionRow,
+  McpWorkoutValidationContext,
+  McpWriteOperation,
+} from '../types';
 
 const PERIODS = ['this_week', 'last_week', 'last_7_days', 'this_month', 'all_time'] as const;
 type Period = typeof PERIODS[number];
+const PENDING_CHANGE_TTL_MS = 10 * 60 * 1000;
 
 interface UserDataRow { payload: string; updatedAt: string }
 interface McpConflictResult { error: 'conflict'; message: string; updatedAt: string | null; data: AppData | null }
 interface McpNeedsVersionResult { error: 'needs_version'; message: string; updatedAt: string | null; data: AppData | null }
+interface McpConfirmationRequiredResult { error: 'confirmation_required'; message: string }
+interface McpChangeUnavailableResult { error: 'change_unavailable'; message: string }
+interface McpPreviewResult { changeId: string; expiresAt: string; summary: Record<string, unknown> }
+interface RevisionSummary { id: string; source: string; createdAt: string; expiresAt: string; restoredAt: string | null }
+interface PreviewChangeRequest {
+  baseUpdatedAt?: string;
+  kind: McpPreviewableChange['kind'];
+  workoutId?: string;
+  measurementId?: string;
+  checkinId?: string;
+  data?: AppData;
+}
 
-export type McpWriteResult = McpMutationResult | McpConflictResult | McpNeedsVersionResult;
+export type McpWriteResult =
+  | McpMutationResult
+  | McpConflictResult
+  | McpNeedsVersionResult
+  | McpPreviewResult
+  | McpConfirmationRequiredResult
+  | McpChangeUnavailableResult
+  | { revisions: RevisionSummary[] };
 
 export const MCP_TOOL_DEFINITIONS = [
   {
@@ -156,6 +185,54 @@ export const MCP_WRITE_TOOL_DEFINITIONS = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'preview_change',
+    title: 'Preparar cambio destructivo',
+    description: 'Previsualiza un borrado o reemplazo total, y guarda una propuesta temporal ligada al usuario, cliente y versión base.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        baseUpdatedAt: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}T' },
+        change: { type: 'object' },
+      },
+      required: ['baseUpdatedAt', 'change'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'apply_change',
+    title: 'Aplicar cambio destructivo',
+    description: 'Aplica una propuesta destructiva pendiente solo cuando llega confirmada explícitamente.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        changeId: { type: 'string', minLength: 1 },
+        confirm: { type: 'boolean' },
+      },
+      required: ['changeId', 'confirm'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'list_revisions',
+    title: 'Listar revisiones recuperables',
+    description: 'Devuelve las revisiones activas de los últimos 30 días para la cuenta autenticada.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'restore_revision',
+    title: 'Restaurar revisión',
+    description: 'Restaura una revisión recuperable usando control optimista de versión y crea una nueva versión activa.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        baseUpdatedAt: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}T' },
+        revisionId: { type: 'string', minLength: 1 },
+      },
+      required: ['baseUpdatedAt', 'revisionId'],
+      additionalProperties: false,
+    },
+  },
 ] as const;
 
 const withVersion = (value: Record<string, unknown>, updatedAt?: string): Record<string, unknown> => updatedAt ? { ...value, updatedAt } : value;
@@ -212,6 +289,174 @@ const hasActiveWriteOwnership = async (database: D1DatabaseLike, userId: string,
       LIMIT 1`,
   ).bind(userId, clientId, new Date().toISOString(), MCP_WRITE_SCOPE).first<{ authorized: number }>();
   return row?.authorized === 1;
+};
+
+const confirmationRequiredResult = (): McpConfirmationRequiredResult => ({
+  error: 'confirmation_required',
+  message: 'Las mutaciones destructivas solo se aplican cuando confirm=true.',
+});
+
+const changeUnavailableResult = (): McpChangeUnavailableResult => ({
+  error: 'change_unavailable',
+  message: 'La propuesta o revisión ya no está disponible para esta cuenta y cliente.',
+});
+
+const previewKindSet = new Set<McpPreviewableChange['kind']>([
+  'delete_workout',
+  'delete_measurement',
+  'delete_checkin',
+  'replace_all_data',
+  'delete_all_data',
+]);
+
+const isPreviewableChange = (operation: McpWriteOperation): operation is McpPreviewableChange => previewKindSet.has(operation.kind as McpPreviewableChange['kind']);
+
+const latestRevisionId = async (database: D1DatabaseLike, userId: string): Promise<string | undefined> => {
+  const row = await database.prepare(
+    `SELECT id
+       FROM user_data_revisions
+      WHERE user_id = ?
+      ORDER BY created_at DESC, id DESC
+      LIMIT 1`,
+  ).bind(userId).first<{ id: string }>();
+  return row?.id;
+};
+
+const deleteExpiredUserRevisions = async (database: D1DatabaseLike, userId: string, now: string): Promise<void> => {
+  await database.prepare(
+    `DELETE FROM user_data_revisions
+      WHERE user_id = ?
+        AND datetime(expires_at) <= datetime(?)`,
+  ).bind(userId, now).run();
+};
+
+const parseStoredRevision = (row: Pick<McpRevisionRow, 'payload'>): AppData => {
+  try {
+    return validateMcpAppData(JSON.parse(row.payload));
+  } catch {
+    throw new Error('La revisión recuperable almacenada no es válida.');
+  }
+};
+
+const buildPreviewSummary = (current: AppData, change: McpPreviewableChange): Record<string, unknown> => {
+  if (change.kind === 'delete_workout') {
+    const workout = current.sessions.find((session) => session.id === change.workoutId);
+    if (!workout) throw new Error('El entrenamiento solicitado ya no existe en la copia autenticada.');
+    return {
+      kind: 'delete_workout',
+      workoutId: workout.id,
+      dateKey: workout.dateKey,
+      workoutDayId: workout.workoutDayId,
+    };
+  }
+  if (change.kind === 'delete_measurement') {
+    const entry = current.progress.find((measurement) => measurement.id === change.measurementId);
+    if (!entry) throw new Error('La medición solicitada ya no existe en la copia autenticada.');
+    return {
+      kind: 'delete_measurement',
+      measurementId: entry.id,
+      date: entry.date,
+    };
+  }
+  if (change.kind === 'delete_checkin') {
+    const entry = current.checkins.find((checkin) => checkin.id === change.checkinId);
+    if (!entry) throw new Error('El check-in solicitado ya no existe en la copia autenticada.');
+    return {
+      kind: 'delete_checkin',
+      checkinId: entry.id,
+      weekKey: entry.weekKey,
+    };
+  }
+  if (change.kind === 'replace_all_data') {
+    return {
+      kind: 'replace_all_data',
+      sessionCount: change.data.sessions.length,
+      measurementCount: change.data.progress.length,
+      checkinCount: change.data.checkins.length,
+    };
+  }
+  return {
+    kind: 'delete_all_data',
+    sessionCount: current.sessions.length,
+    measurementCount: current.progress.length,
+    checkinCount: current.checkins.length,
+  };
+};
+
+const applyPreviewMutation = (current: AppData, change: McpPreviewableChange): { nextData: AppData | null; summary: Record<string, unknown> } => {
+  if (change.kind === 'delete_workout') {
+    const exists = current.sessions.some((session) => session.id === change.workoutId);
+    if (!exists) throw new Error('El entrenamiento solicitado ya no existe en la copia autenticada.');
+    return {
+      nextData: {
+        ...structuredClone(current),
+        sessions: current.sessions.filter((session) => session.id !== change.workoutId).map((session) => structuredClone(session)),
+      },
+      summary: {
+        kind: 'delete_workout',
+        workoutId: change.workoutId,
+        deleted: true,
+      },
+    };
+  }
+  if (change.kind === 'delete_measurement') {
+    const exists = current.progress.some((entry) => entry.id === change.measurementId);
+    if (!exists) throw new Error('La medición solicitada ya no existe en la copia autenticada.');
+    return {
+      nextData: {
+        ...structuredClone(current),
+        progress: current.progress.filter((entry) => entry.id !== change.measurementId).map((entry) => structuredClone(entry)),
+      },
+      summary: {
+        kind: 'delete_measurement',
+        measurementId: change.measurementId,
+        deleted: true,
+      },
+    };
+  }
+  if (change.kind === 'delete_checkin') {
+    const exists = current.checkins.some((entry) => entry.id === change.checkinId);
+    if (!exists) throw new Error('El check-in solicitado ya no existe en la copia autenticada.');
+    return {
+      nextData: {
+        ...structuredClone(current),
+        checkins: current.checkins.filter((entry) => entry.id !== change.checkinId).map((entry) => structuredClone(entry)),
+      },
+      summary: {
+        kind: 'delete_checkin',
+        checkinId: change.checkinId,
+        deleted: true,
+      },
+    };
+  }
+  if (change.kind === 'replace_all_data') {
+    return {
+      nextData: structuredClone(change.data),
+      summary: {
+        kind: 'replace_all_data',
+        sessionCount: change.data.sessions.length,
+        measurementCount: change.data.progress.length,
+        checkinCount: change.data.checkins.length,
+      },
+    };
+  }
+  return {
+    nextData: null,
+    summary: {
+      kind: 'delete_all_data',
+    },
+  };
+};
+
+const parsePendingChange = (row: Pick<McpPendingChangeRow, 'payload'>): McpPreviewableChange => {
+  try {
+    const parsed = JSON.parse(row.payload);
+    const validated = validateMcpWriteOperation(parsed);
+    if (!isPreviewableChange(validated)) throw new Error('La propuesta almacenada no es destructiva.');
+    return validated;
+  } catch {
+    throw new Error('La propuesta destructiva almacenada no es válida.');
+  }
 };
 
 const workoutValidationContext = (data: AppData): McpWorkoutValidationContext => ({
@@ -327,6 +572,277 @@ const applyMutation = (current: AppData, operation: McpWriteOperation): { next: 
   throw new Error(`La mutación ${operation.kind} todavía no está habilitada.`);
 };
 
+export const previewChange = async (
+  database: D1DatabaseLike,
+  userId: string,
+  clientId: string,
+  request: PreviewChangeRequest,
+): Promise<McpPreviewResult | McpConflictResult | McpNeedsVersionResult> => {
+  if (!await hasActiveWriteOwnership(database, userId, clientId)) return oauthOwnershipConflictResult();
+  const current = await loadMcpUserData(database, userId);
+  if (!request.baseUpdatedAt) return needsVersionResult(current);
+  if (!current.data || !current.updatedAt) return conflictResult(current);
+  if (current.updatedAt !== request.baseUpdatedAt) return conflictResult(current);
+
+  const { baseUpdatedAt, ...rawChange } = request;
+  const validated = validateMcpWriteOperation(rawChange);
+  if (!isPreviewableChange(validated)) throw new Error('preview_change solo admite mutaciones destructivas.');
+
+  const createdAt = new Date().toISOString();
+  const expiresAt = new Date(Date.parse(createdAt) + PENDING_CHANGE_TTL_MS).toISOString();
+  const changeId = globalThis.crypto.randomUUID();
+  const summary = buildPreviewSummary(current.data, validated);
+  await database.prepare(
+    `INSERT INTO mcp_pending_changes
+      (id, user_id, client_id, kind, payload, base_updated_at, summary, created_at, expires_at, used_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+  ).bind(
+    changeId,
+    userId,
+    clientId,
+    validated.kind,
+    JSON.stringify(validated),
+    baseUpdatedAt,
+    JSON.stringify(summary),
+    createdAt,
+    expiresAt,
+  ).run();
+  return { changeId, expiresAt, summary };
+};
+
+export const applyChange = async (
+  database: D1DatabaseLike,
+  userId: string,
+  clientId: string,
+  changeId: string,
+  confirm: boolean,
+): Promise<McpMutationResult | McpConflictResult | McpChangeUnavailableResult | McpConfirmationRequiredResult> => {
+  if (!confirm) return confirmationRequiredResult();
+  if (!await hasActiveWriteOwnership(database, userId, clientId)) return oauthOwnershipConflictResult();
+
+  const now = new Date().toISOString();
+  const pending = await database.prepare(
+    `SELECT
+        id,
+        user_id AS userId,
+        client_id AS clientId,
+        kind,
+        payload,
+        base_updated_at AS baseUpdatedAt,
+        summary,
+        created_at AS createdAt,
+        expires_at AS expiresAt,
+        used_at AS usedAt
+      FROM mcp_pending_changes
+      WHERE id = ?
+        AND user_id = ?
+        AND client_id = ?
+        AND used_at IS NULL
+        AND datetime(expires_at) > datetime(?)
+        AND EXISTS (
+          SELECT 1
+            FROM mcp_tokens
+           WHERE user_id = ?
+             AND client_id = ?
+             AND token_type = 'access'
+             AND expires_at > ?
+             AND revoked_at IS NULL
+             AND instr(' ' || scope || ' ', ' ' || ? || ' ') > 0
+        )
+      LIMIT 1`,
+  ).bind(
+    changeId,
+    userId,
+    clientId,
+    now,
+    userId,
+    clientId,
+    now,
+    MCP_WRITE_SCOPE,
+  ).first<McpPendingChangeRow>();
+  if (!pending) return changeUnavailableResult();
+
+  const current = await loadMcpUserData(database, userId);
+  if (!current.data || !current.updatedAt) return conflictResult(current);
+  if (current.updatedAt !== pending.baseUpdatedAt) return conflictResult(current);
+
+  const { nextData, summary } = applyPreviewMutation(current.data, parsePendingChange(pending));
+  const updatedAt = new Date().toISOString();
+
+  let result;
+  if (nextData) {
+    validateMcpAppData(nextData);
+    result = await database.prepare(
+      `UPDATE user_data
+          SET payload = ?, updated_at = ?
+        WHERE user_id = ? AND updated_at = ?
+          AND EXISTS (
+            SELECT 1
+              FROM mcp_tokens
+             WHERE user_id = ?
+               AND client_id = ?
+               AND token_type = 'access'
+               AND expires_at > ?
+               AND revoked_at IS NULL
+               AND instr(' ' || scope || ' ', ' ' || ? || ' ') > 0
+          )`,
+    ).bind(
+      JSON.stringify(nextData),
+      updatedAt,
+      userId,
+      pending.baseUpdatedAt,
+      userId,
+      clientId,
+      updatedAt,
+      MCP_WRITE_SCOPE,
+    ).run();
+  } else {
+    result = await database.prepare(
+      `DELETE FROM user_data
+        WHERE user_id = ? AND updated_at = ?
+          AND EXISTS (
+            SELECT 1
+              FROM mcp_tokens
+             WHERE user_id = ?
+               AND client_id = ?
+               AND token_type = 'access'
+               AND expires_at > ?
+               AND revoked_at IS NULL
+               AND instr(' ' || scope || ' ', ' ' || ? || ' ') > 0
+          )`,
+    ).bind(
+      userId,
+      pending.baseUpdatedAt,
+      userId,
+      clientId,
+      updatedAt,
+      MCP_WRITE_SCOPE,
+    ).run();
+  }
+
+  if ((result.meta?.changes ?? 0) !== 1) {
+    return conflictResult(await loadMcpUserData(database, userId));
+  }
+
+  await database.prepare(
+    `UPDATE mcp_pending_changes
+        SET used_at = ?
+      WHERE id = ? AND user_id = ? AND client_id = ? AND used_at IS NULL`,
+  ).bind(updatedAt, changeId, userId, clientId).run();
+
+  return {
+    updatedAt,
+    summary,
+    revisionId: await latestRevisionId(database, userId),
+  };
+};
+
+export const listRevisions = async (database: D1DatabaseLike, userId: string): Promise<RevisionSummary[]> => {
+  const now = new Date().toISOString();
+  await deleteExpiredUserRevisions(database, userId, now);
+  const rows = await database.prepare(
+    `SELECT
+        id,
+        user_id AS userId,
+        payload,
+        source,
+        created_at AS createdAt,
+        expires_at AS expiresAt,
+        restored_at AS restoredAt
+      FROM user_data_revisions
+      WHERE user_id = ?
+        AND datetime(expires_at) > datetime(?)
+      ORDER BY created_at DESC, id DESC`,
+  ).bind(userId, now).all<McpRevisionRow>();
+  return rows.results.map((row) => ({
+    id: row.id,
+    source: row.source,
+    createdAt: row.createdAt,
+    expiresAt: row.expiresAt,
+    restoredAt: row.restoredAt,
+  }));
+};
+
+export const restoreRevision = async (
+  database: D1DatabaseLike,
+  userId: string,
+  clientId: string,
+  revisionId: string,
+  baseUpdatedAt: string | undefined,
+): Promise<McpMutationResult | McpConflictResult | McpNeedsVersionResult | McpChangeUnavailableResult> => {
+  if (!await hasActiveWriteOwnership(database, userId, clientId)) return oauthOwnershipConflictResult();
+  const current = await loadMcpUserData(database, userId);
+  if (!baseUpdatedAt) return needsVersionResult(current);
+  if (!current.data || !current.updatedAt) return conflictResult(current);
+  if (current.updatedAt !== baseUpdatedAt) return conflictResult(current);
+
+  const now = new Date().toISOString();
+  const revision = await database.prepare(
+    `SELECT
+        id,
+        user_id AS userId,
+        payload,
+        source,
+        created_at AS createdAt,
+        expires_at AS expiresAt,
+        restored_at AS restoredAt
+      FROM user_data_revisions
+      WHERE id = ?
+        AND user_id = ?
+        AND datetime(expires_at) > datetime(?)
+      LIMIT 1`,
+  ).bind(revisionId, userId, now).first<McpRevisionRow>();
+  if (!revision) return changeUnavailableResult();
+
+  const restoredData = parseStoredRevision(revision);
+  validateMcpAppData(restoredData);
+
+  const updatedAt = new Date().toISOString();
+  const result = await database.prepare(
+    `UPDATE user_data
+        SET payload = ?, updated_at = ?
+      WHERE user_id = ? AND updated_at = ?
+        AND EXISTS (
+          SELECT 1
+            FROM mcp_tokens
+           WHERE user_id = ?
+             AND client_id = ?
+             AND token_type = 'access'
+             AND expires_at > ?
+             AND revoked_at IS NULL
+             AND instr(' ' || scope || ' ', ' ' || ? || ' ') > 0
+        )`,
+  ).bind(
+    JSON.stringify(restoredData),
+    updatedAt,
+    userId,
+    baseUpdatedAt,
+    userId,
+    clientId,
+    updatedAt,
+    MCP_WRITE_SCOPE,
+  ).run();
+
+  if ((result.meta?.changes ?? 0) !== 1) {
+    return conflictResult(await loadMcpUserData(database, userId));
+  }
+
+  await database.prepare(
+    `UPDATE user_data_revisions
+        SET restored_at = COALESCE(restored_at, ?)
+      WHERE id = ? AND user_id = ?`,
+  ).bind(updatedAt, revisionId, userId).run();
+
+  return {
+    updatedAt,
+    summary: {
+      kind: 'restore_revision',
+      restoredFromRevisionId: revisionId,
+    },
+    revisionId: await latestRevisionId(database, userId),
+  };
+};
+
 export const writeMcpData = async (
   database: D1DatabaseLike,
   userId: string,
@@ -334,6 +850,25 @@ export const writeMcpData = async (
   baseUpdatedAt: string | undefined,
   operation: McpWriteOperation,
 ): Promise<McpWriteResult> => {
+  if (operation.kind === 'preview_change') {
+    return previewChange(database, userId, clientId, {
+      baseUpdatedAt,
+      ...operation.change,
+    });
+  }
+  if (operation.kind === 'apply_change') {
+    return applyChange(database, userId, clientId, operation.changeId, operation.confirm);
+  }
+  if (operation.kind === 'list_revisions') {
+    return { revisions: await listRevisions(database, userId) };
+  }
+  if (operation.kind === 'restore_revision') {
+    return restoreRevision(database, userId, clientId, operation.revisionId, baseUpdatedAt);
+  }
+  if (isPreviewableChange(operation)) {
+    throw new Error('Las mutaciones destructivas requieren preview_change seguido de apply_change.');
+  }
+
   if (!await hasActiveWriteOwnership(database, userId, clientId)) return oauthOwnershipConflictResult();
   const current = await loadMcpUserData(database, userId);
   if (!baseUpdatedAt) return needsVersionResult(current);

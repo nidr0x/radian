@@ -558,6 +558,17 @@ export const validateMcpWriteRequest = (value: unknown, context?: McpWorkoutVali
   if (operationKind === 'record_workout' && !context) {
     throw new Error('record_workout requiere contexto de validación del plan autenticado.');
   }
+  if ([
+    'update_profile',
+    'replace_routine',
+    'record_workout',
+    'add_measurement',
+    'add_checkin',
+    'preview_change',
+    'restore_revision',
+  ].includes(operationKind) && !baseUpdatedAt) {
+    throw new Error(`${operationKind} requiere baseUpdatedAt de la fila autenticada.`);
+  }
   const operation = validateMcpWriteOperation(operationRecord, context);
   return { userId, clientId, baseUpdatedAt, operation };
 };

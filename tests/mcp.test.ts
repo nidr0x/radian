@@ -3,7 +3,17 @@ import { DatabaseSync } from 'node:sqlite';
 import { resolve } from 'node:path';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { defaultData } from '../src/data/initialPlan';
-import { handleMcpTool, loadMcpUserData, MCP_TOOL_DEFINITIONS, MCP_WRITE_TOOL_DEFINITIONS, writeMcpData } from '../functions/lib/mcp';
+import {
+  applyChange,
+  handleMcpTool,
+  listRevisions,
+  loadMcpUserData,
+  MCP_TOOL_DEFINITIONS,
+  MCP_WRITE_TOOL_DEFINITIONS,
+  previewChange,
+  restoreRevision,
+  writeMcpData,
+} from '../functions/lib/mcp';
 import { validateMcpAppData, validateMcpWriteOperation, validateMcpWriteRequest } from '../functions/lib/mcpWrite';
 import { hasMcpScope, isAllowedRedirectUri, normalizeScope } from '../functions/lib/mcpAuth';
 import { consentPage } from '../functions/api/mcp/authorize';
@@ -80,6 +90,40 @@ const readStoredPayload = async (database: DatabaseSync): Promise<AppData> => {
   if (!stored.data) throw new Error('Se esperaba payload persistido en el test.');
   return stored.data;
 };
+
+const readPendingChangeRow = (database: DatabaseSync, changeId: string): McpPendingChangeRow | null => (
+  database.prepare(`
+    SELECT
+      id,
+      user_id AS userId,
+      client_id AS clientId,
+      kind,
+      payload,
+      base_updated_at AS baseUpdatedAt,
+      summary,
+      created_at AS createdAt,
+      expires_at AS expiresAt,
+      used_at AS usedAt
+    FROM mcp_pending_changes
+    WHERE id = ?
+  `).get(changeId) as McpPendingChangeRow | undefined
+) ?? null;
+
+const readRevisionRows = (database: DatabaseSync, userId = 'user-1'): McpRevisionRow[] => (
+  database.prepare(`
+    SELECT
+      id,
+      user_id AS userId,
+      payload,
+      source,
+      created_at AS createdAt,
+      expires_at AS expiresAt,
+      restored_at AS restoredAt
+    FROM user_data_revisions
+    WHERE user_id = ?
+    ORDER BY created_at DESC, id DESC
+  `).all(userId) as McpRevisionRow[]
+);
 
 const completedWorkoutFromPlan = (data: AppData): WorkoutSession => {
   const day = data.plan.days[0];
@@ -180,13 +224,17 @@ describe('puente MCP remoto de Radian', () => {
     expect(MCP_TOOL_DEFINITIONS.every((tool) => !tool.name.includes('write') && !tool.name.includes('delete'))).toBe(true);
   });
 
-  it('expone las cinco herramientas MCP de escritura previstas para mutaciones no destructivas', () => {
+  it('expone las herramientas MCP de escritura y recuperación previstas', () => {
     expect(MCP_WRITE_TOOL_DEFINITIONS.map((tool) => tool.name)).toEqual([
       'update_profile',
       'replace_routine',
       'record_workout',
       'add_measurement',
       'add_checkin',
+      'preview_change',
+      'apply_change',
+      'list_revisions',
+      'restore_revision',
     ]);
   });
 
@@ -373,6 +421,7 @@ describe('puente MCP remoto de Radian', () => {
     expect(() => validateMcpWriteRequest({
       userId: 'user-1',
       clientId: 'client-1',
+      baseUpdatedAt: '2026-08-31T21:00:00.000Z',
       operation: { kind: 'record_workout', workout },
     }, {
       plan: { days: [{ id: 'custom-day' }] },
@@ -799,6 +848,350 @@ describe('puente MCP remoto de Radian', () => {
 
     const after = await readStoredSnapshot(database);
     expect(after).toEqual(before);
+    database.close();
+  });
+
+  it('crea previews destructivos sin mutar y exige una única confirmación para aplicar', async () => {
+    const database = openMigratedDatabase();
+    const data = defaultData();
+    const workout = completedWorkoutFromPlan(data);
+    data.sessions = [workout];
+    data.progress = [{ id: 'progress-1', date: '2026-08-20', weightKg: 80 }];
+    data.checkins = [checkin()];
+    const baseUpdatedAt = seedUserData(database, data);
+
+    const preview = await previewChange(d1FromSqlite(database), 'user-1', 'client-1', {
+      kind: 'delete_workout',
+      workoutId: workout.id,
+      baseUpdatedAt,
+    });
+
+    expect(preview).toMatchObject({
+      changeId: expect.any(String),
+      expiresAt: expect.any(String),
+      summary: {
+        kind: 'delete_workout',
+        workoutId: workout.id,
+      },
+    });
+
+    const pending = readPendingChangeRow(database, preview.changeId);
+    expect(pending).toMatchObject({
+      userId: 'user-1',
+      clientId: 'client-1',
+      kind: 'delete_workout',
+      baseUpdatedAt,
+      usedAt: null,
+    });
+    expect(JSON.parse(pending?.payload ?? '{}')).toMatchObject({ kind: 'delete_workout', workoutId: workout.id });
+    expect(JSON.parse(pending?.summary ?? '{}')).toMatchObject({ kind: 'delete_workout', workoutId: workout.id });
+    expect((await readStoredPayload(database)).sessions).toHaveLength(1);
+
+    await expect(applyChange(d1FromSqlite(database), 'user-1', 'client-1', preview.changeId, false)).resolves.toMatchObject({
+      error: 'confirmation_required',
+    });
+    expect(readPendingChangeRow(database, preview.changeId)?.usedAt).toBeNull();
+    expect((await readStoredPayload(database)).sessions).toHaveLength(1);
+
+    await expect(applyChange(d1FromSqlite(database), 'user-1', 'client-1', preview.changeId, true)).resolves.toMatchObject({
+      updatedAt: expect.any(String),
+      revisionId: expect.any(String),
+      summary: {
+        kind: 'delete_workout',
+        workoutId: workout.id,
+      },
+    });
+
+    const afterApply = await readStoredPayload(database);
+    expect(afterApply.sessions).toEqual([]);
+    expect(afterApply.progress).toEqual(data.progress);
+    expect(afterApply.checkins).toEqual(data.checkins);
+    expect(readPendingChangeRow(database, preview.changeId)?.usedAt).toEqual(expect.any(String));
+    expect(readRevisionRows(database)).toHaveLength(1);
+
+    await expect(applyChange(d1FromSqlite(database), 'user-1', 'client-1', preview.changeId, true)).resolves.toMatchObject({
+      error: 'change_unavailable',
+    });
+    expect((await readStoredPayload(database)).sessions).toEqual([]);
+    database.close();
+  });
+
+  it('bloquea propuestas foreign, expirada o stale sin mutar datos ni marcarlas como usadas', async () => {
+    const database = openMigratedDatabase();
+    const data = defaultData();
+    const workout = completedWorkoutFromPlan(data);
+    data.sessions = [workout];
+    data.progress = [{ id: 'progress-1', date: '2026-08-20', weightKg: 80 }];
+    data.checkins = [checkin()];
+    const baseUpdatedAt = seedUserData(database, data);
+    run(database, 'INSERT INTO mcp_clients (client_id) VALUES (?)', 'client-2');
+    seedActiveAccessToken(database, { userId: 'user-1', clientId: 'client-2' });
+
+    const foreignPreview = await previewChange(d1FromSqlite(database), 'user-1', 'client-1', {
+      kind: 'delete_measurement',
+      measurementId: 'progress-1',
+      baseUpdatedAt,
+    });
+
+    await expect(applyChange(d1FromSqlite(database), 'user-1', 'client-2', foreignPreview.changeId, true)).resolves.toMatchObject({
+      error: 'change_unavailable',
+    });
+    expect((await readStoredPayload(database)).progress).toHaveLength(1);
+    expect(readPendingChangeRow(database, foreignPreview.changeId)?.usedAt).toBeNull();
+
+    const expiredPreview = await previewChange(d1FromSqlite(database), 'user-1', 'client-1', {
+      kind: 'delete_checkin',
+      checkinId: 'checkin-1',
+      baseUpdatedAt,
+    });
+    run(database, 'UPDATE mcp_pending_changes SET expires_at = ? WHERE id = ?', '2026-08-31T20:59:00.000Z', expiredPreview.changeId);
+
+    await expect(applyChange(d1FromSqlite(database), 'user-1', 'client-1', expiredPreview.changeId, true)).resolves.toMatchObject({
+      error: 'change_unavailable',
+    });
+    expect((await readStoredPayload(database)).checkins).toHaveLength(1);
+    expect(readPendingChangeRow(database, expiredPreview.changeId)?.usedAt).toBeNull();
+
+    const stalePreview = await previewChange(d1FromSqlite(database), 'user-1', 'client-1', {
+      kind: 'delete_workout',
+      workoutId: workout.id,
+      baseUpdatedAt,
+    });
+    const newer = structuredClone(await readStoredPayload(database));
+    newer.profile.gym = 'Versión más nueva';
+    run(
+      database,
+      'UPDATE user_data SET payload = ?, updated_at = ? WHERE user_id = ?',
+      JSON.stringify(newer),
+      '2026-08-31T21:05:00.000Z',
+      'user-1',
+    );
+
+    await expect(applyChange(d1FromSqlite(database), 'user-1', 'client-1', stalePreview.changeId, true)).resolves.toMatchObject({
+      error: 'conflict',
+      updatedAt: '2026-08-31T21:05:00.000Z',
+      data: {
+        profile: {
+          gym: 'Versión más nueva',
+        },
+      },
+    });
+    expect((await readStoredPayload(database)).sessions).toHaveLength(1);
+    expect(readPendingChangeRow(database, stalePreview.changeId)?.usedAt).toBeNull();
+    database.close();
+  });
+
+  it('borra workout, measurement y check-in solo al aplicar la propuesta confirmada', async () => {
+    const database = openMigratedDatabase();
+    const data = defaultData();
+    const workout = completedWorkoutFromPlan(data);
+    data.sessions = [workout];
+    data.progress = [{ id: 'progress-1', date: '2026-08-20', weightKg: 80 }];
+    data.checkins = [checkin()];
+    const baseUpdatedAt = seedUserData(database, data);
+
+    const deleteWorkout = await previewChange(d1FromSqlite(database), 'user-1', 'client-1', {
+      kind: 'delete_workout',
+      workoutId: workout.id,
+      baseUpdatedAt,
+    });
+    const workoutResult = await applyChange(d1FromSqlite(database), 'user-1', 'client-1', deleteWorkout.changeId, true);
+    expect(workoutResult).toMatchObject({
+      summary: {
+        kind: 'delete_workout',
+        deleted: true,
+        workoutId: workout.id,
+      },
+    });
+    expect((await readStoredPayload(database)).sessions).toEqual([]);
+    const afterWorkoutDeleteUpdatedAt = (await readStoredSnapshot(database)).updatedAt as string;
+
+    const deleteMeasurement = await previewChange(d1FromSqlite(database), 'user-1', 'client-1', {
+      kind: 'delete_measurement',
+      measurementId: 'progress-1',
+      baseUpdatedAt: afterWorkoutDeleteUpdatedAt,
+    });
+    const measurementResult = await applyChange(d1FromSqlite(database), 'user-1', 'client-1', deleteMeasurement.changeId, true);
+    expect(measurementResult).toMatchObject({
+      summary: {
+        kind: 'delete_measurement',
+        deleted: true,
+        measurementId: 'progress-1',
+      },
+    });
+    expect((await readStoredPayload(database)).progress).toEqual([]);
+    const afterMeasurementDeleteUpdatedAt = (await readStoredSnapshot(database)).updatedAt as string;
+
+    const deleteCheckin = await previewChange(d1FromSqlite(database), 'user-1', 'client-1', {
+      kind: 'delete_checkin',
+      checkinId: 'checkin-1',
+      baseUpdatedAt: afterMeasurementDeleteUpdatedAt,
+    });
+    const checkinResult = await applyChange(d1FromSqlite(database), 'user-1', 'client-1', deleteCheckin.changeId, true);
+    expect(checkinResult).toMatchObject({
+      summary: {
+        kind: 'delete_checkin',
+        deleted: true,
+        checkinId: 'checkin-1',
+      },
+    });
+    expect((await readStoredPayload(database)).checkins).toEqual([]);
+
+    await expect(writeMcpData(d1FromSqlite(database), 'user-1', 'client-1', afterMeasurementDeleteUpdatedAt, {
+      kind: 'delete_checkin',
+      checkinId: 'checkin-1',
+    })).rejects.toThrow(/preview|apply|destructiv/i);
+    database.close();
+  });
+
+  it('reemplaza o elimina toda la copia activa solo mediante preview y apply', async () => {
+    const database = openMigratedDatabase();
+    const data = defaultData();
+    data.sessions = [completedWorkoutFromPlan(data)];
+    data.progress = [{ id: 'progress-1', date: '2026-08-20', weightKg: 80 }];
+    data.checkins = [checkin()];
+    const baseUpdatedAt = seedUserData(database, data);
+
+    const replacement = structuredClone(data);
+    replacement.profile.gym = 'Nuevo gimnasio';
+    replacement.progress = [{ id: 'progress-2', date: '2026-09-01', weightKg: 79.2 }];
+    replacement.checkins = [];
+
+    const replacePreview = await previewChange(d1FromSqlite(database), 'user-1', 'client-1', {
+      kind: 'replace_all_data',
+      data: replacement,
+      baseUpdatedAt,
+    });
+    expect((await readStoredPayload(database)).profile.gym).not.toBe('Nuevo gimnasio');
+
+    const replaceResult = await applyChange(d1FromSqlite(database), 'user-1', 'client-1', replacePreview.changeId, true);
+    expect(replaceResult).toMatchObject({
+      updatedAt: expect.any(String),
+      revisionId: expect.any(String),
+      summary: {
+        kind: 'replace_all_data',
+      },
+    });
+    expect(await readStoredPayload(database)).toEqual(validateMcpAppData(replacement));
+    const afterReplaceUpdatedAt = (await readStoredSnapshot(database)).updatedAt as string;
+
+    const deletePreview = await previewChange(d1FromSqlite(database), 'user-1', 'client-1', {
+      kind: 'delete_all_data',
+      baseUpdatedAt: afterReplaceUpdatedAt,
+    });
+    const deleteResult = await applyChange(d1FromSqlite(database), 'user-1', 'client-1', deletePreview.changeId, true);
+    expect(deleteResult).toMatchObject({
+      updatedAt: expect.any(String),
+      revisionId: expect.any(String),
+      summary: {
+        kind: 'delete_all_data',
+      },
+    });
+    await expect(loadMcpUserData(d1FromSqlite(database), 'user-1')).resolves.toEqual({ data: null });
+    expect(readRevisionRows(database)).toHaveLength(2);
+    database.close();
+  });
+
+  it('lista revisiones vigentes del usuario, purga las caducadas y restaura creando una nueva versión activa', async () => {
+    const database = openMigratedDatabase();
+    const data = defaultData();
+    data.profile.gym = 'Original';
+    const baseUpdatedAt = seedUserData(database, data);
+
+    const updateResult = await writeMcpData(d1FromSqlite(database), 'user-1', 'client-1', baseUpdatedAt, {
+      kind: 'update_profile',
+      profile: { gym: 'Actualizado' },
+    });
+    expect(updateResult).toMatchObject({ updatedAt: expect.any(String) });
+    const currentUpdatedAt = (updateResult as { updatedAt: string }).updatedAt;
+    run(database, 'INSERT INTO users (id) VALUES (?)', 'user-2');
+    run(
+      database,
+      'INSERT INTO user_data_revisions (id, user_id, payload, source, created_at, expires_at, restored_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'expired-user-1',
+      'user-1',
+      JSON.stringify(defaultData()),
+      'manual',
+      '2026-07-01T00:00:00.000Z',
+      '2026-07-31T00:00:00.000Z',
+      null,
+    );
+    run(
+      database,
+      'INSERT INTO user_data_revisions (id, user_id, payload, source, created_at, expires_at, restored_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'other-user',
+      'user-2',
+      JSON.stringify(defaultData()),
+      'manual',
+      '2026-08-31T21:00:00.000Z',
+      '2026-09-30T21:00:00.000Z',
+      null,
+    );
+
+    const revisions = await listRevisions(d1FromSqlite(database), 'user-1');
+    expect(revisions).toHaveLength(1);
+    expect(revisions[0]).toMatchObject({
+      id: expect.any(String),
+      source: 'automatic',
+      restoredAt: null,
+    });
+    expect(readRevisionRows(database).map((revision) => revision.id)).not.toContain('expired-user-1');
+    expect(readRevisionRows(database, 'user-2').map((revision) => revision.id)).toContain('other-user');
+
+    const revisionId = revisions[0]?.id;
+    if (!revisionId) throw new Error('Se esperaba una revisión para restaurar en el test.');
+
+    await expect(restoreRevision(d1FromSqlite(database), 'user-1', 'client-1', revisionId, currentUpdatedAt)).resolves.toMatchObject({
+      updatedAt: expect.any(String),
+      revisionId: expect.any(String),
+      summary: {
+        kind: 'restore_revision',
+        restoredFromRevisionId: revisionId,
+      },
+    });
+
+    const restored = await readStoredPayload(database);
+    expect(restored.profile.gym).toBe('Original');
+    const sourceRevision = readRevisionRows(database).find((revision) => revision.id === revisionId);
+    expect(sourceRevision?.restoredAt).toEqual(expect.any(String));
+    expect(readRevisionRows(database)).toHaveLength(2);
+    database.close();
+  });
+
+  it('exige baseUpdatedAt para restore_revision y no restaura revisiones ajenas', async () => {
+    const database = openMigratedDatabase();
+    const data = defaultData();
+    data.profile.gym = 'Original';
+    const baseUpdatedAt = seedUserData(database, data);
+    const updateResult = await writeMcpData(d1FromSqlite(database), 'user-1', 'client-1', baseUpdatedAt, {
+      kind: 'update_profile',
+      profile: { gym: 'Actualizado' },
+    });
+    expect(updateResult).toMatchObject({ updatedAt: expect.any(String) });
+    run(database, 'INSERT INTO users (id) VALUES (?)', 'user-2');
+    run(
+      database,
+      'INSERT INTO user_data_revisions (id, user_id, payload, source, created_at, expires_at, restored_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'foreign-revision',
+      'user-2',
+      JSON.stringify(defaultData()),
+      'manual',
+      '2026-08-31T21:00:00.000Z',
+      '2026-09-30T21:00:00.000Z',
+      null,
+    );
+
+    await expect(writeMcpData(d1FromSqlite(database), 'user-1', 'client-1', undefined, {
+      kind: 'restore_revision',
+      revisionId: readRevisionRows(database)[0]?.id ?? 'missing',
+    })).resolves.toMatchObject({
+      error: 'needs_version',
+    });
+
+    await expect(restoreRevision(d1FromSqlite(database), 'user-1', 'client-1', 'foreign-revision', (updateResult as { updatedAt: string }).updatedAt)).resolves.toMatchObject({
+      error: 'change_unavailable',
+    });
+    expect((await readStoredPayload(database)).profile.gym).toBe('Actualizado');
     database.close();
   });
 
