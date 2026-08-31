@@ -3,11 +3,12 @@ import { DatabaseSync } from 'node:sqlite';
 import { resolve } from 'node:path';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { defaultData } from '../src/data/initialPlan';
-import { handleMcpTool, loadMcpUserData, MCP_TOOL_DEFINITIONS } from '../functions/lib/mcp';
+import { handleMcpTool, loadMcpUserData, MCP_TOOL_DEFINITIONS, MCP_WRITE_TOOL_DEFINITIONS, writeMcpData } from '../functions/lib/mcp';
 import { validateMcpAppData, validateMcpWriteOperation, validateMcpWriteRequest } from '../functions/lib/mcpWrite';
 import { hasMcpScope, isAllowedRedirectUri, normalizeScope } from '../functions/lib/mcpAuth';
 import { consentPage } from '../functions/api/mcp/authorize';
 import { onRequestGet as onProtectedResourceGet } from '../functions/.well-known/oauth-protected-resource';
+import type { AppData, WeeklyCheckin, WorkoutSession } from '../src/types';
 import type { D1DatabaseLike, McpPendingChangeRow, McpReplaceRoutineOperation, McpRevisionRow } from '../functions/types';
 
 const loadMigration = (): string => readFileSync(resolve(process.cwd(), 'migrations/0006_mcp_revisions.sql'), 'utf8');
@@ -35,6 +36,75 @@ const openMigratedDatabase = (): DatabaseSync => {
 const run = (database: DatabaseSync, sql: string, ...params: unknown[]): void => {
   database.prepare(sql).run(...params);
 };
+
+const seedUserData = (database: DatabaseSync, data: AppData, updatedAt = '2026-08-31T21:00:00.000Z'): string => {
+  run(database, 'INSERT INTO users (id) VALUES (?)', 'user-1');
+  run(database, 'INSERT INTO mcp_clients (client_id) VALUES (?)', 'client-1');
+  run(database, 'INSERT INTO user_data (user_id, payload, updated_at) VALUES (?, ?, ?)', 'user-1', JSON.stringify(data), updatedAt);
+  return updatedAt;
+};
+
+const readStoredSnapshot = async (database: DatabaseSync) => loadMcpUserData(d1FromSqlite(database), 'user-1');
+
+const readStoredPayload = async (database: DatabaseSync): Promise<AppData> => {
+  const stored = await readStoredSnapshot(database);
+  if (!stored.data) throw new Error('Se esperaba payload persistido en el test.');
+  return stored.data;
+};
+
+const completedWorkoutFromPlan = (data: AppData): WorkoutSession => {
+  const day = data.plan.days[0];
+  const plannedExercises = day.exercises.slice(0, 2).map((exercise, index) => ({
+    plannedExerciseId: exercise.id,
+    exerciseId: exercise.exerciseId,
+    name: exercise.name,
+    sets: exercise.sets,
+    repMin: exercise.repMin,
+    repMax: exercise.repMax,
+    restSeconds: exercise.restSeconds,
+    warmupSets: exercise.warmupSets ?? 0,
+    progressionPolicy: exercise.progressionPolicy ?? 'double',
+    progressionIncrementKg: exercise.progressionIncrementKg ?? 2.5,
+    completed: true,
+    difficulty: 'good' as const,
+    actualWeightKg: 40 + index * 5,
+    actualReps: exercise.repMax,
+    discomfort: false,
+    completedAt: '2026-08-31T21:00:00.000Z',
+    setLogs: Array.from({ length: exercise.sets + (exercise.warmupSets ?? 0) }, (_, setIndex) => ({
+      setNumber: setIndex + 1,
+      phase: setIndex < (exercise.warmupSets ?? 0) ? 'warmup' as const : 'work' as const,
+      targetReps: setIndex < (exercise.warmupSets ?? 0) ? exercise.repMin : exercise.repMax,
+      actualReps: setIndex < (exercise.warmupSets ?? 0) ? exercise.repMin : exercise.repMax,
+      weightKg: setIndex < (exercise.warmupSets ?? 0) ? 20 : 40 + index * 5,
+      completed: true,
+    })),
+  }));
+
+  return {
+    id: 'client-session-1',
+    workoutDayId: day.id,
+    dateKey: '2026-08-31',
+    startedAt: '2026-08-31T20:00:00.000Z',
+    completedAt: '2026-08-31T21:00:00.000Z',
+    status: 'completed',
+    activeExerciseIndex: 0,
+    plannedExercises,
+  };
+};
+
+const checkin = (patch: Partial<WeeklyCheckin> = {}): WeeklyCheckin => ({
+  id: 'checkin-1',
+  weekKey: '2026-08-31',
+  createdAt: '2026-09-01T08:00:00.000Z',
+  weightKg: 79.4,
+  waistCm: 84,
+  feeling: 'Semana sólida',
+  energy: 'high',
+  completedWorkouts: 4,
+  note: 'Dormí mejor',
+  ...patch,
+});
 
 const d1FromSqlite = (database: DatabaseSync): D1DatabaseLike => ({
   prepare(query: string) {
@@ -79,6 +149,16 @@ describe('puente MCP remoto de Radian', () => {
       'get_recommendations',
     ]);
     expect(MCP_TOOL_DEFINITIONS.every((tool) => !tool.name.includes('write') && !tool.name.includes('delete'))).toBe(true);
+  });
+
+  it('expone las cinco herramientas MCP de escritura previstas para mutaciones no destructivas', () => {
+    expect(MCP_WRITE_TOOL_DEFINITIONS.map((tool) => tool.name)).toEqual([
+      'update_profile',
+      'replace_routine',
+      'record_workout',
+      'add_measurement',
+      'add_checkin',
+    ]);
   });
 
   it('devuelve el perfil y una revisión semanal desde la copia de D1', async () => {
@@ -339,6 +419,333 @@ describe('puente MCP remoto de Radian', () => {
       plan: object;
       exercises: object[];
     }>();
+  });
+
+  it('actualiza solo el perfil permitido cuando la versión base coincide', async () => {
+    const database = openMigratedDatabase();
+    const data = defaultData();
+    data.profile.gym = 'Gimnasio base';
+    data.profile.goal = 'Ganar masa';
+    const baseUpdatedAt = seedUserData(database, data);
+
+    const result = await writeMcpData(d1FromSqlite(database), 'user-1', 'client-1', baseUpdatedAt, {
+      kind: 'update_profile',
+      profile: { gym: 'Evanfit Picanya' },
+    });
+
+    expect(result).toMatchObject({
+      updatedAt: expect.any(String),
+      summary: {
+        kind: 'update_profile',
+        changedFields: ['gym'],
+      },
+    });
+
+    const stored = await readStoredSnapshot(database);
+    expect(stored.updatedAt).not.toBe(baseUpdatedAt);
+    expect(stored.data?.profile.gym).toBe('Evanfit Picanya');
+    expect(stored.data?.profile.goal).toBe('Ganar masa');
+    expect(stored.data?.plan).toEqual(data.plan);
+    expect(stored.data?.sessions).toEqual(data.sessions);
+    database.close();
+  });
+
+  it('devuelve needs_version y no escribe nada cuando falta la versión base', async () => {
+    const database = openMigratedDatabase();
+    const data = defaultData();
+    data.profile.gym = 'Gimnasio base';
+    const baseUpdatedAt = seedUserData(database, data);
+    const before = await readStoredSnapshot(database);
+
+    const result = await writeMcpData(d1FromSqlite(database), 'user-1', 'client-1', undefined, {
+      kind: 'update_profile',
+      profile: { gym: 'Otro gimnasio' },
+    });
+
+    expect(result).toMatchObject({
+      error: 'needs_version',
+      updatedAt: baseUpdatedAt,
+    });
+
+    const after = await readStoredSnapshot(database);
+    expect(after).toEqual(before);
+    database.close();
+  });
+
+  it('devuelve conflicto stale y relee solo la fila actual del usuario sin sobrescribirla', async () => {
+    const database = openMigratedDatabase();
+    const data = defaultData();
+    data.profile.gym = 'Versión nueva';
+    seedUserData(database, data, '2026-08-31T21:05:00.000Z');
+
+    const result = await writeMcpData(d1FromSqlite(database), 'user-1', 'client-1', '2026-08-31T21:00:00.000Z', {
+      kind: 'update_profile',
+      profile: { gym: 'Intento obsoleto' },
+    });
+
+    expect(result).toMatchObject({
+      error: 'conflict',
+      updatedAt: '2026-08-31T21:05:00.000Z',
+      data: {
+        profile: {
+          gym: 'Versión nueva',
+        },
+      },
+    });
+
+    const stored = await readStoredPayload(database);
+    expect(stored.profile.gym).toBe('Versión nueva');
+    database.close();
+  });
+
+  it('reemplaza la rutina completa sin tocar perfil, progreso ni check-ins', async () => {
+    const database = openMigratedDatabase();
+    const data = defaultData();
+    data.progress = [{ id: 'progress-1', date: '2026-08-20', weightKg: 80 }];
+    data.checkins = [checkin()];
+    const baseUpdatedAt = seedUserData(database, data);
+
+    const exercises = structuredClone(data.exercises).slice(0, 2);
+    const plan = {
+      id: 'strength-plan',
+      version: 2,
+      days: [{
+        id: 'strength-day',
+        weekday: 2,
+        shortLabel: 'M',
+        name: 'Empuje',
+        focus: 'Pecho',
+        exercises: [{
+          id: 'strength-day-1',
+          exerciseId: exercises[0].id,
+          name: exercises[0].name,
+          sets: 4,
+          repMin: 6,
+          repMax: 8,
+          restSeconds: 150,
+          active: true,
+          warmupSets: 1,
+          progressionPolicy: 'double' as const,
+          progressionIncrementKg: 2.5,
+          imageUrl: exercises[0].imageUrl,
+          imagePosition: exercises[0].imagePosition,
+        }],
+      }],
+    };
+
+    const result = await writeMcpData(d1FromSqlite(database), 'user-1', 'client-1', baseUpdatedAt, {
+      kind: 'replace_routine',
+      plan,
+      exercises,
+    });
+
+    expect(result).toMatchObject({
+      updatedAt: expect.any(String),
+      summary: {
+        kind: 'replace_routine',
+        planId: 'strength-plan',
+        planVersion: 2,
+        dayCount: 1,
+        exerciseCount: 2,
+      },
+    });
+
+    const stored = await readStoredPayload(database);
+    expect(stored.plan).toEqual(plan);
+    expect(stored.exercises).toEqual(exercises);
+    expect(stored.profile).toEqual(data.profile);
+    expect(stored.progress).toEqual(data.progress);
+    expect(stored.checkins).toEqual(data.checkins);
+    database.close();
+  });
+
+  it('falla en replace_routine sin escrituras parciales cuando el plan no cuadra con el catálogo enviado', async () => {
+    const database = openMigratedDatabase();
+    const data = defaultData();
+    const baseUpdatedAt = seedUserData(database, data);
+    const before = await readStoredSnapshot(database);
+    const exercises = structuredClone(data.exercises).slice(0, 1);
+
+    await expect(writeMcpData(d1FromSqlite(database), 'user-1', 'client-1', baseUpdatedAt, {
+      kind: 'replace_routine',
+      plan: {
+        id: 'broken-plan',
+        version: 2,
+        days: [{
+          id: 'broken-day',
+          weekday: 2,
+          shortLabel: 'M',
+          name: 'Empuje',
+          focus: 'Pecho',
+          exercises: [{
+            id: 'broken-day-1',
+            exerciseId: 'invented-exercise',
+            name: 'Inventado',
+            sets: 4,
+            repMin: 6,
+            repMax: 8,
+            restSeconds: 150,
+            active: true,
+          }],
+        }],
+      },
+      exercises,
+    })).rejects.toThrow(/exerciseId|catálogo|válid/i);
+
+    const after = await readStoredSnapshot(database);
+    expect(after).toEqual(before);
+    database.close();
+  });
+
+  it('registra un entrenamiento completado con ID generado por servidor y validado contra el snapshot autenticado', async () => {
+    const database = openMigratedDatabase();
+    const data = defaultData();
+    const baseUpdatedAt = seedUserData(database, data);
+    const workout = completedWorkoutFromPlan(data);
+
+    const result = await writeMcpData(d1FromSqlite(database), 'user-1', 'client-1', baseUpdatedAt, {
+      kind: 'record_workout',
+      workout,
+    });
+
+    expect(result).toMatchObject({
+      updatedAt: expect.any(String),
+      summary: {
+        kind: 'record_workout',
+        workoutDayId: workout.workoutDayId,
+        dateKey: workout.dateKey,
+        completedExercises: 2,
+      },
+    });
+
+    const stored = await readStoredPayload(database);
+    expect(stored.sessions).toHaveLength(1);
+    expect(stored.sessions[0]?.id).not.toBe(workout.id);
+    expect(stored.sessions[0]).toMatchObject({
+      workoutDayId: workout.workoutDayId,
+      status: 'completed',
+      dateKey: workout.dateKey,
+    });
+    database.close();
+  });
+
+  it('rechaza record_workout inválido sin escribir parcialmente sesiones', async () => {
+    const database = openMigratedDatabase();
+    const data = defaultData();
+    const baseUpdatedAt = seedUserData(database, data);
+    const before = await readStoredSnapshot(database);
+    const invalidWorkout = completedWorkoutFromPlan(data);
+    invalidWorkout.plannedExercises[0] = {
+      ...invalidWorkout.plannedExercises[0],
+      exerciseId: 'invented-exercise',
+    };
+
+    await expect(writeMcpData(d1FromSqlite(database), 'user-1', 'client-1', baseUpdatedAt, {
+      kind: 'record_workout',
+      workout: invalidWorkout,
+    })).rejects.toThrow(/exerciseId|catálogo|válid/i);
+
+    const after = await readStoredSnapshot(database);
+    expect(after).toEqual(before);
+    database.close();
+  });
+
+  it('añade una medición tocando solo progress y devuelve resumen', async () => {
+    const database = openMigratedDatabase();
+    const data = defaultData();
+    data.profile.currentWeightKg = 80;
+    const baseUpdatedAt = seedUserData(database, data);
+
+    const result = await writeMcpData(d1FromSqlite(database), 'user-1', 'client-1', baseUpdatedAt, {
+      kind: 'add_measurement',
+      entry: { id: 'progress-1', date: '2026-09-01', weightKg: 79.4, waistCm: 84 },
+    });
+
+    expect(result).toMatchObject({
+      updatedAt: expect.any(String),
+      summary: {
+        kind: 'add_measurement',
+        entryId: 'progress-1',
+        date: '2026-09-01',
+      },
+    });
+
+    const stored = await readStoredPayload(database);
+    expect(stored.progress).toEqual([{ id: 'progress-1', date: '2026-09-01', weightKg: 79.4, waistCm: 84 }]);
+    expect(stored.profile.currentWeightKg).toBe(80);
+    expect(stored.sessions).toEqual(data.sessions);
+    database.close();
+  });
+
+  it('falla en add_measurement sin escrituras parciales si la nueva entrada rompe la validez', async () => {
+    const database = openMigratedDatabase();
+    const data = defaultData();
+    data.progress = [{ id: 'progress-1', date: '2026-08-20', weightKg: 80 }];
+    const baseUpdatedAt = seedUserData(database, data);
+    const before = await readStoredSnapshot(database);
+
+    await expect(writeMcpData(d1FromSqlite(database), 'user-1', 'client-1', baseUpdatedAt, {
+      kind: 'add_measurement',
+      entry: { id: 'progress-1', date: '2026-09-01', weightKg: 79.4 },
+    })).rejects.toThrow(/duplicado|progress\[1\]\.id/i);
+
+    const after = await readStoredSnapshot(database);
+    expect(after).toEqual(before);
+    database.close();
+  });
+
+  it('hace upsert semanal en add_checkin sin duplicar weekKey y solo toca checkins', async () => {
+    const database = openMigratedDatabase();
+    const data = defaultData();
+    data.progress = [{ id: 'progress-1', date: '2026-08-20', weightKg: 80 }];
+    data.checkins = [checkin({ id: 'checkin-old', note: 'Nota anterior', energy: 'normal' })];
+    const baseUpdatedAt = seedUserData(database, data);
+
+    const result = await writeMcpData(d1FromSqlite(database), 'user-1', 'client-1', baseUpdatedAt, {
+      kind: 'add_checkin',
+      checkin: checkin({ id: 'checkin-new', note: 'Nueva nota', completedWorkouts: 5 }),
+    });
+
+    expect(result).toMatchObject({
+      updatedAt: expect.any(String),
+      summary: {
+        kind: 'add_checkin',
+        weekKey: '2026-08-31',
+        replacedExisting: true,
+      },
+    });
+
+    const stored = await readStoredPayload(database);
+    expect(stored.checkins).toHaveLength(1);
+    expect(stored.checkins[0]).toMatchObject({
+      id: 'checkin-new',
+      weekKey: '2026-08-31',
+      note: 'Nueva nota',
+      completedWorkouts: 5,
+    });
+    expect(stored.progress).toEqual(data.progress);
+    expect(stored.profile).toEqual(data.profile);
+    database.close();
+  });
+
+  it('rechaza add_checkin si el snapshot ya contiene weekKey duplicada y no deja escrituras parciales', async () => {
+    const database = openMigratedDatabase();
+    const data = defaultData();
+    data.checkins = [
+      checkin({ id: 'checkin-a' }),
+      checkin({ id: 'checkin-b' }),
+    ];
+    const baseUpdatedAt = seedUserData(database, data);
+    const before = await readStoredSnapshot(database);
+
+    await expect(writeMcpData(d1FromSqlite(database), 'user-1', 'client-1', baseUpdatedAt, {
+      kind: 'add_checkin',
+      checkin: checkin({ id: 'checkin-c', note: 'No debería escribir' }),
+    })).rejects.toThrow(/weekKey|duplicad/i);
+
+    const after = await readStoredSnapshot(database);
+    expect(after).toEqual(before);
+    database.close();
   });
 
   it('aplica la migración real con FKs, índices y snapshots sobre user_data', () => {
