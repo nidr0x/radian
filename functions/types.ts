@@ -22,7 +22,7 @@ export interface RateLimiterLike {
 export interface McpRevisionRow {
   id: string;
   userId: string;
-  payload: unknown;
+  payload: string;
   source: string;
   createdAt: string;
   expiresAt: string;
@@ -34,9 +34,9 @@ export interface McpPendingChangeRow {
   userId: string;
   clientId: string;
   kind: string;
-  payload: unknown;
+  payload: string;
   baseUpdatedAt: string;
-  summary: unknown;
+  summary: string;
   createdAt: string;
   expiresAt: string;
   usedAt: string | null;
