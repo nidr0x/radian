@@ -1,15 +1,15 @@
 # Radian
 
-Radian es una PWA local-first para registrar entrenamientos con la mínima fricción posible. Está pensada para uso móvil durante la sesión: se puede marcar `Fácil`, `Bien`, `Difícil` o `No pude` sin introducir cargas ni repeticiones.
+Radian is a local-first PWA for logging workouts with as little friction as possible. It is designed for use on a phone during a session: you can mark an exercise `Fácil`, `Bien`, `Difícil`, or `No pude` without entering weights or reps.
 
-## Ejecutar
+## Running the app
 
 ```bash
 npm install
 npm run dev
 ```
 
-Comandos de calidad:
+Quality checks:
 
 ```bash
 npm run lint
@@ -19,76 +19,76 @@ npm run build
 npx wrangler pages functions build functions
 ```
 
-La primera vez, Radian muestra una configuración breve para elegir objetivo, días, duración y nivel. La altura y el peso son opcionales, se guardan solo en el dispositivo y se pueden omitir. La configuración se puede repetir desde Perfil. Durante una sesión se puede repetir el registro anterior, saltar un ejercicio, deshacer el último avance y salir conservando la sesión en curso.
+On first launch, Radian shows a short setup flow for choosing a goal, training days, session length, and experience level. Height and weight are optional, stay on the device, and can be skipped. You can repeat the setup from Profile. During a session, you can repeat the previous entry, skip an exercise, undo the last step, or leave while keeping the session in progress.
 
-## Desplegar en Cloudflare Pages
+## Deploying to Cloudflare Pages
 
-El proyecto incluye `wrangler.jsonc`, el fallback para la SPA y cabeceras de seguridad/cache en `public/`. En Cloudflare Pages usa:
+The project includes `wrangler.jsonc`, the SPA fallback, and security/cache headers in `public/`. Use these settings in Cloudflare Pages:
 
 - Build command: `npm run build`
 - Build output directory: `dist`
 - Production branch: `master`
 
-El repositorio está preparado para usar la integración GitHub de Cloudflare Pages. Configura el proyecto `radian` con:
+The repository is ready for Cloudflare Pages' GitHub integration. Configure the `radian` project with:
 
-- Repositorio: `nidr0x/radian`
-- Rama de producción: `master`
-- Comando de build: `npm ci && npm run build`
-- Directorio de salida: `dist`
+- Repository: `nidr0x/radian`
+- Production branch: `master`
+- Build command: `npm ci && npm run build`
+- Output directory: `dist`
 
-Pages se encargará de los despliegues de producción y de las previews. GitHub Actions conserva las comprobaciones de TypeScript, Functions, tests y build, pero no necesita credenciales de Cloudflare.
+Pages handles production and preview deployments. GitHub Actions still runs the TypeScript, Functions, test, and build checks, but it does not need Cloudflare credentials.
 
-Producción y preview son entornos separados. Producción usa el binding `DB` de `radian-prod`, su propio secreto de sesión y el origin `https://radian.nidr0x.win`. Cada preview debe usar otro D1, otro secreto de sesión y variables WebAuthn derivadas de su hostname; nunca copies los valores de producción a una preview. La configuración de `wrangler.jsonc` deja las variables de preview sin fijar para que la Function valide el hostname de la URL recibida. En el panel de Pages, configura el binding D1 y el secreto por entorno antes de probar autenticación en una preview.
+Production and preview are separate environments. Production uses the `DB` binding from `radian-prod`, its own session secret, and the origin `https://radian.nidr0x.win`. Each preview must use a separate D1 database, session secret, and WebAuthn variables derived from its hostname. Never copy production values into a preview. The `wrangler.jsonc` configuration leaves preview variables unset so the Function can validate the hostname in the URL it receives. In the Pages dashboard, configure the D1 binding and secret for each environment before testing authentication in a preview.
 
-Como alternativa puntual, puedes desplegar la carpeta generada con Wrangler:
+For a one-off deployment, you can deploy the generated directory with Wrangler:
 
 ```bash
   npm run build
   npx wrangler pages deploy dist --project-name=radian
 ```
 
-El repositorio incluye un workflow de GitHub Actions. Cada push a `master` y cada pull request ejecutan las comprobaciones, pero la publicación la realiza la integración Git de Cloudflare Pages.
+The repository includes a GitHub Actions workflow. Pushes to `master` and pull requests run the checks, but the Cloudflare Pages Git integration handles publication.
 
-La aplicación expone `GET /api/health` para comprobar que la Function está activa y que puede consultar D1. Tras un despliegue, puedes verificarlo con:
+The app exposes `GET /api/health` to check that the Function is running and can query D1. After a deployment, verify it with:
 
 ```bash
 curl -fsS https://radian.nidr0x.win/api/health
 ```
 
-## Sincronización opcional entre dispositivos
+## Optional device sync
 
-La app sigue funcionando sin backend. Si quieres compartir los datos entre el móvil y el ordenador, el proyecto incluye la Pages Function `/api/sync` y la migración `migrations/0001_sync_records.sql` para Cloudflare D1.
+The app still works without a backend. If you want to share data between a phone and a computer, the project includes the Pages Function `/api/sync` and the `migrations/0001_sync_records.sql` migration for Cloudflare D1.
 
-1. Crea una base D1 para la sincronización si estás preparando un fork:
+1. Create a D1 database for sync if you are preparing a fork:
 
    ```bash
    npx wrangler d1 create radian-prod
    ```
 
-2. En Cloudflare Pages, añade una vinculación D1 llamada `DB` a producción y otra vinculación `DB` a preview, usando bases distintas. El despliegue oficial de Radian usa `radian-prod` en producción; la base de preview debe ser independiente.
-3. Aplica la migración en remoto:
+2. In Cloudflare Pages, add a D1 binding named `DB` to production and another `DB` binding to preview, using separate databases. Radian's official deployment uses `radian-prod` in production; the preview database must be separate.
+3. Apply the migration remotely:
 
    ```bash
    npx wrangler d1 migrations apply radian-prod --remote --env production
    ```
 
-4. En Radian, abre `Perfil → Sincronizar dispositivos`, genera un código y conecta el primer dispositivo. Introduce el mismo código en el segundo y elige si quieres descargar la copia remota o subir sus datos locales.
+4. In Radian, open `Perfil → Sincronizar dispositivos`, generate a code, and connect the first device. Enter the same code on the second device, then choose whether to download the remote copy or upload its local data.
 
-El código funciona como llave de acceso a esa copia. El contenido se cifra en el dispositivo antes de subirlo; puedes revocar el código para borrar la copia remota y cortar el acceso de otros dispositivos. No lo compartas. Si ejecutas solo `npm run dev`, la app permanece en modo local-first porque Vite no sirve las Pages Functions.
+The code acts as the access key for that copy. The contents are encrypted on the device before upload. You can revoke the code to delete the remote copy and cut off access from other devices. Do not share it. If you run only `npm run dev`, the app stays in local-first mode because Vite does not serve the Pages Functions.
 
-El modo local no necesita variables secretas ni una base de datos. Si activas las cuentas passkey, el despliegue necesita la base D1 y los secretos descritos abajo.
+Local mode needs neither secrets nor a database. If you enable passkey accounts, the deployment needs the D1 database and secrets described below.
 
-## Consultar tus entrenamientos con un asistente (MCP, opcional)
+## Querying workouts with an assistant (optional MCP)
 
-Radian incluye un servidor MCP local de solo lectura para clientes como Claude Desktop, Cursor, Cline o Continue. Permite preguntar en lenguaje natural por tu rutina, sesiones, ejercicios, peso, 1RM estimado y balance muscular.
+Radian includes a local, read-only MCP server for clients such as Claude Desktop, Cursor, Cline, and Continue. It lets you ask natural-language questions about your routine, sessions, exercises, bodyweight, estimated 1RM, and muscle balance.
 
-El servidor se ejecuta como un proceso `stdio` iniciado por el cliente y solo lee el archivo que le indiques. No abre ningún puerto, no hace peticiones de red, no escribe datos y no forma parte del bundle web ni del build de Cloudflare Pages. Nunca necesita passkeys, tokens, D1 ni variables secretas.
+The server runs as a `stdio` process started by the client and reads only the file you specify. It opens no ports, makes no network requests, writes no data, and is not part of the web bundle or the Cloudflare Pages build. It never needs passkeys, tokens, D1, or secrets.
 
-### Configuración
+### Configuration
 
-1. En Radian abre `Perfil → Tus datos → Exportar datos` y guarda el archivo en una ruta local protegida, por ejemplo `/Users/tu-usuario/Documentos/radian-backup.json`. Si entrenas desde varios dispositivos, exporta después de descargar la copia más reciente.
-2. Comprueba que tienes Node.js 18 o posterior instalado.
-3. Añade el servidor a la configuración MCP de tu cliente. En Claude Desktop, por ejemplo, edita `claude_desktop_config.json`:
+1. In Radian, open `Perfil → Tus datos → Exportar datos` and save the file in a protected local path, such as `/Users/tu-usuario/Documentos/radian-backup.json`. If you train on multiple devices, export again after downloading the latest copy.
+2. Make sure Node.js 18 or later is installed.
+3. Add the server to your client's MCP configuration. In Claude Desktop, for example, edit `claude_desktop_config.json`:
 
    ```json
    {
@@ -106,53 +106,54 @@ El servidor se ejecuta como un proceso `stdio` iniciado por el cliente y solo le
    }
    ```
 
-   Cursor y otros clientes MCP usan la misma combinación `command` + `args` + `env`. Si el cliente no encuentra `node`, sustituye `command` por la ruta absoluta que devuelva `which node`.
-4. Reinicia el cliente. El servidor vuelve a leer el backup en cada consulta; vuelve a exportarlo desde Radian cuando quieras actualizar lo que puede consultar el asistente.
+   Cursor and other MCP clients use the same `command` + `args` + `env` combination. If the client cannot find `node`, replace `command` with the absolute path returned by `which node`.
+4. Restart the client. The server reads the backup again for each query. Export it from Radian again whenever you want to update the data the assistant can query.
 
-Ejemplos: `¿qué hice de press la semana pasada?`, `¿cuál es mi mejor estimación de 1RM en prensa?` o `¿qué grupos musculares he trabajado menos esta semana?`. Los resultados solo contienen los datos del backup seleccionado y todas las herramientas son de lectura.
+Examples: `what did I do for press last week?`, `what is my best estimated 1RM for leg press?`, or `which muscle groups have I trained the least this week?`. Results contain only data from the selected backup, and every tool is read-only.
 
-El smoke test del servidor se puede ejecutar con `node --test mcp/radian-mcp.smoke.mjs`.
+Run the server smoke test with `node --test mcp/radian-mcp.smoke.mjs`.
 
-Las Functions de autenticación usan `AUTH_RATE_LIMITER` cuando el entorno lo ofrece. Si ese binding no está disponible, aplican un límite por IP y ruta en D1; si tampoco existe D1, responden con error controlado en lugar de aceptar intentos sin límite. Pages dispone además de logs y métricas de Functions desde el panel de Cloudflare.
+The authentication Functions use `AUTH_RATE_LIMITER` when the environment provides it. If that binding is unavailable, they apply a per-IP, per-route limit in D1. If D1 is unavailable too, they return a controlled error instead of allowing unlimited attempts. Pages also provides Function logs and metrics in the Cloudflare dashboard.
 
-## Decisiones del MVP
+## MVP decisions
 
-- React + TypeScript + Vite, con backend opcional mediante Pages Functions y D1.
-- Estado persistido en `localStorage` detrás de `src/lib/storage.ts`, con `schemaVersion` y funciones de migración preparadas para sustituir el adaptador por IndexedDB.
-- Las sesiones guardan una instantánea de la programación vigente al iniciarse. Editar la rutina no altera los históricos.
-- El motor de recomendaciones de `src/lib/recommendations.ts` es determinista y testeable sin UI.
-- Las sesiones nuevas calculan una prescripción explicable por ejercicio: doble progresión, progresión lineal, mantenimiento, descarga tras tres sesiones atascadas y bloqueo si hay molestias. La rutina permite elegir la regla, el salto de carga y hasta tres series de calentamiento.
-- Las series de calentamiento quedan identificadas en el histórico y no cuentan para progresión, volumen, marcas ni resúmenes. Mientras hay una sesión activa, la PWA solicita el bloqueo de pantalla cuando el navegador lo permite.
-- Hoy y Rutina muestran la última señal registrada y una acción concreta para la próxima sesión; si aparece una molestia, se pueden probar variantes del mismo grupo sin cambiar la rutina original.
-- El backup exporta todo el estado como JSON. La importación requiere confirmación antes de sustituir los datos locales.
-- El service worker y el manifest permiten instalarla como PWA y abrir la carcasa sin conexión. Sin D1, los datos no salen del dispositivo.
-- Las tarjetas incluyen una imagen local individual por ejercicio, con el mismo estilo visual y pasos numerados de ajuste, ejecución y alternativas si aparece una molestia. Funcionan sin conexión junto con el resto de la carcasa PWA.
-- Progreso incluye adherencia semanal, volumen reciente, mejores cargas, sesiones del mes, volumen por grupo muscular y un resumen semanal copiable para revisarlo juntos.
-- Perfil incluye texto grande, instalación PWA cuando el navegador lo permite y estados claros para el modo local y la sincronización.
+- React + TypeScript + Vite, with an optional backend through Pages Functions and D1.
+- State persisted in `localStorage` behind `src/lib/storage.ts`, with `schemaVersion` and migration functions ready to replace the adapter with IndexedDB.
+- Sessions store a snapshot of the current program when they start. Editing the routine does not change historical records.
+- The recommendation engine in `src/lib/recommendations.ts` is deterministic and testable without the UI.
+- New sessions calculate an explainable prescription for each exercise: double progression, linear progression, maintenance, a deload after three stalled sessions, and blocked progression when discomfort is reported. The routine lets you choose the rule, load increment, and up to three warm-up sets.
+- Warm-up sets are identified in the history and do not count toward progression, volume, records, or summaries. While a session is active, the PWA requests a screen lock when the browser allows it.
+- `Hoy` and `Rutina` show the latest recorded signal and a concrete action for the next session. If discomfort appears, you can try variants for the same muscle group without changing the original routine.
+- The backup exports the entire state as JSON. Importing requires confirmation before replacing local data.
+- The service worker and manifest allow the app to be installed as a PWA and opened offline. Without D1, data stays on the device.
+- Each exercise card includes its own local image, the same visual style, and numbered steps for setup, execution, and alternatives if discomfort appears. These cards work offline with the rest of the PWA shell.
+- `Progreso` includes weekly adherence, recent volume, best lifts, monthly sessions, volume by muscle group, and a weekly summary you can copy to review together.
+- `Perfil` includes large text, PWA installation when the browser supports it, and clear states for local mode and sync.
 
-La primera versión no cuenta calorías, no registra comidas ni incluye un proveedor de IA integrado en la aplicación. Mantiene el modo local, el código de emparejamiento cifrado, las cuentas opcionales con passkey para la sincronización estructurada en D1 y el servidor MCP local opcional para consultas externas de solo lectura.
-## Cuenta, D1 y passkeys
+The first version does not count calories, log meals, or include an AI provider in the app. It keeps local mode, the encrypted pairing code, optional passkey accounts for structured sync in D1, and the optional local MCP server for read-only queries from external clients.
 
-Radian puede seguir funcionando sin cuenta y guardar los datos en el dispositivo. Si quieres sincronizar entre dispositivos, la cuenta opcional usa una passkey (WebAuthn) y guarda la copia estructurada en Cloudflare D1.
+## Accounts, D1, and passkeys
 
-Para preparar el entorno de Cloudflare:
+Radian can work without an account and keep data on the device. If you want to sync across devices, the optional account uses a passkey (WebAuthn) and stores the structured copy in Cloudflare D1.
 
-1. Crea una base de datos D1 llamada `radian-prod` y sustituye el identificador de ejemplo en `wrangler.jsonc` por el suyo. En el despliegue oficial, la base ya está creada y configurada.
-2. Aplica las migraciones con `npx wrangler d1 migrations apply radian-prod --remote --env production` (incluye `0001_sync_records.sql` a `0004_auth_hardening.sql`). Repite el proceso con la base de preview usando el entorno de preview.
-3. Configura en Pages Functions los secretos `SESSION_SECRET` y, en producción, `WEBAUTHN_RP_ID`, `WEBAUTHN_ORIGIN` y `WEBAUTHN_RP_NAME`.
-4. Para `radian.nidr0x.win`, usa `WEBAUTHN_RP_ID=radian.nidr0x.win` y `WEBAUTHN_ORIGIN=https://radian.nidr0x.win`.
+To prepare the Cloudflare environment:
 
-`SESSION_SECRET` debe ser aleatorio y mantenerse estable entre despliegues. Los retos WebAuthn caducados o consumidos, los límites antiguos y las sesiones expiradas se limpian al solicitar nuevas opciones. Las sesiones son opacas, revocables y quedan vinculadas a la versión de sesión del usuario. Añadir, renombrar o revocar una passkey exige una verificación reciente con otra passkey; revocar una passkey invalida las sesiones que se crearon con ella. D1 ofrece recuperación automática mediante Time Travel; conviene revisar periódicamente su retención desde Cloudflare antes de publicar cambios destructivos.
+1. Create a D1 database named `radian-prod` and replace the example identifier in `wrangler.jsonc` with your own. The official deployment already has this database created and configured.
+2. Apply the migrations with `npx wrangler d1 migrations apply radian-prod --remote --env production` (from `0001_sync_records.sql` through `0004_auth_hardening.sql`). Repeat the process with the preview database using the preview environment.
+3. Configure the `SESSION_SECRET` secret in Pages Functions and, in production, `WEBAUTHN_RP_ID`, `WEBAUTHN_ORIGIN`, and `WEBAUTHN_RP_NAME`.
+4. For `radian.nidr0x.win`, use `WEBAUTHN_RP_ID=radian.nidr0x.win` and `WEBAUTHN_ORIGIN=https://radian.nidr0x.win`.
 
-La passkey nunca se almacena en Radian: el dispositivo conserva la clave privada y D1 solo guarda la clave pública, el contador de uso y una etiqueta elegida por ti. Desde Perfil puedes añadir, renombrar o revocar dispositivos; siempre debe quedar al menos una passkey activa. El acceso local sigue disponible si no se configura la nube.
+`SESSION_SECRET` must be random and remain stable across deployments. Expired or consumed WebAuthn challenges, old rate limits, and expired sessions are cleaned up when new options are requested. Sessions are opaque, revocable, and tied to the user's session version. Adding, renaming, or revoking a passkey requires recent verification with another passkey. Revoking a passkey invalidates the sessions created with it. D1 provides automatic recovery through Time Travel. Review its retention in Cloudflare periodically before publishing destructive changes.
 
-## Validación en móvil
+A passkey is never stored in Radian. The device keeps the private key, while D1 stores only the public key, usage counter, and label you choose. From Profile, you can add, rename, or revoke devices, but at least one active passkey must remain. Local access remains available when cloud sync is not configured.
 
-Haz estas comprobaciones después de publicar una versión en el entorno correspondiente, usando siempre su hostname HTTPS:
+## Mobile validation
 
-- En iPhone con Safari: crea una cuenta con Face ID, cierra sesión, vuelve a entrar, añade una passkey desde otro dispositivo y confirma que la nueva etiqueta aparece en Perfil.
-- En Android con Chrome: repite el alta usando huella, PIN o el gestor de credenciales, cierra sesión y valida el acceso desde el mismo dispositivo.
-- En Perfil: renombra una passkey y revócala después de la verificación adicional; comprueba que una sesión creada con la passkey revocada deja de ser válida y que la última passkey no se puede borrar.
-- Abre la cuenta en dos navegadores, usa `Cerrar en todos` y confirma que el segundo navegador vuelve a pedir autenticación.
-- Empareja dos dispositivos con el código de sincronización, comprueba que el contenido remoto no se puede leer con un código incorrecto y provoca una edición simultánea para verificar el conflicto.
-- En una preview, confirma que la Function usa su origin WebAuthn, su D1 y su secreto propios, y que nunca muestra datos de producción.
+Run these checks after publishing a version to the relevant environment, always using its HTTPS hostname:
+
+- On iPhone with Safari: create an account with Face ID, log out, log back in, add a passkey from another device, and confirm that the new label appears in Profile.
+- On Android with Chrome: repeat sign-up using a fingerprint, PIN, or password manager, log out, and validate access from the same device.
+- In Profile: rename a passkey and revoke it after the additional verification. Check that a session created with the revoked passkey is no longer valid and that the last passkey cannot be deleted.
+- Open the account in two browsers, use `Cerrar en todos`, and confirm that the second browser asks for authentication again.
+- Pair two devices with the sync code, confirm that an incorrect code cannot read the remote contents, and make simultaneous edits to verify conflict handling.
+- In a preview, confirm that the Function uses its own WebAuthn origin, D1 database, and secret, and never shows production data.
