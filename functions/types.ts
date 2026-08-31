@@ -85,7 +85,7 @@ export interface McpUpdateProfileOperation {
 export interface McpReplaceRoutineOperation {
   kind: 'replace_routine';
   plan: WorkoutPlan;
-  exercises?: ExerciseDefinition[];
+  exercises: ExerciseDefinition[];
 }
 
 export interface McpRecordWorkoutOperation {

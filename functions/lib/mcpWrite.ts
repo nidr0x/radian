@@ -1,4 +1,5 @@
 import { migrateData } from '../../src/lib/storage';
+import { defaultData } from '../../src/data/initialPlan';
 import type {
   AppData,
   Difficulty,
@@ -150,6 +151,32 @@ const assertPayloadSize = (value: unknown): void => {
   }
 };
 
+const assertRecordArray = (value: unknown, label: string): Record<string, unknown>[] => {
+  if (!Array.isArray(value)) throw new Error(`${label} debe ser una lista.`);
+  return value.map((item, index) => assertRecord(item, `${label}[${index}]`));
+};
+
+const prevalidateAppDataShape = (value: Record<string, unknown>): void => {
+  assertRecord(value.profile, 'profile');
+  const exercises = assertRecordArray(value.exercises, 'exercises');
+  const plan = assertRecord(value.plan, 'plan');
+  const days = assertRecordArray(plan.days, 'plan.days');
+  days.forEach((day, index) => {
+    const dayRecord = assertRecord(day, `plan.days[${index}]`);
+    assertRecordArray(dayRecord.exercises, `plan.days[${index}].exercises`);
+  });
+  const sessions = assertRecordArray(value.sessions, 'sessions');
+  sessions.forEach((session, index) => {
+    const sessionRecord = assertRecord(session, `sessions[${index}]`);
+    assertRecordArray(sessionRecord.plannedExercises, `sessions[${index}].plannedExercises`);
+  });
+  assertRecordArray(value.progress, 'progress');
+  assertRecordArray(value.checkins, 'checkins');
+  exercises.forEach((exercise, index) => {
+    assertRecord(exercise, `exercises[${index}]`);
+  });
+};
+
 const validateProfile = (profile: Record<string, unknown>): void => {
   assertAllowedKeys(profile, PROFILE_KEYS, 'profile');
   assertRequiredKeys(profile, PROFILE_KEYS, 'profile');
@@ -159,7 +186,7 @@ const validateProfile = (profile: Record<string, unknown>): void => {
   if (!Array.isArray(trainingDays)) throw new Error('profile.trainingDays debe ser una lista.');
   if (trainingDays.length > 7) throw new Error('profile.trainingDays no puede tener más de 7 días.');
   trainingDays.forEach((day, index) => {
-    assertInteger(day, `profile.trainingDays[${index}]`, 0, 7);
+    assertInteger(day, `profile.trainingDays[${index}]`, 0, 6);
   });
   assertInteger(profile.sessionMinutes, 'profile.sessionMinutes', 15, 240);
   assertEnum(profile.experienceLevel, EXPERIENCE_LEVELS, 'profile.experienceLevel');
@@ -367,7 +394,13 @@ export const validateMcpAppData = (value: unknown): AppData => {
     throw new Error('La estructura principal de los datos de Radian no es válida.');
   }
   if (typeof record.onboardingComplete !== 'boolean') throw new Error('onboardingComplete debe ser booleano.');
-  const normalized = migrateData(value);
+  prevalidateAppDataShape(record);
+  let normalized: AppData;
+  try {
+    normalized = migrateData(value);
+  } catch {
+    throw new Error('Los datos de Radian no tienen una estructura válida.');
+  }
   return validateNormalizedAppData(normalized);
 };
 
@@ -380,7 +413,7 @@ const validateProfilePatch = (value: unknown): McpProfilePatch => {
   if ('trainingDays' in profile) {
     if (!Array.isArray(profile.trainingDays)) throw new Error('operation.profile.trainingDays debe ser una lista.');
     profile.trainingDays.forEach((day, index) => {
-      assertInteger(day, `operation.profile.trainingDays[${index}]`, 0, 7);
+      assertInteger(day, `operation.profile.trainingDays[${index}]`, 0, 6);
     });
   }
   if ('sessionMinutes' in profile) assertInteger(profile.sessionMinutes, 'operation.profile.sessionMinutes', 15, 240);
@@ -449,7 +482,10 @@ export const validateMcpWriteOperation = (value: unknown): McpWriteOperation => 
   if (kind === 'record_workout') {
     assertAllowedKeys(operation, ['kind', 'workout'], 'operation');
     const workout = assertRecord(operation.workout, 'operation.workout');
-    validateWorkoutSession(workout, 0, new Set([assertId(workout.workoutDayId, 'operation.workout.workoutDayId')]), new Set([assertId(workout.exerciseId ?? 'placeholder', 'operation.workout.exerciseId')]), new Set());
+    const current = defaultData();
+    const knownDayIds = new Set(current.plan.days.map((day) => day.id));
+    const knownExerciseIds = new Set(current.exercises.map((exercise) => exercise.id));
+    validateWorkoutSession(workout, 0, knownDayIds, knownExerciseIds, new Set());
     return { kind, workout: operation.workout as WorkoutSession };
   }
   if (kind === 'add_measurement') {

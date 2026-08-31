@@ -4,11 +4,11 @@ import { resolve } from 'node:path';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { defaultData } from '../src/data/initialPlan';
 import { handleMcpTool, loadMcpUserData, MCP_TOOL_DEFINITIONS } from '../functions/lib/mcp';
-import { validateMcpAppData } from '../functions/lib/mcpWrite';
+import { validateMcpAppData, validateMcpWriteOperation } from '../functions/lib/mcpWrite';
 import { hasMcpScope, isAllowedRedirectUri, normalizeScope } from '../functions/lib/mcpAuth';
 import { consentPage } from '../functions/api/mcp/authorize';
 import { onRequestGet as onProtectedResourceGet } from '../functions/.well-known/oauth-protected-resource';
-import type { D1DatabaseLike, McpPendingChangeRow, McpRevisionRow } from '../functions/types';
+import type { D1DatabaseLike, McpPendingChangeRow, McpReplaceRoutineOperation, McpRevisionRow } from '../functions/types';
 
 const loadMigration = (): string => readFileSync(resolve(process.cwd(), 'migrations/0006_mcp_revisions.sql'), 'utf8');
 
@@ -91,6 +91,18 @@ describe('puente MCP remoto de Radian', () => {
     });
   });
 
+  it('expone updatedAt en las lecturas cuando la carga viene versionada', async () => {
+    const data = defaultData();
+    const result = await handleMcpTool('get_profile', {}, {
+      data,
+      updatedAt: '2026-08-31T21:00:00.000Z',
+    });
+    expect(result).toMatchObject({
+      updatedAt: '2026-08-31T21:00:00.000Z',
+      trainingDays: data.profile.trainingDays,
+    });
+  });
+
   it('devuelve updatedAt junto al resultado de lectura', async () => {
     const database = openMigratedDatabase();
     const data = defaultData();
@@ -138,12 +150,65 @@ describe('puente MCP remoto de Radian', () => {
       repMax: 8,
     };
     expect(() => validateMcpAppData(invalidRange)).toThrow(/rep|rango|válid/i);
+
+    const invalidTrainingDays = structuredClone(defaultData());
+    invalidTrainingDays.profile.trainingDays = [1, 3, 7];
+    expect(() => validateMcpAppData(invalidTrainingDays)).toThrow(/trainingDays|0 y 6|válid/i);
   });
 
   it('rechaza payloads MCP de más de 900 KB', () => {
     const large = defaultData();
     large.profile.goal = 'x'.repeat(900_001);
     expect(() => validateMcpAppData(large)).toThrow(/demasiado grande|900/i);
+  });
+
+  it('rechaza estructuras anidadas mal formadas con un error de validación controlado', () => {
+    const malformed = structuredClone(defaultData()) as Record<string, unknown>;
+    malformed.plan = {
+      ...structuredClone(defaultData()).plan,
+      days: [{ id: 'monday', exercises: null }],
+    };
+    expect(() => validateMcpAppData(malformed)).toThrow(/válid|plan\.days|exercises/i);
+  });
+
+  it('valida record_workout usando plannedExercises y el catálogo real', () => {
+    const session = structuredClone(defaultData()).plan.days[0];
+    const validWorkout = {
+      id: 'session-2026-08-31',
+      workoutDayId: session.id,
+      dateKey: '2026-08-31',
+      startedAt: '2026-08-31T20:00:00.000Z',
+      completedAt: '2026-08-31T21:00:00.000Z',
+      status: 'completed',
+      activeExerciseIndex: 0,
+      plannedExercises: [
+        {
+          plannedExerciseId: session.exercises[0].id,
+          exerciseId: session.exercises[0].exerciseId,
+          name: session.exercises[0].name,
+          sets: session.exercises[0].sets,
+          repMin: session.exercises[0].repMin,
+          repMax: session.exercises[0].repMax,
+          restSeconds: session.exercises[0].restSeconds,
+          warmupSets: session.exercises[0].warmupSets ?? 0,
+          progressionPolicy: session.exercises[0].progressionPolicy ?? 'double',
+          progressionIncrementKg: session.exercises[0].progressionIncrementKg ?? 2.5,
+          completed: true,
+          discomfort: false,
+          setLogs: [
+            { setNumber: 1, phase: 'warmup', targetReps: 8, actualReps: 8, weightKg: 20, completed: true },
+            { setNumber: 2, phase: 'work', targetReps: 8, actualReps: 10, weightKg: 40, completed: true },
+            { setNumber: 3, phase: 'work', targetReps: 8, actualReps: 9, weightKg: 40, completed: true },
+            { setNumber: 4, phase: 'work', targetReps: 8, actualReps: 8, weightKg: 40, completed: true },
+          ],
+        },
+      ],
+    };
+    expect(() => validateMcpWriteOperation({ kind: 'record_workout', workout: validWorkout })).not.toThrow();
+
+    const invalidWorkout = structuredClone(validWorkout);
+    invalidWorkout.plannedExercises[0].exerciseId = 'invented-exercise';
+    expect(() => validateMcpWriteOperation({ kind: 'record_workout', workout: invalidWorkout })).toThrow(/exerciseId|catálogo|válid/i);
   });
 
   it('valida el ámbito de lectura y las URLs de retorno OAuth', () => {
@@ -207,6 +272,12 @@ describe('puente MCP remoto de Radian', () => {
       createdAt: string;
       expiresAt: string;
       usedAt: string | null;
+    }>();
+
+    expectTypeOf<McpReplaceRoutineOperation>().toMatchTypeOf<{
+      kind: 'replace_routine';
+      plan: object;
+      exercises: object[];
     }>();
   });
 
