@@ -21,9 +21,9 @@ import { onRequestGet as onProtectedResourceGet } from '../functions/.well-known
 import type { AppData, WeeklyCheckin, WorkoutSession } from '../src/types';
 import type { D1DatabaseLike, McpPendingChangeRow, McpReplaceRoutineOperation, McpRevisionRow } from '../functions/types';
 
-const loadMigration = (): string => readFileSync(resolve(process.cwd(), 'migrations/0006_mcp_revisions.sql'), 'utf8');
+const loadMigration = (filename = '0006_mcp_revisions.sql'): string => readFileSync(resolve(process.cwd(), 'migrations', filename), 'utf8');
 
-const openMigratedDatabase = (): DatabaseSync => {
+const openBaseDatabase = (): DatabaseSync => {
   const database = new DatabaseSync(':memory:');
   database.exec(`
     PRAGMA foreign_keys = ON;
@@ -49,7 +49,13 @@ const openMigratedDatabase = (): DatabaseSync => {
       updated_at TEXT NOT NULL
     );
   `);
-  database.exec(loadMigration());
+  return database;
+};
+
+const openMigratedDatabase = (): DatabaseSync => {
+  const database = openBaseDatabase();
+  database.exec(loadMigration('0006_mcp_revisions.sql'));
+  database.exec(loadMigration('0007_mcp_recovery_hardening.sql'));
   return database;
 };
 
@@ -1414,7 +1420,7 @@ describe('puente MCP remoto de Radian', () => {
     database.close();
   });
 
-  it('aplica la migración real con FKs, índices y snapshots sobre user_data', () => {
+  it('aplica 0006 y 0007 con FKs, índices y snapshots sobre user_data', () => {
     const database = openMigratedDatabase();
     run(database, 'INSERT INTO users (id) VALUES (?)', 'user-1');
     run(database, 'INSERT INTO mcp_clients (client_id) VALUES (?)', 'client-1');
@@ -1468,6 +1474,55 @@ describe('puente MCP remoto de Radian', () => {
       { id: expect.any(String), payload: '{"version":2}', source: 'automatic', restoredAt: null },
     ]));
     expect(database.prepare('SELECT count(*) AS count FROM mcp_revision_context').get<{ count: number }>()?.count).toBe(0);
+    database.close();
+  });
+
+  it('actualiza un esquema con el 0006 publicado aplicando después el hardening de 0007', () => {
+    const database = openBaseDatabase();
+    database.exec(loadMigration('0006_mcp_revisions.sql'));
+
+    const basePendingColumns = database.prepare('PRAGMA table_info(mcp_pending_changes)').all<{ name: string }>().map((column) => column.name);
+    expect(basePendingColumns).not.toContain('claim_id');
+    expect(basePendingColumns).not.toContain('claimed_at');
+    expect(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'mcp_revision_context'").get()).toBeUndefined();
+
+    run(database, 'INSERT INTO users (id) VALUES (?)', 'user-1');
+    run(database, 'INSERT INTO mcp_clients (client_id) VALUES (?)', 'client-1');
+    run(database, 'INSERT INTO user_data (user_id, payload, updated_at) VALUES (?, ?, ?)', 'user-1', '{"version":1}', '2026-08-31T21:00:00.000Z');
+    run(
+      database,
+      'INSERT INTO mcp_pending_changes (id, user_id, client_id, kind, payload, base_updated_at, summary, created_at, expires_at, used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'pending-before-0007',
+      'user-1',
+      'client-1',
+      'delete_all_data',
+      '{"kind":"delete_all_data"}',
+      '2026-08-31T21:00:00.000Z',
+      '{"kind":"delete_all_data"}',
+      '2026-09-01T09:55:00.000Z',
+      '2026-09-01T10:05:00.000Z',
+      null,
+    );
+
+    database.exec(loadMigration('0007_mcp_recovery_hardening.sql'));
+
+    const upgradedPendingColumns = database.prepare('PRAGMA table_info(mcp_pending_changes)').all<{ name: string }>().map((column) => column.name);
+    expect(upgradedPendingColumns).toEqual(expect.arrayContaining(['claim_id', 'claimed_at']));
+    expect(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'mcp_revision_context'").get()).toEqual({ name: 'mcp_revision_context' });
+    expect(database.prepare('SELECT id, claim_id AS claimId, claimed_at AS claimedAt FROM mcp_pending_changes').get()).toEqual({
+      id: 'pending-before-0007',
+      claimId: null,
+      claimedAt: null,
+    });
+
+    run(database, 'INSERT INTO mcp_revision_context (user_id, revision_id, created_at) VALUES (?, ?, ?)', 'user-1', 'upgrade-revision-id', '2026-09-01T10:00:00.000Z');
+    run(database, 'UPDATE user_data SET payload = ?, updated_at = ? WHERE user_id = ?', '{"version":2}', '2026-09-01T10:00:01.000Z', 'user-1');
+
+    expect(database.prepare('SELECT id, payload FROM user_data_revisions').get()).toEqual({
+      id: 'upgrade-revision-id',
+      payload: '{"version":1}',
+    });
+    expect(database.prepare('SELECT count(*) AS count FROM mcp_revision_context').get()).toEqual({ count: 0 });
     database.close();
   });
 });
