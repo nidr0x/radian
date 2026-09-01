@@ -54,6 +54,7 @@ export interface McpTokenRow {
 export interface McpAuthenticatedRequest {
   database: D1DatabaseLike;
   userId: string;
+  clientId: string;
   scope: string;
 }
 
@@ -264,7 +265,7 @@ export const authenticateMcpRequest = async (context: SyncContext): Promise<McpA
       WHERE token_hash = ? AND token_type = 'access' AND expires_at > ? AND revoked_at IS NULL`,
   ).bind(tokenHash, new Date().toISOString()).first<McpTokenRow>();
   if (!row || !hasMcpScope(row.scope, MCP_READ_SCOPE)) return mcpUnauthorized(context);
-  return { database, userId: row.userId, scope: row.scope };
+  return { database, userId: row.userId, clientId: row.clientId, scope: row.scope };
 };
 
 export const rateLimitMcp = (context: SyncContext, route: string): Promise<Response | undefined> => enforceAuthRateLimit(context, `mcp-${route}`);

@@ -4,7 +4,7 @@ import { isWorkSet } from '../../src/lib/progression';
 import { summarizeSession } from '../../src/lib/sessionSummary';
 import { buildWeeklySummary, weeklySummaryText } from '../../src/lib/weeklySummary';
 import type { AppData, ExerciseSession, ProgressEntry, WorkoutSession } from '../../src/types';
-import { MCP_WRITE_SCOPE } from './mcpAuth';
+import { hasMcpScope, MCP_WRITE_SCOPE } from './mcpAuth';
 import { validateMcpAppData, validateMcpWriteOperation } from './mcpWrite';
 import type {
   D1DatabaseLike,
@@ -236,6 +236,16 @@ export const MCP_WRITE_TOOL_DEFINITIONS = [
     },
   },
 ] as const;
+
+const MCP_READ_TOOL_NAMES = new Set<string>(MCP_TOOL_DEFINITIONS.map((tool) => tool.name));
+const MCP_WRITE_TOOL_NAMES = new Set<string>(MCP_WRITE_TOOL_DEFINITIONS.map((tool) => tool.name));
+
+export const listMcpToolsForScope = (scope: string) => hasMcpScope(scope, MCP_WRITE_SCOPE)
+  ? [...MCP_TOOL_DEFINITIONS, ...MCP_WRITE_TOOL_DEFINITIONS]
+  : [...MCP_TOOL_DEFINITIONS];
+
+export const isMcpReadTool = (name: string): boolean => MCP_READ_TOOL_NAMES.has(name);
+export const isMcpWriteTool = (name: string): boolean => MCP_WRITE_TOOL_NAMES.has(name);
 
 const withVersion = (value: Record<string, unknown>, updatedAt?: string): Record<string, unknown> => updatedAt ? { ...value, updatedAt } : value;
 

@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { resolve } from 'node:path';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { defaultData } from '../src/data/initialPlan';
+import { onRequestPost as onMcpPost } from '../functions/api/mcp';
 import {
   applyChange,
   handleMcpTool,
@@ -15,11 +16,11 @@ import {
   writeMcpData,
 } from '../functions/lib/mcp';
 import { validateMcpAppData, validateMcpWriteOperation, validateMcpWriteRequest } from '../functions/lib/mcpWrite';
-import { hasMcpScope, isAllowedRedirectUri, normalizeScope } from '../functions/lib/mcpAuth';
+import { hasMcpScope, isAllowedRedirectUri, normalizeScope, sha256 } from '../functions/lib/mcpAuth';
 import { consentPage } from '../functions/api/mcp/authorize';
 import { onRequestGet as onProtectedResourceGet } from '../functions/.well-known/oauth-protected-resource';
 import type { AppData, WeeklyCheckin, WorkoutSession } from '../src/types';
-import type { D1DatabaseLike, McpPendingChangeRow, McpReplaceRoutineOperation, McpRevisionRow } from '../functions/types';
+import type { D1DatabaseLike, McpPendingChangeRow, McpReplaceRoutineOperation, McpRevisionRow, SyncContext } from '../functions/types';
 
 const loadMigration = (filename = '0006_mcp_revisions.sql'): string => readFileSync(resolve(process.cwd(), 'migrations', filename), 'utf8');
 
@@ -79,6 +80,32 @@ const seedActiveAccessToken = (
     '2026-09-01T20:00:00.000Z',
     null,
   );
+};
+
+const seedBearerAccessToken = async (
+  database: DatabaseSync,
+  {
+    bearer = 'access-token',
+    userId = 'user-1',
+    clientId = 'client-1',
+    scope = 'radian:read radian:write',
+  }: { bearer?: string; userId?: string; clientId?: string; scope?: string } = {},
+): Promise<string> => {
+  run(database, 'INSERT OR IGNORE INTO users (id) VALUES (?)', userId);
+  run(database, 'INSERT OR IGNORE INTO mcp_clients (client_id) VALUES (?)', clientId);
+  run(
+    database,
+    'INSERT INTO mcp_tokens (token_hash, token_type, client_id, user_id, scope, created_at, expires_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    await sha256(bearer),
+    'access',
+    clientId,
+    userId,
+    scope,
+    '2026-08-31T20:00:00.000Z',
+    '2026-09-01T20:00:00.000Z',
+    null,
+  );
+  return bearer;
 };
 
 const seedUserData = (database: DatabaseSync, data: AppData, updatedAt = '2026-08-31T21:00:00.000Z'): string => {
@@ -202,9 +229,10 @@ const checkin = (patch: Partial<WeeklyCheckin> = {}): WeeklyCheckin => ({
 
 const d1FromSqlite = (
   database: DatabaseSync,
-  options: { beforeRun?: (query: string) => void | Promise<void> } = {},
+  options: { beforeRun?: (query: string) => void | Promise<void>; onPrepare?: (query: string) => void } = {},
 ): D1DatabaseLike => ({
   prepare(query: string) {
+    options.onPrepare?.(query);
     const statement = database.prepare(query);
     let boundValues: unknown[] = [];
     return {
@@ -245,6 +273,23 @@ const d1FromSqlite = (
   },
 });
 
+const createMcpContext = (
+  database: D1DatabaseLike,
+  body: Record<string, unknown>,
+  bearer?: string,
+): SyncContext => ({
+  request: new Request('http://localhost/api/mcp', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'MCP-Protocol-Version': '2026-07-28',
+      ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
+    },
+    body: JSON.stringify(body),
+  }),
+  env: { DB: database },
+});
+
 describe('puente MCP remoto de Radian', () => {
   it('expone únicamente herramientas de lectura orientadas a entrenamientos', () => {
     expect(MCP_TOOL_DEFINITIONS.map((tool) => tool.name)).toEqual([
@@ -270,6 +315,191 @@ describe('puente MCP remoto de Radian', () => {
       'list_revisions',
       'restore_revision',
     ]);
+  });
+
+  it('lista solo herramientas de lectura con radian:read y añade las de escritura con radian:write', async () => {
+    const database = openMigratedDatabase();
+    const readBearer = await seedBearerAccessToken(database, { bearer: 'read-only', scope: 'radian:read' });
+    const readOnlyResponse = await onMcpPost(createMcpContext(
+      d1FromSqlite(database),
+      { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+      readBearer,
+    ));
+
+    expect(readOnlyResponse.status).toBe(200);
+    await expect(readOnlyResponse.json()).resolves.toMatchObject({
+      result: {
+        tools: MCP_TOOL_DEFINITIONS,
+      },
+    });
+
+    const writeBearer = await seedBearerAccessToken(database, {
+      bearer: 'read-write',
+      clientId: 'writer-client',
+      scope: 'radian:read radian:write',
+    });
+    const readWriteResponse = await onMcpPost(createMcpContext(
+      d1FromSqlite(database),
+      { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+      writeBearer,
+    ));
+
+    expect(readWriteResponse.status).toBe(200);
+    await expect(readWriteResponse.json()).resolves.toMatchObject({
+      result: {
+        tools: [...MCP_TOOL_DEFINITIONS, ...MCP_WRITE_TOOL_DEFINITIONS],
+      },
+    });
+    database.close();
+  });
+
+  it('devuelve 401 cuando falta el bearer', async () => {
+    const database = openMigratedDatabase();
+    const response = await onMcpPost(createMcpContext(
+      d1FromSqlite(database),
+      { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+    ));
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get('WWW-Authenticate')).toContain('Bearer realm="radian"');
+    await expect(response.json()).resolves.toMatchObject({
+      error: 'unauthorized',
+    });
+    database.close();
+  });
+
+  it('rechaza mutaciones cuando el bearer solo tiene radian:read', async () => {
+    const database = openMigratedDatabase();
+    const queries: string[] = [];
+    const bearer = await seedBearerAccessToken(database, { bearer: 'read-mutate', scope: 'radian:read' });
+
+    const response = await onMcpPost(createMcpContext(
+      d1FromSqlite(database, {
+        onPrepare(query) {
+          queries.push(query);
+        },
+        async beforeRun(query) {
+          throw new Error(`No debería escribir en D1: ${query}`);
+        },
+      }),
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'update_profile',
+          arguments: {
+            baseUpdatedAt: '2026-08-31T21:00:00.000Z',
+            profile: { gym: 'No autorizado' },
+          },
+        },
+      },
+      bearer,
+    ));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      result: {
+        isError: true,
+        structuredContent: {
+          error: 'insufficient_scope',
+          requiredScope: 'radian:write',
+        },
+      },
+    });
+    expect(queries.some((query) => query.includes('FROM user_data'))).toBe(false);
+    database.close();
+  });
+
+  it('despacha escrituras usando userId y clientId autenticados del bearer', async () => {
+    const database = openMigratedDatabase();
+    const data = defaultData();
+    run(database, 'INSERT INTO users (id) VALUES (?)', 'writer-user');
+    run(database, 'INSERT INTO mcp_clients (client_id) VALUES (?)', 'writer-client');
+    run(database, 'INSERT INTO user_data (user_id, payload, updated_at) VALUES (?, ?, ?)', 'writer-user', JSON.stringify(data), '2026-08-31T21:00:00.000Z');
+    const bearer = await seedBearerAccessToken(database, {
+      bearer: 'writer-token',
+      userId: 'writer-user',
+      clientId: 'writer-client',
+      scope: 'radian:read radian:write',
+    });
+
+    const response = await onMcpPost(createMcpContext(
+      d1FromSqlite(database),
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'update_profile',
+          arguments: {
+            baseUpdatedAt: '2026-08-31T21:00:00.000Z',
+            profile: { gym: 'Evanfit Picanya' },
+          },
+        },
+      },
+      bearer,
+    ));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      result: {
+        isError: false,
+        structuredContent: {
+          summary: {
+            kind: 'update_profile',
+            changedFields: ['gym'],
+          },
+        },
+      },
+    });
+
+    const stored = await loadMcpUserData(d1FromSqlite(database), 'writer-user');
+    expect(stored.data?.profile.gym).toBe('Evanfit Picanya');
+    database.close();
+  });
+
+  it('devuelve -32602 para argumentos malformed sin tocar user_data ni escribir en D1', async () => {
+    const database = openMigratedDatabase();
+    const queries: string[] = [];
+    const bearer = await seedBearerAccessToken(database, {
+      bearer: 'bad-args',
+      scope: 'radian:read radian:write',
+    });
+
+    const response = await onMcpPost(createMcpContext(
+      d1FromSqlite(database, {
+        onPrepare(query) {
+          queries.push(query);
+        },
+        async beforeRun(query) {
+          throw new Error(`No debería escribir en D1: ${query}`);
+        },
+      }),
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'update_profile',
+          arguments: {
+            baseUpdatedAt: 'no-es-iso',
+            profile: 'malformed',
+          },
+        },
+      },
+      bearer,
+    ));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        code: -32602,
+      },
+    });
+    expect(queries.some((query) => query.includes('FROM user_data'))).toBe(false);
+    expect(queries.some((query) => query.includes('UPDATE user_data'))).toBe(false);
+    database.close();
   });
 
   it('devuelve el perfil y una revisión semanal desde la copia de D1', async () => {
