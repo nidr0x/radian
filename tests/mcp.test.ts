@@ -353,6 +353,54 @@ describe('puente MCP remoto de Radian', () => {
     database.close();
   });
 
+  it('initialize refleja el scope autenticado sin romper clientes read-only', async () => {
+    const database = openMigratedDatabase();
+    const readBearer = await seedBearerAccessToken(database, { bearer: 'init-read', scope: 'radian:read' });
+    const readResponse = await onMcpPost(createMcpContext(
+      d1FromSqlite(database),
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: { protocolVersion: '2026-07-28' },
+      },
+      readBearer,
+    ));
+
+    expect(readResponse.status).toBe(200);
+    await expect(readResponse.json()).resolves.toMatchObject({
+      result: {
+        protocolVersion: '2026-07-28',
+        instructions: expect.stringContaining('solo lectura'),
+      },
+    });
+
+    const writeBearer = await seedBearerAccessToken(database, {
+      bearer: 'init-write',
+      clientId: 'init-writer',
+      scope: 'radian:read radian:write',
+    });
+    const writeResponse = await onMcpPost(createMcpContext(
+      d1FromSqlite(database),
+      {
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'initialize',
+        params: { protocolVersion: '2026-07-28' },
+      },
+      writeBearer,
+    ));
+
+    expect(writeResponse.status).toBe(200);
+    await expect(writeResponse.json()).resolves.toMatchObject({
+      result: {
+        protocolVersion: '2026-07-28',
+        instructions: expect.stringContaining('lectura y escritura'),
+      },
+    });
+    database.close();
+  });
+
   it('devuelve 401 cuando falta el bearer', async () => {
     const database = openMigratedDatabase();
     const response = await onMcpPost(createMcpContext(
@@ -499,6 +547,99 @@ describe('puente MCP remoto de Radian', () => {
     });
     expect(queries.some((query) => query.includes('FROM user_data'))).toBe(false);
     expect(queries.some((query) => query.includes('UPDATE user_data'))).toBe(false);
+    database.close();
+  });
+
+  it('devuelve -32602 cuando record_workout llega sin baseUpdatedAt y no consulta user_data', async () => {
+    const database = openMigratedDatabase();
+    const queries: string[] = [];
+    const bearer = await seedBearerAccessToken(database, {
+      bearer: 'record-no-version',
+      scope: 'radian:read radian:write',
+    });
+    const workout = completedWorkoutFromPlan(defaultData());
+
+    const response = await onMcpPost(createMcpContext(
+      d1FromSqlite(database, {
+        onPrepare(query) {
+          queries.push(query);
+        },
+        async beforeRun(query) {
+          throw new Error(`No debería escribir en D1: ${query}`);
+        },
+      }),
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'record_workout',
+          arguments: {
+            workout,
+          },
+        },
+      },
+      bearer,
+    ));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        code: -32602,
+      },
+    });
+    expect(queries.some((query) => query.includes('FROM user_data'))).toBe(false);
+    expect(queries.some((query) => query.includes('UPDATE user_data'))).toBe(false);
+    database.close();
+  });
+
+  it('devuelve un error MCP de ejecución seguro cuando writeMcpData falla en runtime', async () => {
+    const database = openMigratedDatabase();
+    const data = defaultData();
+    run(database, 'INSERT INTO users (id) VALUES (?)', 'runtime-user');
+    run(database, 'INSERT INTO mcp_clients (client_id) VALUES (?)', 'runtime-client');
+    run(database, 'INSERT INTO user_data (user_id, payload, updated_at) VALUES (?, ?, ?)', 'runtime-user', JSON.stringify(data), '2026-08-31T21:00:00.000Z');
+    const bearer = await seedBearerAccessToken(database, {
+      bearer: 'runtime-error',
+      userId: 'runtime-user',
+      clientId: 'runtime-client',
+      scope: 'radian:read radian:write',
+    });
+
+    const response = await onMcpPost(createMcpContext(
+      d1FromSqlite(database, {
+        async beforeRun(query) {
+          if (query.includes('UPDATE user_data')) throw new Error('sqlite exploded with internal secret token');
+        },
+      }),
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'update_profile',
+          arguments: {
+            baseUpdatedAt: '2026-08-31T21:00:00.000Z',
+            profile: { gym: 'Nuevo gimnasio' },
+          },
+        },
+      },
+      bearer,
+    ));
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      error: {
+        code: -32000,
+        message: expect.stringContaining('No se pudo ejecutar'),
+        data: {
+          error: 'tool_execution_failed',
+          tool: 'update_profile',
+        },
+      },
+    });
+    expect(JSON.stringify(body)).not.toContain('internal secret token');
     database.close();
   });
 
