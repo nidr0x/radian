@@ -8,6 +8,8 @@ import { MCP_WRITE_SCOPE } from './mcpAuth';
 import { validateMcpAppData, validateMcpWriteOperation } from './mcpWrite';
 import type {
   D1DatabaseLike,
+  D1PreparedStatementLike,
+  D1ResultLike,
   McpLoadedUserData,
   McpMutationResult,
   McpPendingChangeRow,
@@ -311,15 +313,49 @@ const previewKindSet = new Set<McpPreviewableChange['kind']>([
 
 const isPreviewableChange = (operation: McpWriteOperation): operation is McpPreviewableChange => previewKindSet.has(operation.kind as McpPreviewableChange['kind']);
 
-const latestRevisionId = async (database: D1DatabaseLike, userId: string): Promise<string | undefined> => {
-  const row = await database.prepare(
-    `SELECT id
-       FROM user_data_revisions
-      WHERE user_id = ?
-      ORDER BY created_at DESC, id DESC
-      LIMIT 1`,
-  ).bind(userId).first<{ id: string }>();
-  return row?.id;
+const runRevisionedMutation = async (
+  database: D1DatabaseLike,
+  userId: string,
+  revisionId: string,
+  createdAt: string,
+  mutation: D1PreparedStatementLike,
+): Promise<D1ResultLike> => {
+  const results = await database.batch([
+    database.prepare(
+      `INSERT INTO mcp_revision_context (user_id, revision_id, created_at)
+       VALUES (?, ?, ?)`,
+    ).bind(userId, revisionId, createdAt),
+    mutation,
+    database.prepare(
+      `DELETE FROM mcp_revision_context
+        WHERE user_id = ? AND revision_id = ?`,
+    ).bind(userId, revisionId),
+  ]);
+  return results[1];
+};
+
+const releasePendingChangeClaim = async (
+  database: D1DatabaseLike,
+  userId: string,
+  clientId: string,
+  changeId: string,
+  claimId: string,
+): Promise<void> => {
+  await database.prepare(
+    `UPDATE mcp_pending_changes
+        SET claim_id = NULL, claimed_at = NULL
+      WHERE id = ?
+        AND user_id = ?
+        AND client_id = ?
+        AND claim_id = ?
+        AND used_at IS NULL`,
+  ).bind(changeId, userId, clientId, claimId).run();
+};
+
+const nextVersion = (baseUpdatedAt: string): string => {
+  const now = Date.now();
+  const base = Date.parse(baseUpdatedAt);
+  return new Date(Number.isFinite(base) ? Math.max(now, base + 1) : now).toISOString();
 };
 
 const deleteExpiredUserRevisions = async (database: D1DatabaseLike, userId: string, now: string): Promise<void> => {
@@ -637,6 +673,7 @@ export const applyChange = async (
       WHERE id = ?
         AND user_id = ?
         AND client_id = ?
+        AND claim_id IS NULL
         AND used_at IS NULL
         AND datetime(expires_at) > datetime(?)
         AND EXISTS (
@@ -667,15 +704,61 @@ export const applyChange = async (
   if (current.updatedAt !== pending.baseUpdatedAt) return conflictResult(current);
 
   const { nextData, summary } = applyPreviewMutation(current.data, parsePendingChange(pending));
-  const updatedAt = new Date().toISOString();
+  if (nextData) validateMcpAppData(nextData);
 
-  let result;
+  const updatedAt = nextVersion(pending.baseUpdatedAt);
+  const claimId = globalThis.crypto.randomUUID();
+  const claim = await database.prepare(
+    `UPDATE mcp_pending_changes
+        SET claim_id = ?, claimed_at = ?
+      WHERE id = ?
+        AND user_id = ?
+        AND client_id = ?
+        AND base_updated_at = ?
+        AND claim_id IS NULL
+        AND used_at IS NULL
+        AND datetime(expires_at) > datetime(?)
+        AND EXISTS (
+          SELECT 1
+            FROM mcp_tokens
+           WHERE user_id = ?
+             AND client_id = ?
+             AND token_type = 'access'
+             AND expires_at > ?
+             AND revoked_at IS NULL
+             AND instr(' ' || scope || ' ', ' ' || ? || ' ') > 0
+        )`,
+  ).bind(
+    claimId,
+    updatedAt,
+    changeId,
+    userId,
+    clientId,
+    pending.baseUpdatedAt,
+    now,
+    userId,
+    clientId,
+    now,
+    MCP_WRITE_SCOPE,
+  ).run();
+  if ((claim.meta?.changes ?? 0) !== 1) return changeUnavailableResult();
+
+  const revisionId = globalThis.crypto.randomUUID();
+  let mutation: D1PreparedStatementLike;
   if (nextData) {
-    validateMcpAppData(nextData);
-    result = await database.prepare(
+    mutation = database.prepare(
       `UPDATE user_data
           SET payload = ?, updated_at = ?
         WHERE user_id = ? AND updated_at = ?
+          AND EXISTS (
+            SELECT 1
+              FROM mcp_pending_changes
+             WHERE id = ?
+               AND user_id = ?
+               AND client_id = ?
+               AND claim_id = ?
+               AND used_at IS NULL
+          )
           AND EXISTS (
             SELECT 1
               FROM mcp_tokens
@@ -691,15 +774,28 @@ export const applyChange = async (
       updatedAt,
       userId,
       pending.baseUpdatedAt,
+      changeId,
+      userId,
+      clientId,
+      claimId,
       userId,
       clientId,
       updatedAt,
       MCP_WRITE_SCOPE,
-    ).run();
+    );
   } else {
-    result = await database.prepare(
+    mutation = database.prepare(
       `DELETE FROM user_data
         WHERE user_id = ? AND updated_at = ?
+          AND EXISTS (
+            SELECT 1
+              FROM mcp_pending_changes
+             WHERE id = ?
+               AND user_id = ?
+               AND client_id = ?
+               AND claim_id = ?
+               AND used_at IS NULL
+          )
           AND EXISTS (
             SELECT 1
               FROM mcp_tokens
@@ -713,27 +809,47 @@ export const applyChange = async (
     ).bind(
       userId,
       pending.baseUpdatedAt,
+      changeId,
+      userId,
+      clientId,
+      claimId,
       userId,
       clientId,
       updatedAt,
       MCP_WRITE_SCOPE,
-    ).run();
+    );
+  }
+
+  let result: D1ResultLike;
+  try {
+    result = await runRevisionedMutation(database, userId, revisionId, updatedAt, mutation);
+  } catch (error) {
+    await releasePendingChangeClaim(database, userId, clientId, changeId, claimId);
+    throw error;
   }
 
   if ((result.meta?.changes ?? 0) !== 1) {
+    await releasePendingChangeClaim(database, userId, clientId, changeId, claimId);
     return conflictResult(await loadMcpUserData(database, userId));
   }
 
-  await database.prepare(
+  const finalized = await database.prepare(
     `UPDATE mcp_pending_changes
-        SET used_at = ?
-      WHERE id = ? AND user_id = ? AND client_id = ? AND used_at IS NULL`,
-  ).bind(updatedAt, changeId, userId, clientId).run();
+        SET used_at = ?, claim_id = NULL, claimed_at = NULL
+      WHERE id = ?
+        AND user_id = ?
+        AND client_id = ?
+        AND claim_id = ?
+        AND used_at IS NULL`,
+  ).bind(updatedAt, changeId, userId, clientId, claimId).run();
+  if ((finalized.meta?.changes ?? 0) !== 1) {
+    throw new Error('La propuesta se aplicó, pero no se pudo cerrar de forma segura.');
+  }
 
   return {
     updatedAt,
     summary,
-    revisionId: await latestRevisionId(database, userId),
+    revisionId,
   };
 };
 
@@ -773,8 +889,6 @@ export const restoreRevision = async (
   if (!await hasActiveWriteOwnership(database, userId, clientId)) return oauthOwnershipConflictResult();
   const current = await loadMcpUserData(database, userId);
   if (!baseUpdatedAt) return needsVersionResult(current);
-  if (!current.data || !current.updatedAt) return conflictResult(current);
-  if (current.updatedAt !== baseUpdatedAt) return conflictResult(current);
 
   const now = new Date().toISOString();
   const revision = await database.prepare(
@@ -794,34 +908,95 @@ export const restoreRevision = async (
   ).bind(revisionId, userId, now).first<McpRevisionRow>();
   if (!revision) return changeUnavailableResult();
 
+  if (current.data) {
+    if (!current.updatedAt || current.updatedAt !== baseUpdatedAt) return conflictResult(current);
+  } else if (revision.createdAt !== baseUpdatedAt) {
+    return conflictResult(current);
+  }
+
   const restoredData = parseStoredRevision(revision);
   validateMcpAppData(restoredData);
 
-  const updatedAt = new Date().toISOString();
-  const result = await database.prepare(
-    `UPDATE user_data
-        SET payload = ?, updated_at = ?
-      WHERE user_id = ? AND updated_at = ?
-        AND EXISTS (
-          SELECT 1
-            FROM mcp_tokens
-           WHERE user_id = ?
-             AND client_id = ?
-             AND token_type = 'access'
-             AND expires_at > ?
-             AND revoked_at IS NULL
-             AND instr(' ' || scope || ' ', ' ' || ? || ' ') > 0
-        )`,
-  ).bind(
-    JSON.stringify(restoredData),
-    updatedAt,
-    userId,
-    baseUpdatedAt,
-    userId,
-    clientId,
-    updatedAt,
-    MCP_WRITE_SCOPE,
-  ).run();
+  const updatedAt = nextVersion(baseUpdatedAt);
+  let result: D1ResultLike;
+  let createdRevisionId: string | undefined;
+  if (current.data) {
+    createdRevisionId = globalThis.crypto.randomUUID();
+    const mutation = database.prepare(
+      `UPDATE user_data
+          SET payload = ?, updated_at = ?
+        WHERE user_id = ? AND updated_at = ?
+          AND EXISTS (
+            SELECT 1
+              FROM user_data_revisions
+             WHERE id = ?
+               AND user_id = ?
+               AND datetime(expires_at) > datetime(?)
+          )
+          AND EXISTS (
+            SELECT 1
+              FROM mcp_tokens
+             WHERE user_id = ?
+               AND client_id = ?
+               AND token_type = 'access'
+               AND expires_at > ?
+               AND revoked_at IS NULL
+               AND instr(' ' || scope || ' ', ' ' || ? || ' ') > 0
+          )`,
+    ).bind(
+      JSON.stringify(restoredData),
+      updatedAt,
+      userId,
+      baseUpdatedAt,
+      revisionId,
+      userId,
+      now,
+      userId,
+      clientId,
+      now,
+      MCP_WRITE_SCOPE,
+    );
+    result = await runRevisionedMutation(database, userId, createdRevisionId, updatedAt, mutation);
+  } else {
+    result = await database.prepare(
+      `INSERT INTO user_data (user_id, payload, updated_at)
+       SELECT ?, ?, ?
+        WHERE NOT EXISTS (
+          SELECT 1 FROM user_data WHERE user_id = ?
+        )
+          AND EXISTS (
+            SELECT 1
+              FROM user_data_revisions
+             WHERE id = ?
+               AND user_id = ?
+               AND created_at = ?
+               AND datetime(expires_at) > datetime(?)
+          )
+          AND EXISTS (
+            SELECT 1
+              FROM mcp_tokens
+             WHERE user_id = ?
+               AND client_id = ?
+               AND token_type = 'access'
+               AND expires_at > ?
+               AND revoked_at IS NULL
+               AND instr(' ' || scope || ' ', ' ' || ? || ' ') > 0
+          )`,
+    ).bind(
+      userId,
+      JSON.stringify(restoredData),
+      updatedAt,
+      userId,
+      revisionId,
+      userId,
+      baseUpdatedAt,
+      now,
+      userId,
+      clientId,
+      now,
+      MCP_WRITE_SCOPE,
+    ).run();
+  }
 
   if ((result.meta?.changes ?? 0) !== 1) {
     return conflictResult(await loadMcpUserData(database, userId));
@@ -839,7 +1014,7 @@ export const restoreRevision = async (
       kind: 'restore_revision',
       restoredFromRevisionId: revisionId,
     },
-    revisionId: await latestRevisionId(database, userId),
+    revisionId: createdRevisionId,
   };
 };
 

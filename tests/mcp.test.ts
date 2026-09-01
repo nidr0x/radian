@@ -125,6 +125,21 @@ const readRevisionRows = (database: DatabaseSync, userId = 'user-1'): McpRevisio
   `).all(userId) as McpRevisionRow[]
 );
 
+const readRevisionRow = (database: DatabaseSync, revisionId: string): McpRevisionRow | null => (
+  database.prepare(`
+    SELECT
+      id,
+      user_id AS userId,
+      payload,
+      source,
+      created_at AS createdAt,
+      expires_at AS expiresAt,
+      restored_at AS restoredAt
+    FROM user_data_revisions
+    WHERE id = ?
+  `).get(revisionId) as McpRevisionRow | undefined
+) ?? null;
+
 const completedWorkoutFromPlan = (data: AppData): WorkoutSession => {
   const day = data.plan.days[0];
   const plannedExercises = day.exercises.slice(0, 2).map((exercise, index) => ({
@@ -179,7 +194,10 @@ const checkin = (patch: Partial<WeeklyCheckin> = {}): WeeklyCheckin => ({
   ...patch,
 });
 
-const d1FromSqlite = (database: DatabaseSync): D1DatabaseLike => ({
+const d1FromSqlite = (
+  database: DatabaseSync,
+  options: { beforeRun?: (query: string) => void | Promise<void> } = {},
+): D1DatabaseLike => ({
   prepare(query: string) {
     const statement = database.prepare(query);
     let boundValues: unknown[] = [];
@@ -195,6 +213,7 @@ const d1FromSqlite = (database: DatabaseSync): D1DatabaseLike => ({
         return { results: statement.all(...boundValues) as T[] };
       },
       async run() {
+        await options.beforeRun?.(query);
         const result = statement.run(...boundValues);
         return {
           success: true,
@@ -206,8 +225,17 @@ const d1FromSqlite = (database: DatabaseSync): D1DatabaseLike => ({
       },
     };
   },
-  async batch() {
-    throw new Error('batch no está implementado en este helper de test');
+  async batch(statements) {
+    database.exec('BEGIN');
+    try {
+      const results = [];
+      for (const statement of statements) results.push(await statement.run());
+      database.exec('COMMIT');
+      return results;
+    } catch (error) {
+      database.exec('ROLLBACK');
+      throw error;
+    }
   },
 });
 
@@ -1092,6 +1120,48 @@ describe('puente MCP remoto de Radian', () => {
     database.close();
   });
 
+  it('devuelve el revisionId exacto de la revisión creada, sin depender del orden temporal global', async () => {
+    const database = openMigratedDatabase();
+    const data = defaultData();
+    data.progress = [{ id: 'progress-1', date: '2026-08-20', weightKg: 80 }];
+    const baseUpdatedAt = seedUserData(database, data);
+    run(
+      database,
+      'INSERT INTO user_data_revisions (id, user_id, payload, source, created_at, expires_at, restored_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'zzzz-existing-revision',
+      'user-1',
+      JSON.stringify(defaultData()),
+      'manual',
+      '2099-01-01T00:00:00.000Z',
+      '2099-01-31T00:00:00.000Z',
+      null,
+    );
+
+    const preview = await previewChange(d1FromSqlite(database), 'user-1', 'client-1', {
+      kind: 'delete_measurement',
+      measurementId: 'progress-1',
+      baseUpdatedAt,
+    });
+    const result = await applyChange(d1FromSqlite(database), 'user-1', 'client-1', preview.changeId, true);
+
+    expect(result).toMatchObject({
+      revisionId: expect.any(String),
+      summary: {
+        kind: 'delete_measurement',
+        measurementId: 'progress-1',
+      },
+    });
+    const revisionId = (result as { revisionId?: string }).revisionId;
+    expect(revisionId).toBeTruthy();
+    expect(revisionId).not.toBe('zzzz-existing-revision');
+    expect(readRevisionRow(database, revisionId as string)).toMatchObject({
+      id: revisionId,
+      userId: 'user-1',
+      source: 'automatic',
+    });
+    database.close();
+  });
+
   it('lista revisiones vigentes del usuario, purga las caducadas y restaura creando una nueva versión activa', async () => {
     const database = openMigratedDatabase();
     const data = defaultData();
@@ -1195,6 +1265,155 @@ describe('puente MCP remoto de Radian', () => {
     database.close();
   });
 
+  it('restaura una revisión tras delete_all_data insertando de nuevo la fila activa sin sobrescrituras implícitas', async () => {
+    const database = openMigratedDatabase();
+    const original = validateMcpAppData(defaultData());
+    original.sessions = [completedWorkoutFromPlan(original)];
+    original.progress = [{ id: 'progress-1', date: '2026-08-20', weightKg: 80 }];
+    original.checkins = [checkin()];
+    const normalizedOriginal = validateMcpAppData(original);
+    const baseUpdatedAt = seedUserData(database, normalizedOriginal);
+
+    const preview = await previewChange(d1FromSqlite(database), 'user-1', 'client-1', {
+      kind: 'delete_all_data',
+      baseUpdatedAt,
+    });
+    const deleted = await applyChange(d1FromSqlite(database), 'user-1', 'client-1', preview.changeId, true);
+    expect(deleted).toMatchObject({
+      updatedAt: expect.any(String),
+      revisionId: expect.any(String),
+      summary: {
+        kind: 'delete_all_data',
+      },
+    });
+    await expect(loadMcpUserData(d1FromSqlite(database), 'user-1')).resolves.toEqual({ data: null });
+
+    const restoreResult = await restoreRevision(
+      d1FromSqlite(database),
+      'user-1',
+      'client-1',
+      (deleted as { revisionId: string }).revisionId,
+      (deleted as { updatedAt: string }).updatedAt,
+    );
+    expect(restoreResult).toMatchObject({
+      updatedAt: expect.any(String),
+      summary: {
+        kind: 'restore_revision',
+        restoredFromRevisionId: (deleted as { revisionId: string }).revisionId,
+      },
+    });
+    expect(await readStoredPayload(database)).toEqual(normalizedOriginal);
+    expect(readRevisionRow(database, (deleted as { revisionId: string }).revisionId)).toMatchObject({
+      id: (deleted as { revisionId: string }).revisionId,
+      restoredAt: expect.any(String),
+    });
+
+    const recreatedBase = (restoreResult as { updatedAt: string }).updatedAt;
+    run(
+      database,
+      'UPDATE user_data SET payload = ?, updated_at = ? WHERE user_id = ?',
+      JSON.stringify({ ...original, profile: { ...original.profile, gym: 'Recreado' } }),
+      '2026-09-01T09:30:00.000Z',
+      'user-1',
+    );
+    await expect(
+      restoreRevision(
+        d1FromSqlite(database),
+        'user-1',
+        'client-1',
+        (deleted as { revisionId: string }).revisionId,
+        recreatedBase,
+      ),
+    ).resolves.toMatchObject({
+      error: 'conflict',
+      updatedAt: '2026-09-01T09:30:00.000Z',
+      data: {
+        profile: {
+          gym: 'Recreado',
+        },
+      },
+    });
+    database.close();
+  });
+
+  it('no sobrescribe una fila recreada mientras restaura sobre una copia ausente', async () => {
+    const database = openMigratedDatabase();
+    const original = validateMcpAppData(defaultData());
+    const baseUpdatedAt = seedUserData(database, original);
+    const preview = await previewChange(d1FromSqlite(database), 'user-1', 'client-1', {
+      kind: 'delete_all_data',
+      baseUpdatedAt,
+    });
+    const deleted = await applyChange(d1FromSqlite(database), 'user-1', 'client-1', preview.changeId, true);
+    const deletedRevisionId = (deleted as { revisionId: string }).revisionId;
+    const recreated = structuredClone(original);
+    recreated.profile.gym = 'Recreado durante restore';
+    let recreatedBeforeInsert = false;
+
+    const racingDatabase = d1FromSqlite(database, {
+      beforeRun(query) {
+        if (recreatedBeforeInsert || !query.includes('INSERT INTO user_data')) return;
+        recreatedBeforeInsert = true;
+        run(
+          database,
+          'INSERT INTO user_data (user_id, payload, updated_at) VALUES (?, ?, ?)',
+          'user-1',
+          JSON.stringify(recreated),
+          '2026-09-01T09:45:00.000Z',
+        );
+      },
+    });
+
+    await expect(
+      restoreRevision(
+        racingDatabase,
+        'user-1',
+        'client-1',
+        deletedRevisionId,
+        (deleted as { updatedAt: string }).updatedAt,
+      ),
+    ).resolves.toMatchObject({
+      error: 'conflict',
+      updatedAt: '2026-09-01T09:45:00.000Z',
+      data: {
+        profile: {
+          gym: 'Recreado durante restore',
+        },
+      },
+    });
+    expect(await readStoredPayload(database)).toEqual(recreated);
+    expect(readRevisionRow(database, deletedRevisionId)?.restoredAt).toBeNull();
+    database.close();
+  });
+
+  it('permite una sola aplicación concurrente de la misma propuesta y la otra queda indisponible', async () => {
+    const database = openMigratedDatabase();
+    const data = defaultData();
+    data.progress = [{ id: 'progress-1', date: '2026-08-20', weightKg: 80 }];
+    const baseUpdatedAt = seedUserData(database, data);
+
+    const preview = await previewChange(d1FromSqlite(database), 'user-1', 'client-1', {
+      kind: 'delete_measurement',
+      measurementId: 'progress-1',
+      baseUpdatedAt,
+    });
+
+    const [first, second] = await Promise.all([
+      applyChange(d1FromSqlite(database), 'user-1', 'client-1', preview.changeId, true),
+      applyChange(d1FromSqlite(database), 'user-1', 'client-1', preview.changeId, true),
+    ]);
+
+    const successes = [first, second].filter((result) => 'summary' in result && result.summary.kind === 'delete_measurement');
+    const unavailable = [first, second].filter((result) => 'error' in result && result.error === 'change_unavailable');
+
+    expect(successes).toHaveLength(1);
+    expect(unavailable).toHaveLength(1);
+    expect((await readStoredPayload(database)).progress).toEqual([]);
+    expect(readRevisionRows(database)).toHaveLength(1);
+    expect(readPendingChangeRow(database, preview.changeId)?.usedAt).toEqual(expect.any(String));
+    database.close();
+  });
+
   it('aplica la migración real con FKs, índices y snapshots sobre user_data', () => {
     const database = openMigratedDatabase();
     run(database, 'INSERT INTO users (id) VALUES (?)', 'user-1');
@@ -1203,16 +1422,21 @@ describe('puente MCP remoto de Radian', () => {
 
     const revisionColumns = database.prepare('PRAGMA table_info(user_data_revisions)').all<{ name: string; type: string; notnull: number }>();
     const pendingColumns = database.prepare('PRAGMA table_info(mcp_pending_changes)').all<{ name: string; type: string; notnull: number }>();
+    const contextColumns = database.prepare('PRAGMA table_info(mcp_revision_context)').all<{ name: string; type: string; notnull: number }>();
     expect(revisionColumns.find((column) => column.name === 'payload')).toMatchObject({ type: 'TEXT', notnull: 1 });
     expect(pendingColumns.find((column) => column.name === 'payload')).toMatchObject({ type: 'TEXT', notnull: 1 });
     expect(pendingColumns.find((column) => column.name === 'summary')).toMatchObject({ type: 'TEXT', notnull: 1 });
+    expect(contextColumns.find((column) => column.name === 'revision_id')).toMatchObject({ type: 'TEXT', notnull: 1 });
 
     const revisionFks = database.prepare('PRAGMA foreign_key_list(user_data_revisions)').all<{ table: string; on_delete: string }>();
     const pendingFks = database.prepare('PRAGMA foreign_key_list(mcp_pending_changes)').all<{ table: string; on_delete: string }>();
+    const contextFks = database.prepare('PRAGMA foreign_key_list(mcp_revision_context)').all<{ table: string; on_delete: string }>();
     expect(revisionFks.map((fk) => fk.table)).toEqual(['users']);
     expect(revisionFks[0]?.on_delete).toBe('CASCADE');
     expect(pendingFks.map((fk) => fk.table).sort()).toEqual(['mcp_clients', 'users']);
     expect(pendingFks.every((fk) => fk.on_delete === 'CASCADE')).toBe(true);
+    expect(contextFks.map((fk) => fk.table)).toEqual(['users']);
+    expect(contextFks[0]?.on_delete).toBe('CASCADE');
 
     const revisionIndexes = database.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'user_data_revisions' ORDER BY name").all<{ name: string }>().map((row) => row.name);
     const pendingIndexes = database.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'mcp_pending_changes' ORDER BY name").all<{ name: string }>().map((row) => row.name);
@@ -1233,15 +1457,17 @@ describe('puente MCP remoto de Radian', () => {
     run(database, 'UPDATE user_data SET updated_at = ? WHERE user_id = ?', '2026-08-31T21:01:00.000Z', 'user-1');
     expect(database.prepare('SELECT count(*) AS count FROM user_data_revisions').get<{ count: number }>()?.count).toBe(0);
 
+    run(database, 'INSERT INTO mcp_revision_context (user_id, revision_id, created_at) VALUES (?, ?, ?)', 'user-1', 'fixed-revision-id', '2026-08-31T21:01:30.000Z');
     run(database, 'UPDATE user_data SET payload = ?, updated_at = ? WHERE user_id = ?', '{"version":2}', '2026-08-31T21:02:00.000Z', 'user-1');
     run(database, 'DELETE FROM user_data WHERE user_id = ?', 'user-1');
 
-    const revisions = database.prepare('SELECT payload, source, restored_at AS restoredAt FROM user_data_revisions ORDER BY created_at, id').all<{ payload: string; source: string; restoredAt: string | null }>();
+    const revisions = database.prepare('SELECT id, payload, source, restored_at AS restoredAt FROM user_data_revisions ORDER BY created_at, id').all<{ id: string; payload: string; source: string; restoredAt: string | null }>();
     expect(revisions).toHaveLength(2);
     expect(revisions).toEqual(expect.arrayContaining([
-      { payload: '{"version":1}', source: 'automatic', restoredAt: null },
-      { payload: '{"version":2}', source: 'automatic', restoredAt: null },
+      { id: 'fixed-revision-id', payload: '{"version":1}', source: 'automatic', restoredAt: null },
+      { id: expect.any(String), payload: '{"version":2}', source: 'automatic', restoredAt: null },
     ]));
+    expect(database.prepare('SELECT count(*) AS count FROM mcp_revision_context').get<{ count: number }>()?.count).toBe(0);
     database.close();
   });
 });
