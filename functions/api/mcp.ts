@@ -120,6 +120,8 @@ const asControlledWriteError = (value: unknown): ControlledWriteError | null => 
   return null;
 };
 
+const hasBearerSyntax = (request: Request): boolean => /^Bearer\s+[^\s]+$/i.test(request.headers.get('Authorization') ?? '');
+
 const initializeResult = (body: Record<string, unknown>, scope: string) => {
   const params = isRecord(body.params) ? body.params : {};
   const requested = typeof params.protocolVersion === 'string' && SUPPORTED_PROTOCOL_VERSIONS.includes(params.protocolVersion) ? params.protocolVersion : SUPPORTED_PROTOCOL_VERSIONS[0];
@@ -134,12 +136,31 @@ const initializeResult = (body: Record<string, unknown>, scope: string) => {
 };
 
 export const onRequestPost = async (context: SyncContext): Promise<Response> => {
-  const authenticated = await authenticateMcpRequest(context);
-  if (authenticated instanceof Response) return authenticated;
   const body: unknown = await context.request.json().catch(() => undefined);
   if (!isRecord(body) || body.jsonrpc !== '2.0' || typeof body.method !== 'string') return mcpJson(rpcError(null, -32600, 'La solicitud MCP no es válida.'), 400);
   if (!hasRpcId(body) && body.method.startsWith('notifications/')) return new Response(null, { status: 202, headers: { 'Cache-Control': 'no-store' } });
   if (!hasRpcId(body)) return new Response(null, { status: 202, headers: { 'Cache-Control': 'no-store' } });
+
+  const params = isRecord(body.params) ? body.params : {};
+  if (body.method === 'tools/call' && typeof params.name === 'string' && isMcpWriteTool(params.name)) {
+    if (!hasBearerSyntax(context.request)) {
+      const authenticated = await authenticateMcpRequest(context);
+      return authenticated instanceof Response
+        ? authenticated
+        : mcpJson(rpcError(body.id, -32600, 'La solicitud MCP no es válida.'), 400);
+    }
+
+    const args = isRecord(params.arguments) ? params.arguments : {};
+    try {
+      validateWriteCall(params.name, args);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'La mutación no es válida.';
+      return mcpJson(rpcError(body.id, -32602, message), 400);
+    }
+  }
+
+  const authenticated = await authenticateMcpRequest(context);
+  if (authenticated instanceof Response) return authenticated;
 
   if (body.method === 'initialize') {
     const result = initializeResult(body, authenticated.scope);
@@ -150,7 +171,6 @@ export const onRequestPost = async (context: SyncContext): Promise<Response> => 
   if (body.method === 'notifications/initialized') return new Response(null, { status: 202, headers: { 'Cache-Control': 'no-store' } });
   if (body.method !== 'tools/call') return mcpJson(rpcError(body.id, -32601, 'Método MCP no disponible.'), 404);
 
-  const params = isRecord(body.params) ? body.params : {};
   if (typeof params.name !== 'string' || (!isMcpReadTool(params.name) && !isMcpWriteTool(params.name))) {
     return mcpJson(rpcError(body.id, -32602, 'La herramienta solicitada no está disponible.'), 400);
   }
@@ -165,13 +185,7 @@ export const onRequestPost = async (context: SyncContext): Promise<Response> => 
       });
     }
 
-    let validated;
-    try {
-      validated = validateWriteCall(params.name, args);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'La mutación no es válida.';
-      return mcpJson(rpcError(body.id, -32602, message), 400);
-    }
+    const validated = validateWriteCall(params.name, args);
 
     try {
       const value = await writeMcpData(

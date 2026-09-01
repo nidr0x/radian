@@ -290,6 +290,15 @@ const createMcpContext = (
   env: { DB: database },
 });
 
+const failingD1 = (message = 'D1 no debería consultarse'): D1DatabaseLike => ({
+  prepare() {
+    throw new Error(message);
+  },
+  async batch() {
+    throw new Error(message);
+  },
+});
+
 describe('puente MCP remoto de Radian', () => {
   it('expone únicamente herramientas de lectura orientadas a entrenamientos', () => {
     expect(MCP_TOOL_DEFINITIONS.map((tool) => tool.name)).toEqual([
@@ -591,6 +600,31 @@ describe('puente MCP remoto de Radian', () => {
     expect(queries.some((query) => query.includes('FROM user_data'))).toBe(false);
     expect(queries.some((query) => query.includes('UPDATE user_data'))).toBe(false);
     database.close();
+  });
+
+  it('corta un write malformed antes de authenticateMcpRequest aunque haya bearer sintácticamente válido', async () => {
+    const response = await onMcpPost(createMcpContext(
+      failingD1('authenticateMcpRequest no debería consultar D1 para malformed writes'),
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'record_workout',
+          arguments: {
+            workout: completedWorkoutFromPlan(defaultData()),
+          },
+        },
+      },
+      'syntactically-valid-bearer',
+    ));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        code: -32602,
+      },
+    });
   });
 
   it('devuelve un error MCP de ejecución seguro cuando writeMcpData falla en runtime', async () => {
