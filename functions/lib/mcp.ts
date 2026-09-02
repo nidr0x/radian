@@ -5,7 +5,7 @@ import { summarizeSession } from '../../src/lib/sessionSummary';
 import { buildWeeklySummary, weeklySummaryText } from '../../src/lib/weeklySummary';
 import type { AppData, ExerciseSession, ProgressEntry, WorkoutSession } from '../../src/types';
 import { hasMcpScope, MCP_WRITE_SCOPE } from './mcpAuth';
-import { validateMcpAppData, validateMcpWriteOperation } from './mcpWrite';
+import { validateMcpAppData, validateMcpAppDataWithHistoricalSessions, validateMcpWriteOperation } from './mcpWrite';
 import type {
   D1DatabaseLike,
   D1PreparedStatementLike,
@@ -259,7 +259,7 @@ export const loadMcpUserData = async (database: D1DatabaseLike, userId: string):
   if (!row) return { data: null };
   try {
     const parsed: unknown = JSON.parse(row.payload);
-    return { data: validateMcpAppData(parsed), updatedAt: row.updatedAt };
+    return { data: validateMcpAppDataWithHistoricalSessions(parsed), updatedAt: row.updatedAt };
   } catch {
     throw new Error('Los datos de Radian guardados en la nube no se pueden leer.');
   }
@@ -378,7 +378,7 @@ const deleteExpiredUserRevisions = async (database: D1DatabaseLike, userId: stri
 
 const parseStoredRevision = (row: Pick<McpRevisionRow, 'payload'>): AppData => {
   try {
-    return validateMcpAppData(JSON.parse(row.payload));
+    return validateMcpAppDataWithHistoricalSessions(JSON.parse(row.payload));
   } catch {
     throw new Error('La revisión recuperable almacenada no es válida.');
   }
@@ -925,7 +925,7 @@ export const restoreRevision = async (
   }
 
   const restoredData = parseStoredRevision(revision);
-  validateMcpAppData(restoredData);
+  validateMcpAppDataWithHistoricalSessions(restoredData);
 
   const updatedAt = nextVersion(baseUpdatedAt);
   let result: D1ResultLike;
@@ -1065,7 +1065,7 @@ export const writeMcpData = async (
     operation.kind === 'record_workout' ? workoutValidationContext(current.data) : undefined,
   );
   const { next, summary } = applyMutation(current.data, validatedOperation);
-  validateMcpAppData(next);
+  validateMcpAppDataWithHistoricalSessions(next);
 
   const updatedAt = new Date().toISOString();
   const result = await database.prepare(

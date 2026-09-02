@@ -323,6 +323,10 @@ const validateWorkoutSession = (session: Record<string, unknown>, index: number,
   assertInteger(session.activeExerciseIndex, `sessions[${index}].activeExerciseIndex`, 0, Math.max(0, (session.plannedExercises as unknown[]).length));
 };
 
+const validateHistoricalWorkoutSession = (session: Record<string, unknown>, index: number, seenIds: Set<string>): void => {
+  validateWorkoutSession(session, index, undefined, undefined, seenIds);
+};
+
 const validateProgressEntry = (entry: Record<string, unknown>, index: number, seenIds: Set<string>): void => {
   assertAllowedKeys(entry, PROGRESS_KEYS, `progress[${index}]`);
   assertRequiredKeys(entry, ['id', 'date'], `progress[${index}]`);
@@ -353,7 +357,7 @@ const validateCheckin = (checkin: Record<string, unknown>, index: number, seenId
   if (checkin.note !== undefined) assertString(checkin.note, `checkins[${index}].note`, { allowEmpty: false, maxLength: 4000 });
 };
 
-const validateNormalizedAppData = (data: AppData): AppData => {
+const validateNormalizedAppData = (data: AppData, allowHistoricalSessions = false): AppData => {
   const record = assertRecord(data, 'Los datos de Radian');
   validateProfile(assertRecord(record.profile, 'profile'));
 
@@ -366,7 +370,14 @@ const validateNormalizedAppData = (data: AppData): AppData => {
 
   if (!Array.isArray(record.sessions)) throw new Error('sessions debe ser una lista.');
   const sessionIds = new Set<string>();
-  record.sessions.forEach((session, index) => validateWorkoutSession(assertRecord(session, `sessions[${index}]`), index, dayIds, exerciseIds, sessionIds));
+  record.sessions.forEach((session, index) => {
+    const recordSession = assertRecord(session, `sessions[${index}]`);
+    if (allowHistoricalSessions) {
+      validateHistoricalWorkoutSession(recordSession, index, sessionIds);
+      return;
+    }
+    validateWorkoutSession(recordSession, index, dayIds, exerciseIds, sessionIds);
+  });
 
   if (!Array.isArray(record.progress)) throw new Error('progress debe ser una lista.');
   const progressIds = new Set<string>();
@@ -407,6 +418,28 @@ export const validateMcpAppData = (value: unknown): AppData => {
     throw new Error('Los datos de Radian no tienen una estructura válida.');
   }
   return validateNormalizedAppData(normalized);
+};
+
+export const validateMcpAppDataWithHistoricalSessions = (value: unknown): AppData => {
+  assertPayloadSize(value);
+  const record = assertRecord(value, 'Los datos de Radian');
+  assertAllowedKeys(record, APP_DATA_KEYS, 'Los datos de Radian');
+  assertRequiredKeys(record, APP_DATA_KEYS, 'Los datos de Radian');
+  if (typeof record.schemaVersion !== 'number' || !Number.isInteger(record.schemaVersion) || record.schemaVersion < 1 || record.schemaVersion > 7) {
+    throw new Error('schemaVersion no es reconocible.');
+  }
+  if (!isRecord(record.profile) || !isRecord(record.plan) || !Array.isArray(record.sessions) || !Array.isArray(record.exercises) || !Array.isArray(record.progress) || !Array.isArray(record.checkins)) {
+    throw new Error('La estructura principal de los datos de Radian no es válida.');
+  }
+  if (typeof record.onboardingComplete !== 'boolean') throw new Error('onboardingComplete debe ser booleano.');
+  prevalidateAppDataShape(record);
+  let normalized: AppData;
+  try {
+    normalized = migrateData(value);
+  } catch {
+    throw new Error('Los datos de Radian no tienen una estructura válida.');
+  }
+  return validateNormalizedAppData(normalized, true);
 };
 
 const validateProfilePatch = (value: unknown): McpProfilePatch => {

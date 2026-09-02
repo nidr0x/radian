@@ -1223,6 +1223,73 @@ describe('puente MCP remoto de Radian', () => {
     database.close();
   });
 
+  it('conserva sesiones históricas completadas al reemplazar la rutina aunque la nueva rutina no contenga sus IDs', async () => {
+    const database = openMigratedDatabase();
+    const data = defaultData();
+    data.sessions = [completedWorkoutFromPlan(data)];
+    const baseUpdatedAt = seedUserData(database, data);
+
+    const exercises = [{
+      id: 'fresh-exercise-1',
+      name: 'Nuevo empuje',
+      muscleGroup: 'Pecho',
+      equipment: 'machine' as const,
+      aliases: [],
+      imageUrl: '/exercises/individual/chest-press.webp',
+      imagePosition: '',
+    }];
+    const plan = {
+      id: 'fresh-plan',
+      version: 2,
+      days: [{
+        id: 'fresh-day',
+        weekday: 4,
+        shortLabel: 'J',
+        name: 'Rutina nueva',
+        focus: 'Torso',
+        exercises: [{
+          id: 'fresh-day-1',
+          exerciseId: 'fresh-exercise-1',
+          name: 'Nuevo empuje',
+          sets: 3,
+          repMin: 8,
+          repMax: 12,
+          restSeconds: 120,
+          active: true,
+          warmupSets: 0,
+          progressionPolicy: 'double' as const,
+          progressionIncrementKg: 2.5,
+          imageUrl: '/exercises/individual/chest-press.webp',
+          imagePosition: '',
+        }],
+      }],
+    };
+
+    const result = await writeMcpData(d1FromSqlite(database), 'user-1', 'client-1', baseUpdatedAt, {
+      kind: 'replace_routine',
+      plan,
+      exercises,
+    });
+
+    expect(result).toMatchObject({
+      updatedAt: expect.any(String),
+      summary: {
+        kind: 'replace_routine',
+        planId: 'fresh-plan',
+        planVersion: 2,
+        dayCount: 1,
+        exerciseCount: 1,
+      },
+    });
+
+    const stored = await readStoredSnapshot(database);
+    expect(stored.data?.plan).toEqual(plan);
+    expect(stored.data?.exercises).toEqual(exercises);
+    expect(stored.data?.sessions).toHaveLength(1);
+    expect(stored.data?.sessions[0]).toMatchObject(data.sessions[0] ?? {});
+    database.close();
+  });
+
   it('falla en replace_routine sin escrituras parciales cuando el plan no cuadra con el catálogo enviado', async () => {
     const database = openMigratedDatabase();
     const data = defaultData();
