@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { resolve } from 'node:path';
-import { describe, expect, expectTypeOf, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { defaultData } from '../src/data/initialPlan';
 import { onRequestPost as onMcpPost } from '../functions/api/mcp';
 import {
@@ -21,6 +21,17 @@ import { consentPage } from '../functions/api/mcp/authorize';
 import { onRequestGet as onProtectedResourceGet } from '../functions/.well-known/oauth-protected-resource';
 import type { AppData, WeeklyCheckin, WorkoutSession } from '../src/types';
 import type { D1DatabaseLike, McpPendingChangeRow, McpReplaceRoutineOperation, McpRevisionRow, SyncContext } from '../functions/types';
+
+const TEST_NOW = new Date('2026-09-01T12:00:00.000Z');
+
+beforeAll(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(TEST_NOW);
+});
+
+afterAll(() => {
+  vi.useRealTimers();
+});
 
 const loadMigration = (filename = '0006_mcp_revisions.sql'): string => readFileSync(resolve(process.cwd(), 'migrations', filename), 'utf8');
 
@@ -60,7 +71,15 @@ const openMigratedDatabase = (): DatabaseSync => {
   return database;
 };
 
-const run = (database: DatabaseSync, sql: string, ...params: unknown[]): void => {
+type SqlInputValue = null | number | bigint | string | NodeJS.ArrayBufferView;
+
+const toSqlInputValue = (value: unknown): SqlInputValue => {
+  if (value === null || typeof value === 'number' || typeof value === 'bigint' || typeof value === 'string') return value;
+  if (ArrayBuffer.isView(value)) return value as NodeJS.ArrayBufferView;
+  throw new TypeError('El adaptador SQLite del test recibió un parámetro no compatible.');
+};
+
+const run = (database: DatabaseSync, sql: string, ...params: SqlInputValue[]): void => {
   database.prepare(sql).run(...params);
 };
 
@@ -108,6 +127,14 @@ const seedBearerAccessToken = async (
   return bearer;
 };
 
+type McpPreviewSuccess = Extract<Awaited<ReturnType<typeof previewChange>>, { changeId: string }>;
+
+const previewChangeOrThrow = async (...args: Parameters<typeof previewChange>): Promise<McpPreviewSuccess> => {
+  const result = await previewChange(...args);
+  if (!('changeId' in result)) throw new Error('Se esperaba una propuesta MCP válida en el test.');
+  return result;
+};
+
 const seedUserData = (database: DatabaseSync, data: AppData, updatedAt = '2026-08-31T21:00:00.000Z'): string => {
   run(database, 'INSERT INTO users (id) VALUES (?)', 'user-1');
   run(database, 'INSERT INTO mcp_clients (client_id) VALUES (?)', 'client-1');
@@ -142,8 +169,16 @@ const readPendingChangeRow = (database: DatabaseSync, changeId: string): McpPend
   `).get(changeId) as McpPendingChangeRow | undefined
 ) ?? null;
 
+const readSqliteRows = <T>(database: DatabaseSync, sql: string, ...params: SqlInputValue[]): T[] => (
+  database.prepare(sql).all(...params) as unknown as T[]
+);
+
+const readSqliteRow = <T>(database: DatabaseSync, sql: string, ...params: SqlInputValue[]): T | undefined => (
+  database.prepare(sql).get(...params) as unknown as T | undefined
+);
+
 const readRevisionRows = (database: DatabaseSync, userId = 'user-1'): McpRevisionRow[] => (
-  database.prepare(`
+  readSqliteRows<McpRevisionRow>(database, `
     SELECT
       id,
       user_id AS userId,
@@ -155,7 +190,7 @@ const readRevisionRows = (database: DatabaseSync, userId = 'user-1'): McpRevisio
     FROM user_data_revisions
     WHERE user_id = ?
     ORDER BY created_at DESC, id DESC
-  `).all(userId) as McpRevisionRow[]
+  `, userId)
 );
 
 const readRevisionRow = (database: DatabaseSync, revisionId: string): McpRevisionRow | null => (
@@ -234,10 +269,10 @@ const d1FromSqlite = (
   prepare(query: string) {
     options.onPrepare?.(query);
     const statement = database.prepare(query);
-    let boundValues: unknown[] = [];
+    let boundValues: SqlInputValue[] = [];
     return {
       bind(...values: unknown[]) {
-        boundValues = values;
+        boundValues = values.map(toSqlInputValue);
         return this;
       },
       async first<T = Record<string, unknown>>() {
@@ -759,7 +794,7 @@ describe('puente MCP remoto de Radian', () => {
   });
 
   it('rechaza estructuras anidadas mal formadas con un error de validación controlado', () => {
-    const malformed = structuredClone(defaultData()) as Record<string, unknown>;
+    const malformed = structuredClone(defaultData()) as unknown as Record<string, unknown>;
     malformed.plan = {
       ...structuredClone(defaultData()).plan,
       days: [{ id: 'monday', exercises: null }],
@@ -1299,7 +1334,7 @@ describe('puente MCP remoto de Radian', () => {
     data.checkins = [checkin()];
     const baseUpdatedAt = seedUserData(database, data);
 
-    const preview = await previewChange(d1FromSqlite(database), 'user-1', 'client-1', {
+    const preview = await previewChangeOrThrow(d1FromSqlite(database), 'user-1', 'client-1', {
       kind: 'delete_workout',
       workoutId: workout.id,
       baseUpdatedAt,
@@ -1366,7 +1401,7 @@ describe('puente MCP remoto de Radian', () => {
     run(database, 'INSERT INTO mcp_clients (client_id) VALUES (?)', 'client-2');
     seedActiveAccessToken(database, { userId: 'user-1', clientId: 'client-2' });
 
-    const foreignPreview = await previewChange(d1FromSqlite(database), 'user-1', 'client-1', {
+    const foreignPreview = await previewChangeOrThrow(d1FromSqlite(database), 'user-1', 'client-1', {
       kind: 'delete_measurement',
       measurementId: 'progress-1',
       baseUpdatedAt,
@@ -1378,7 +1413,7 @@ describe('puente MCP remoto de Radian', () => {
     expect((await readStoredPayload(database)).progress).toHaveLength(1);
     expect(readPendingChangeRow(database, foreignPreview.changeId)?.usedAt).toBeNull();
 
-    const expiredPreview = await previewChange(d1FromSqlite(database), 'user-1', 'client-1', {
+    const expiredPreview = await previewChangeOrThrow(d1FromSqlite(database), 'user-1', 'client-1', {
       kind: 'delete_checkin',
       checkinId: 'checkin-1',
       baseUpdatedAt,
@@ -1391,7 +1426,7 @@ describe('puente MCP remoto de Radian', () => {
     expect((await readStoredPayload(database)).checkins).toHaveLength(1);
     expect(readPendingChangeRow(database, expiredPreview.changeId)?.usedAt).toBeNull();
 
-    const stalePreview = await previewChange(d1FromSqlite(database), 'user-1', 'client-1', {
+    const stalePreview = await previewChangeOrThrow(d1FromSqlite(database), 'user-1', 'client-1', {
       kind: 'delete_workout',
       workoutId: workout.id,
       baseUpdatedAt,
@@ -1429,7 +1464,7 @@ describe('puente MCP remoto de Radian', () => {
     data.checkins = [checkin()];
     const baseUpdatedAt = seedUserData(database, data);
 
-    const deleteWorkout = await previewChange(d1FromSqlite(database), 'user-1', 'client-1', {
+    const deleteWorkout = await previewChangeOrThrow(d1FromSqlite(database), 'user-1', 'client-1', {
       kind: 'delete_workout',
       workoutId: workout.id,
       baseUpdatedAt,
@@ -1445,7 +1480,7 @@ describe('puente MCP remoto de Radian', () => {
     expect((await readStoredPayload(database)).sessions).toEqual([]);
     const afterWorkoutDeleteUpdatedAt = (await readStoredSnapshot(database)).updatedAt as string;
 
-    const deleteMeasurement = await previewChange(d1FromSqlite(database), 'user-1', 'client-1', {
+    const deleteMeasurement = await previewChangeOrThrow(d1FromSqlite(database), 'user-1', 'client-1', {
       kind: 'delete_measurement',
       measurementId: 'progress-1',
       baseUpdatedAt: afterWorkoutDeleteUpdatedAt,
@@ -1461,7 +1496,7 @@ describe('puente MCP remoto de Radian', () => {
     expect((await readStoredPayload(database)).progress).toEqual([]);
     const afterMeasurementDeleteUpdatedAt = (await readStoredSnapshot(database)).updatedAt as string;
 
-    const deleteCheckin = await previewChange(d1FromSqlite(database), 'user-1', 'client-1', {
+    const deleteCheckin = await previewChangeOrThrow(d1FromSqlite(database), 'user-1', 'client-1', {
       kind: 'delete_checkin',
       checkinId: 'checkin-1',
       baseUpdatedAt: afterMeasurementDeleteUpdatedAt,
@@ -1496,7 +1531,7 @@ describe('puente MCP remoto de Radian', () => {
     replacement.progress = [{ id: 'progress-2', date: '2026-09-01', weightKg: 79.2 }];
     replacement.checkins = [];
 
-    const replacePreview = await previewChange(d1FromSqlite(database), 'user-1', 'client-1', {
+    const replacePreview = await previewChangeOrThrow(d1FromSqlite(database), 'user-1', 'client-1', {
       kind: 'replace_all_data',
       data: replacement,
       baseUpdatedAt,
@@ -1514,7 +1549,7 @@ describe('puente MCP remoto de Radian', () => {
     expect(await readStoredPayload(database)).toEqual(validateMcpAppData(replacement));
     const afterReplaceUpdatedAt = (await readStoredSnapshot(database)).updatedAt as string;
 
-    const deletePreview = await previewChange(d1FromSqlite(database), 'user-1', 'client-1', {
+    const deletePreview = await previewChangeOrThrow(d1FromSqlite(database), 'user-1', 'client-1', {
       kind: 'delete_all_data',
       baseUpdatedAt: afterReplaceUpdatedAt,
     });
@@ -1548,7 +1583,7 @@ describe('puente MCP remoto de Radian', () => {
       null,
     );
 
-    const preview = await previewChange(d1FromSqlite(database), 'user-1', 'client-1', {
+    const preview = await previewChangeOrThrow(d1FromSqlite(database), 'user-1', 'client-1', {
       kind: 'delete_measurement',
       measurementId: 'progress-1',
       baseUpdatedAt,
@@ -1685,7 +1720,7 @@ describe('puente MCP remoto de Radian', () => {
     const normalizedOriginal = validateMcpAppData(original);
     const baseUpdatedAt = seedUserData(database, normalizedOriginal);
 
-    const preview = await previewChange(d1FromSqlite(database), 'user-1', 'client-1', {
+    const preview = await previewChangeOrThrow(d1FromSqlite(database), 'user-1', 'client-1', {
       kind: 'delete_all_data',
       baseUpdatedAt,
     });
@@ -1751,7 +1786,7 @@ describe('puente MCP remoto de Radian', () => {
     const database = openMigratedDatabase();
     const original = validateMcpAppData(defaultData());
     const baseUpdatedAt = seedUserData(database, original);
-    const preview = await previewChange(d1FromSqlite(database), 'user-1', 'client-1', {
+    const preview = await previewChangeOrThrow(d1FromSqlite(database), 'user-1', 'client-1', {
       kind: 'delete_all_data',
       baseUpdatedAt,
     });
@@ -1803,7 +1838,7 @@ describe('puente MCP remoto de Radian', () => {
     data.progress = [{ id: 'progress-1', date: '2026-08-20', weightKg: 80 }];
     const baseUpdatedAt = seedUserData(database, data);
 
-    const preview = await previewChange(d1FromSqlite(database), 'user-1', 'client-1', {
+    const preview = await previewChangeOrThrow(d1FromSqlite(database), 'user-1', 'client-1', {
       kind: 'delete_measurement',
       measurementId: 'progress-1',
       baseUpdatedAt,
@@ -1831,17 +1866,17 @@ describe('puente MCP remoto de Radian', () => {
     run(database, 'INSERT INTO mcp_clients (client_id) VALUES (?)', 'client-1');
     run(database, 'INSERT INTO user_data (user_id, payload, updated_at) VALUES (?, ?, ?)', 'user-1', '{"version":1}', '2026-08-31T21:00:00.000Z');
 
-    const revisionColumns = database.prepare('PRAGMA table_info(user_data_revisions)').all<{ name: string; type: string; notnull: number }>();
-    const pendingColumns = database.prepare('PRAGMA table_info(mcp_pending_changes)').all<{ name: string; type: string; notnull: number }>();
-    const contextColumns = database.prepare('PRAGMA table_info(mcp_revision_context)').all<{ name: string; type: string; notnull: number }>();
+    const revisionColumns = readSqliteRows<{ name: string; type: string; notnull: number }>(database, 'PRAGMA table_info(user_data_revisions)');
+    const pendingColumns = readSqliteRows<{ name: string; type: string; notnull: number }>(database, 'PRAGMA table_info(mcp_pending_changes)');
+    const contextColumns = readSqliteRows<{ name: string; type: string; notnull: number }>(database, 'PRAGMA table_info(mcp_revision_context)');
     expect(revisionColumns.find((column) => column.name === 'payload')).toMatchObject({ type: 'TEXT', notnull: 1 });
     expect(pendingColumns.find((column) => column.name === 'payload')).toMatchObject({ type: 'TEXT', notnull: 1 });
     expect(pendingColumns.find((column) => column.name === 'summary')).toMatchObject({ type: 'TEXT', notnull: 1 });
     expect(contextColumns.find((column) => column.name === 'revision_id')).toMatchObject({ type: 'TEXT', notnull: 1 });
 
-    const revisionFks = database.prepare('PRAGMA foreign_key_list(user_data_revisions)').all<{ table: string; on_delete: string }>();
-    const pendingFks = database.prepare('PRAGMA foreign_key_list(mcp_pending_changes)').all<{ table: string; on_delete: string }>();
-    const contextFks = database.prepare('PRAGMA foreign_key_list(mcp_revision_context)').all<{ table: string; on_delete: string }>();
+    const revisionFks = readSqliteRows<{ table: string; on_delete: string }>(database, 'PRAGMA foreign_key_list(user_data_revisions)');
+    const pendingFks = readSqliteRows<{ table: string; on_delete: string }>(database, 'PRAGMA foreign_key_list(mcp_pending_changes)');
+    const contextFks = readSqliteRows<{ table: string; on_delete: string }>(database, 'PRAGMA foreign_key_list(mcp_revision_context)');
     expect(revisionFks.map((fk) => fk.table)).toEqual(['users']);
     expect(revisionFks[0]?.on_delete).toBe('CASCADE');
     expect(pendingFks.map((fk) => fk.table).sort()).toEqual(['mcp_clients', 'users']);
@@ -1849,8 +1884,8 @@ describe('puente MCP remoto de Radian', () => {
     expect(contextFks.map((fk) => fk.table)).toEqual(['users']);
     expect(contextFks[0]?.on_delete).toBe('CASCADE');
 
-    const revisionIndexes = database.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'user_data_revisions' ORDER BY name").all<{ name: string }>().map((row) => row.name);
-    const pendingIndexes = database.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'mcp_pending_changes' ORDER BY name").all<{ name: string }>().map((row) => row.name);
+    const revisionIndexes = readSqliteRows<{ name: string }>(database, "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'user_data_revisions' ORDER BY name").map((row) => row.name);
+    const pendingIndexes = readSqliteRows<{ name: string }>(database, "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'mcp_pending_changes' ORDER BY name").map((row) => row.name);
     expect(revisionIndexes).toEqual([
       'sqlite_autoindex_user_data_revisions_1',
       'user_data_revisions_expiry_idx',
@@ -1862,23 +1897,23 @@ describe('puente MCP remoto de Radian', () => {
       'sqlite_autoindex_mcp_pending_changes_1',
     ]);
 
-    const triggers = database.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name").all<{ name: string }>().map((row) => row.name);
+    const triggers = readSqliteRows<{ name: string }>(database, "SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name").map((row) => row.name);
     expect(triggers).toEqual(['user_data_revision_after_delete', 'user_data_revision_after_update']);
 
     run(database, 'UPDATE user_data SET updated_at = ? WHERE user_id = ?', '2026-08-31T21:01:00.000Z', 'user-1');
-    expect(database.prepare('SELECT count(*) AS count FROM user_data_revisions').get<{ count: number }>()?.count).toBe(0);
+    expect(readSqliteRow<{ count: number }>(database, 'SELECT count(*) AS count FROM user_data_revisions')?.count).toBe(0);
 
     run(database, 'INSERT INTO mcp_revision_context (user_id, revision_id, created_at) VALUES (?, ?, ?)', 'user-1', 'fixed-revision-id', '2026-08-31T21:01:30.000Z');
     run(database, 'UPDATE user_data SET payload = ?, updated_at = ? WHERE user_id = ?', '{"version":2}', '2026-08-31T21:02:00.000Z', 'user-1');
     run(database, 'DELETE FROM user_data WHERE user_id = ?', 'user-1');
 
-    const revisions = database.prepare('SELECT id, payload, source, restored_at AS restoredAt FROM user_data_revisions ORDER BY created_at, id').all<{ id: string; payload: string; source: string; restoredAt: string | null }>();
+    const revisions = readSqliteRows<{ id: string; payload: string; source: string; restoredAt: string | null }>(database, 'SELECT id, payload, source, restored_at AS restoredAt FROM user_data_revisions ORDER BY created_at, id');
     expect(revisions).toHaveLength(2);
     expect(revisions).toEqual(expect.arrayContaining([
       { id: 'fixed-revision-id', payload: '{"version":1}', source: 'automatic', restoredAt: null },
       { id: expect.any(String), payload: '{"version":2}', source: 'automatic', restoredAt: null },
     ]));
-    expect(database.prepare('SELECT count(*) AS count FROM mcp_revision_context').get<{ count: number }>()?.count).toBe(0);
+    expect(readSqliteRow<{ count: number }>(database, 'SELECT count(*) AS count FROM mcp_revision_context')?.count).toBe(0);
     database.close();
   });
 
@@ -1886,7 +1921,7 @@ describe('puente MCP remoto de Radian', () => {
     const database = openBaseDatabase();
     database.exec(loadMigration('0006_mcp_revisions.sql'));
 
-    const basePendingColumns = database.prepare('PRAGMA table_info(mcp_pending_changes)').all<{ name: string }>().map((column) => column.name);
+    const basePendingColumns = readSqliteRows<{ name: string }>(database, 'PRAGMA table_info(mcp_pending_changes)').map((column) => column.name);
     expect(basePendingColumns).not.toContain('claim_id');
     expect(basePendingColumns).not.toContain('claimed_at');
     expect(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'mcp_revision_context'").get()).toBeUndefined();
@@ -1911,7 +1946,7 @@ describe('puente MCP remoto de Radian', () => {
 
     database.exec(loadMigration('0007_mcp_recovery_hardening.sql'));
 
-    const upgradedPendingColumns = database.prepare('PRAGMA table_info(mcp_pending_changes)').all<{ name: string }>().map((column) => column.name);
+    const upgradedPendingColumns = readSqliteRows<{ name: string }>(database, 'PRAGMA table_info(mcp_pending_changes)').map((column) => column.name);
     expect(upgradedPendingColumns).toEqual(expect.arrayContaining(['claim_id', 'claimed_at']));
     expect(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'mcp_revision_context'").get()).toEqual({ name: 'mcp_revision_context' });
     expect(database.prepare('SELECT id, claim_id AS claimId, claimed_at AS claimedAt FROM mcp_pending_changes').get()).toEqual({
