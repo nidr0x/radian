@@ -705,19 +705,18 @@ describe('puente MCP remoto de Radian', () => {
     };
     expect(body.error).toBeUndefined();
     expect(body.result?.isError).toBe(false);
-    expect(body.result?.structuredContent).toMatchObject({
-      updatedAt: expect.any(String),
-      summary: {
-        kind: 'record_workout',
-        workoutDayId: workout.workoutDayId,
-        dateKey: workout.dateKey,
-        completedExercises: 2,
-      },
+    expect(body.result?.structuredContent?.updatedAt).toEqual(expect.any(String));
+    expect(body.result?.structuredContent?.summary).toMatchObject({
+      kind: 'record_workout',
+      workoutDayId: workout.workoutDayId,
+      dateKey: workout.dateKey,
+      completedExercises: 2,
     });
     expect(body.result?.structuredContent?.updatedAt).not.toBe(baseUpdatedAt);
 
     const stored = await readStoredPayload(database);
     expect(stored.sessions).toHaveLength(1);
+    expect(stored.sessions[0]?.id).toMatch(/^mcp-session-/);
     expect(stored.sessions[0]?.id).not.toBe(workout.id);
     expect(stored.sessions[0]).toMatchObject({
       workoutDayId: workout.workoutDayId,
