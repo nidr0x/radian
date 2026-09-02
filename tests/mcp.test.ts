@@ -658,6 +658,75 @@ describe('puente MCP remoto de Radian', () => {
     database.close();
   });
 
+  it('procesa record_workout válido tras autenticar y persiste una sesión con ID generado', async () => {
+    const database = openMigratedDatabase();
+    const data = defaultData();
+    const baseUpdatedAt = seedUserData(database, data);
+    const bearer = await seedBearerAccessToken(database, {
+      bearer: 'record-valid',
+      userId: 'user-1',
+      clientId: 'client-1',
+      scope: 'radian:read radian:write',
+    });
+    const workout = completedWorkoutFromPlan(data);
+
+    const response = await onMcpPost(createMcpContext(
+      d1FromSqlite(database),
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'record_workout',
+          arguments: {
+            baseUpdatedAt,
+            workout,
+          },
+        },
+      },
+      bearer,
+    ));
+
+    expect(response.status).toBe(200);
+    const body = await response.json() as {
+      result?: {
+        isError?: boolean;
+        structuredContent?: {
+          updatedAt?: string;
+          summary?: {
+            kind?: string;
+            workoutDayId?: string;
+            dateKey?: string;
+            completedExercises?: number;
+          };
+        };
+      };
+      error?: { code?: number };
+    };
+    expect(body.error).toBeUndefined();
+    expect(body.result?.isError).toBe(false);
+    expect(body.result?.structuredContent).toMatchObject({
+      updatedAt: expect.any(String),
+      summary: {
+        kind: 'record_workout',
+        workoutDayId: workout.workoutDayId,
+        dateKey: workout.dateKey,
+        completedExercises: 2,
+      },
+    });
+    expect(body.result?.structuredContent?.updatedAt).not.toBe(baseUpdatedAt);
+
+    const stored = await readStoredPayload(database);
+    expect(stored.sessions).toHaveLength(1);
+    expect(stored.sessions[0]?.id).not.toBe(workout.id);
+    expect(stored.sessions[0]).toMatchObject({
+      workoutDayId: workout.workoutDayId,
+      dateKey: workout.dateKey,
+      status: 'completed',
+    });
+    database.close();
+  });
+
   it('corta un write malformed antes de authenticateMcpRequest aunque haya bearer sintácticamente válido', async () => {
     const response = await onMcpPost(createMcpContext(
       failingD1('authenticateMcpRequest no debería consultar D1 para malformed writes'),
