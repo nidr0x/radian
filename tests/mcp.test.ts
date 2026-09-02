@@ -108,7 +108,8 @@ const seedBearerAccessToken = async (
     userId = 'user-1',
     clientId = 'client-1',
     scope = 'radian:read radian:write',
-  }: { bearer?: string; userId?: string; clientId?: string; scope?: string } = {},
+    expiresAt = '2026-09-01T20:00:00.000Z',
+  }: { bearer?: string; userId?: string; clientId?: string; scope?: string; expiresAt?: string } = {},
 ): Promise<string> => {
   run(database, 'INSERT OR IGNORE INTO users (id) VALUES (?)', userId);
   run(database, 'INSERT OR IGNORE INTO mcp_clients (client_id) VALUES (?)', clientId);
@@ -121,7 +122,7 @@ const seedBearerAccessToken = async (
     userId,
     scope,
     '2026-08-31T20:00:00.000Z',
-    '2026-09-01T20:00:00.000Z',
+    expiresAt,
     null,
   );
   return bearer;
@@ -454,6 +455,26 @@ describe('puente MCP remoto de Radian', () => {
 
     expect(response.status).toBe(401);
     expect(response.headers.get('WWW-Authenticate')).toContain('Bearer realm="radian"');
+    await expect(response.json()).resolves.toMatchObject({
+      error: 'unauthorized',
+    });
+    database.close();
+  });
+
+  it('rechaza un bearer OAuth expirado', async () => {
+    const database = openMigratedDatabase();
+    const bearer = await seedBearerAccessToken(database, {
+      bearer: 'expired-access',
+      expiresAt: '2026-09-01T11:59:59.999Z',
+    });
+
+    const response = await onMcpPost(createMcpContext(
+      d1FromSqlite(database),
+      { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+      bearer,
+    ));
+
+    expect(response.status).toBe(401);
     await expect(response.json()).resolves.toMatchObject({
       error: 'unauthorized',
     });
