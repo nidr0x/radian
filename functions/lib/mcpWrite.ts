@@ -398,7 +398,7 @@ const validateNormalizedAppData = (data: AppData, allowHistoricalSessions = fals
   return data;
 };
 
-export const validateMcpAppData = (value: unknown): AppData => {
+const validateMcpAppDataInternal = (value: unknown, allowHistoricalSessions: boolean): AppData => {
   assertPayloadSize(value);
   const record = assertRecord(value, 'Los datos de Radian');
   assertAllowedKeys(record, APP_DATA_KEYS, 'Los datos de Radian');
@@ -417,29 +417,15 @@ export const validateMcpAppData = (value: unknown): AppData => {
   } catch {
     throw new Error('Los datos de Radian no tienen una estructura válida.');
   }
-  return validateNormalizedAppData(normalized);
+  return validateNormalizedAppData(normalized, allowHistoricalSessions);
+};
+
+export const validateMcpAppData = (value: unknown): AppData => {
+  return validateMcpAppDataInternal(value, false);
 };
 
 export const validateMcpAppDataWithHistoricalSessions = (value: unknown): AppData => {
-  assertPayloadSize(value);
-  const record = assertRecord(value, 'Los datos de Radian');
-  assertAllowedKeys(record, APP_DATA_KEYS, 'Los datos de Radian');
-  assertRequiredKeys(record, APP_DATA_KEYS, 'Los datos de Radian');
-  if (typeof record.schemaVersion !== 'number' || !Number.isInteger(record.schemaVersion) || record.schemaVersion < 1 || record.schemaVersion > 7) {
-    throw new Error('schemaVersion no es reconocible.');
-  }
-  if (!isRecord(record.profile) || !isRecord(record.plan) || !Array.isArray(record.sessions) || !Array.isArray(record.exercises) || !Array.isArray(record.progress) || !Array.isArray(record.checkins)) {
-    throw new Error('La estructura principal de los datos de Radian no es válida.');
-  }
-  if (typeof record.onboardingComplete !== 'boolean') throw new Error('onboardingComplete debe ser booleano.');
-  prevalidateAppDataShape(record);
-  let normalized: AppData;
-  try {
-    normalized = migrateData(value);
-  } catch {
-    throw new Error('Los datos de Radian no tienen una estructura válida.');
-  }
-  return validateNormalizedAppData(normalized, true);
+  return validateMcpAppDataInternal(value, true);
 };
 
 const validateProfilePatch = (value: unknown): McpProfilePatch => {
@@ -511,11 +497,12 @@ export const validateMcpWriteOperation = (value: unknown, context?: McpWorkoutVa
     assertAllowedKeys(operation, ['kind', 'plan', 'exercises'], 'operation');
     const exercises = operation.exercises;
     if (!Array.isArray(exercises) || exercises.length === 0) throw new Error('operation.exercises debe incluir el catálogo de ejercicios.');
+    const blankData = migrateData({});
     const normalized = validateMcpAppData({
-      ...migrateData({}),
+      ...blankData,
       schemaVersion: 7,
       onboardingComplete: false,
-      profile: migrateData({}).profile,
+      profile: blankData.profile,
       exercises,
       plan: operation.plan,
       sessions: [],
