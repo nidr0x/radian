@@ -113,7 +113,7 @@ Examples: `what did I do for press last week?`, `what is my best estimated 1RM f
 
 Run the server smoke test with `node --test mcp/radian-mcp.smoke.mjs`.
 
-## Remote MCP for ChatGPT (optional, read/write with separate consent)
+## Remote MCP (optional, read/write with separate consent)
 
 Radian also exposes a remote MCP server at `https://radian.nidr0x.win/api/mcp`. Clients such as Codex, Claude, and other MCP-compatible apps register that endpoint once and then reuse it for future sessions. OAuth with PKCE keeps the connection tied to the Radian account that approves it; the client does not receive a Radian password or passkey.
 
@@ -124,17 +124,16 @@ The remote server exposes two scopes:
 
 Read tools stay limited to profile, weekly coaching, workouts, exercise history, bodyweight, progression recommendations, and revision history. Write tools are separate and only available after `radian:write` consent.
 
-To connect it from ChatGPT on the web:
+To connect it from a compatible MCP client:
 
 1. Create the account in Radian, sign in with your passkey, and use `Perfil → Sincronizar dispositivos` so the account has a current copy in D1.
-2. Enable Developer mode in ChatGPT if your plan or workspace provides it, then create a custom app from `Settings → Apps`.
-3. Enter `Radian` as the app name and `https://radian.nidr0x.win/api/mcp` as the MCP server URL. Leave authentication on OAuth and scan the server metadata.
-4. Approve the `radian:read` consent first. If you later need writing, approve `radian:write` separately so the client can call the write tools.
-5. Ask questions such as `resume mis entrenamientos de esta semana`, `cómo va mi press banca`, or `qué me recomiendas para la próxima sesión`.
+2. Add `https://radian.nidr0x.win/api/mcp` as a remote MCP server and leave authentication on OAuth so the client can read the server metadata.
+3. Approve the `radian:read` consent first. If you later need writing, approve `radian:write` separately so the client can call the write tools.
+4. Ask questions such as `resume mis entrenamientos de esta semana`, `cómo va mi press banca`, or `qué me recomiendas para la próxima sesión`.
 
 Write operations use a guarded flow: first `preview_change`, then `apply_change` with `confirm=true` for destructive actions. If the server returns `needs_version`, refresh the tool input with the current revision before retrying. If it returns `conflict`, use the existing conflict UI in Radian to inspect the remote copy, compare revisions, and sync the local copy safely before trying again.
 
-The revision tools are `list_revisions` and `restore_revision`. Radian keeps recoverable remote revisions for 30 days, so a reverted or mistaken change can usually be restored within that window. The remote tools are scoped to the account that authorized the connection, and the server rejects requests without a valid access token. Availability of custom MCP apps and Developer mode depends on the ChatGPT plan and workspace policy.
+The revision tools are `list_revisions` and `restore_revision`. Radian keeps recoverable remote revisions for 30 days, so a reverted or mistaken change can usually be restored within that window. The remote tools are scoped to the account that authorized the connection, and the server rejects requests without a valid access token.
 
 The authentication Functions use `AUTH_RATE_LIMITER` when the environment provides it. If that binding is unavailable, they apply a per-IP, per-route limit in D1. If D1 is unavailable too, they return a controlled error instead of allowing unlimited attempts. Pages also provides Function logs and metrics in the Cloudflare dashboard.
 

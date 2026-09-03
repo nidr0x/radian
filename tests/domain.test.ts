@@ -261,7 +261,7 @@ describe('resumen semanal', () => {
     expect(weeklySummaryText(data, new Date('2026-08-20T12:00:00'))).toContain('1/4 sesiones completadas');
   });
 
-  it('incluye contexto del gimnasio y detalle por ejercicio para revisarlo con ChatGPT', () => {
+  it('incluye contexto del gimnasio y detalle por ejercicio en el resumen semanal', () => {
     const data = defaultData();
     data.profile.gym = 'Evanfit Picanya';
     const session = createSession(data.plan.days[0], '2026-08-18', new Date('2026-08-18T10:00:00Z'));
