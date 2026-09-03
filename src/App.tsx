@@ -12,13 +12,14 @@ import { progressionAction, progressionCue, recommendationFor } from './lib/reco
 import { isWorkSet } from './lib/progression';
 import { bestRecordForExercise, detectPersonalRecord, type ExerciseRecord } from './lib/records';
 import { createSession, createSetLogs, loadData, migrateData, parseBackup, persistData, serializeBackup } from './lib/storage';
+import { exerciseTrend } from './lib/exerciseHistory';
 import { deleteSyncData, generateSyncKey, loadSyncState, normalizeSyncKey, persistSyncState, pullSyncData, pushSyncData, SyncApiError, type SyncState } from './lib/sync';
 import { buildWeeklySummary } from './lib/weeklySummary';
 import { requestScreenWakeLock, type ScreenWakeLock } from './lib/wakeLock';
 import { summarizeSession, type SessionSummary } from './lib/sessionSummary';
 import { addPasskey, AuthApiError, currentUser, listPasskeys, loginWithPasskey, logout, logoutEverywhere, pullCloudData, pushCloudData, registerPasskey, renamePasskey, revokePasskey, type AuthPasskey, type AuthUser, type CloudData } from './lib/auth';
 import type {
-  AppData, Difficulty, Energy, ExperienceLevel, ExerciseDefinition, ExerciseGuidance, ExerciseSession, PlannedExercise, ProgressEntry, ProgressionPolicy, SetLog, Theme, UserProfile, View, WeeklyCheckin, WorkoutDay, WorkoutSession,
+  AppData, Difficulty, Energy, ExperienceLevel, ExerciseDefinition, ExerciseGuidance, ExerciseSession, PlannedExercise, ProgressEntry, ProgressionPolicy, SessionReadiness, SetLog, Soreness, Theme, UserProfile, View, WeeklyCheckin, WorkoutDay, WorkoutSession,
 } from './types';
 
 const navItems: Array<{ id: View; label: string; icon: typeof Activity }> = [
@@ -295,10 +296,10 @@ function App() {
     };
   }, [hasActiveSession]);
 
-  const startSession = (day: WorkoutDay): void => {
+  const startSession = (day: WorkoutDay, readiness?: SessionReadiness): void => {
     const existing = data.sessions.find((session) => session.status === 'in_progress');
     if (existing) { setView('today'); setToast('Tienes una sesión pendiente'); return; }
-    const session = createSession(day, dateKey(), new Date(), data.sessions);
+    const session = createSession(day, dateKey(), new Date(), data.sessions, readiness);
     updateData((current) => ({ ...current, sessions: [...current.sessions, session] }));
     setView('today');
     setToast('Sesión preparada');
@@ -750,8 +751,10 @@ function SessionExitDialog({ onCancel, onConfirm }: { onCancel: () => void; onCo
   return <div className="session-exit-backdrop" role="presentation" onMouseDown={onCancel}><section className="session-exit-dialog" role="dialog" aria-modal="true" aria-labelledby="session-exit-title" onMouseDown={(event) => event.stopPropagation()}><div className="session-exit-heading"><p className="eyebrow">salir de la sesión</p><button className="icon-button subtle" type="button" aria-label="Cerrar aviso" onClick={onCancel}><X size={18} /></button></div><h2 id="session-exit-title">¿Pausar aquí?</h2><p>Tu progreso se ha guardado en este dispositivo. Podrás continuar desde Hoy cuando quieras.</p><div className="session-exit-actions"><button className="secondary-button" type="button" onClick={onCancel}>Seguir entrenando</button><button className="danger-button" type="button" onClick={onConfirm}>Salir de la sesión</button></div></section></div>;
 }
 
-function TodayView({ data, todayDay, activeSession, restRemaining, screenWakeLockActive, onStart, onComplete, onDraft, onSwapExercise, onRest, onNavigate, onUndo, canUndo, onExit, onHelp }: { data: AppData; todayDay?: WorkoutDay; activeSession?: WorkoutSession; restRemaining: number; screenWakeLockActive: boolean; onStart: (day: WorkoutDay) => void; onComplete: (session: WorkoutSession, exercise: ExerciseSession, patch: Partial<ExerciseSession>, startRest: boolean) => void; onDraft: (sessionId: string, plannedExerciseId: string, patch: Partial<ExerciseSession>) => void; onSwapExercise: (sessionId: string, plannedExerciseId: string, replacement: ExerciseDefinition) => void; onRest: () => void; onNavigate: (view: View) => void; onUndo: () => void; canUndo: boolean; onExit: () => void; onHelp: () => void }) {
+function TodayView({ data, todayDay, activeSession, restRemaining, screenWakeLockActive, onStart, onComplete, onDraft, onSwapExercise, onRest, onNavigate, onUndo, canUndo, onExit, onHelp }: { data: AppData; todayDay?: WorkoutDay; activeSession?: WorkoutSession; restRemaining: number; screenWakeLockActive: boolean; onStart: (day: WorkoutDay, readiness?: SessionReadiness) => void; onComplete: (session: WorkoutSession, exercise: ExerciseSession, patch: Partial<ExerciseSession>, startRest: boolean) => void; onDraft: (sessionId: string, plannedExerciseId: string, patch: Partial<ExerciseSession>) => void; onSwapExercise: (sessionId: string, plannedExerciseId: string, replacement: ExerciseDefinition) => void; onRest: () => void; onNavigate: (view: View) => void; onUndo: () => void; canUndo: boolean; onExit: () => void; onHelp: () => void }) {
   const [detailExercise, setDetailExercise] = useState<PlannedExercise>();
+  const [readinessOpen, setReadinessOpen] = useState(false);
+  const [readiness, setReadiness] = useState<SessionReadiness>({ energy: 'normal', soreness: 'none' });
   const day = activeSession ? data.plan.days.find((item) => item.id === activeSession.workoutDayId) : todayDay;
   const completedCount = activeSession?.plannedExercises.filter((item) => item.completed).length ?? 0;
   const scheduledDays = scheduledWorkoutDays(data.plan.days, data.profile.trainingDays);
@@ -778,9 +781,21 @@ function TodayView({ data, todayDay, activeSession, restRemaining, screenWakeLoc
       {completedSummary && <CompletedSessionSummary summary={completedSummary} onViewProgress={() => onNavigate('progress')} />}
       <div className="section-heading"><div><p className="eyebrow">el plan</p><h2>{workoutDay.weekday === currentWeekday() ? 'Tu sesión' : 'Próximo entrenamiento'}</h2></div><button className="text-button" onClick={() => onNavigate('routine')}>Editar rutina <ChevronRight size={16} /></button></div>
       <div className="exercise-list">{workoutDay.exercises.filter((exercise) => exercise.active).map((exercise, index) => <ExercisePreview key={exercise.id} exercise={exercise} index={index} muscleGroup={data.exercises.find((item) => item.id === exercise.exerciseId)?.muscleGroup} progressionAction={progressionAction(exercise.exerciseId, data.sessions, exercise)} lastSession={latestExercise(data.sessions, exercise.exerciseId)} onOpenDetails={() => setDetailExercise(exercise)} />)}</div>
-      <button className="primary-button start-button" onClick={() => onStart(workoutDay)}><Play size={18} fill="currentColor" /> Empezar sesión</button>
+      {readinessOpen && <ReadinessPrompt value={readiness} onChange={setReadiness} onSkip={() => { setReadinessOpen(false); onStart(workoutDay); }} onStart={() => { setReadinessOpen(false); onStart(workoutDay, readiness); }} />}
+      <button className="primary-button start-button" type="button" onClick={() => setReadinessOpen(true)}><Play size={18} fill="currentColor" /> Empezar sesión</button>
     </>}
   </section>{detailExercise && <ExerciseDetailSheet exercise={detailExercise} muscleGroup={data.exercises.find((item) => item.id === detailExercise.exerciseId)?.muscleGroup} guidance={exerciseGuidance[detailExercise.exerciseId]} recommendation={recommendationFor(detailExercise.exerciseId, data.sessions)} progressionAction={progressionAction(detailExercise.exerciseId, data.sessions, detailExercise)} lastSession={latestExercise(data.sessions, detailExercise.exerciseId)} onClose={() => setDetailExercise(undefined)} />}</>;
+}
+
+function ReadinessPrompt({ value, onChange, onSkip, onStart }: { value: SessionReadiness; onChange: (value: SessionReadiness) => void; onSkip: () => void; onStart: () => void }) {
+  const energyOptions: Array<{ value: Energy; label: string }> = [
+    { value: 'low', label: 'Baja' }, { value: 'normal', label: 'Normal' }, { value: 'high', label: 'Alta' },
+  ];
+  const sorenessOptions: Array<{ value: Soreness; label: string }> = [
+    { value: 'none', label: 'Ninguna' }, { value: 'some', label: 'Algo' }, { value: 'high', label: 'Mucha' },
+  ];
+  const choices = (options: Array<{ value: Energy | Soreness; label: string }>, selected: Energy | Soreness, update: (value: Energy | Soreness) => void) => options.map((option) => <button key={option.value} className={selected === option.value ? 'readiness-choice selected' : 'readiness-choice'} type="button" aria-pressed={selected === option.value} onClick={() => update(option.value)}>{option.label}</button>);
+  return <section className="readiness-panel" aria-labelledby="readiness-title"><div><p className="eyebrow">check-in rápido · opcional</p><h3 id="readiness-title">¿Cómo llegas hoy?</h3><p>Solo sirve para dar contexto a tu histórico. No cambia la rutina ni te obliga a responder.</p></div><div className="readiness-group"><span>Energía</span><div className="readiness-choices">{choices(energyOptions, value.energy, (next) => onChange({ ...value, energy: next as Energy }))}</div></div><div className="readiness-group"><span>Molestias musculares</span><div className="readiness-choices">{choices(sorenessOptions, value.soreness, (next) => onChange({ ...value, soreness: next as Soreness }))}</div></div><div className="readiness-actions"><button className="secondary-button small" type="button" onClick={onSkip}>Empezar sin responder</button><button className="primary-button small" type="button" onClick={onStart}>Guardar y empezar</button></div></section>;
 }
 
 function ExercisePreview({ exercise, index, muscleGroup, progressionAction: action, lastSession, onOpenDetails }: { exercise: PlannedExercise; index: number; muscleGroup?: string; progressionAction?: ReturnType<typeof progressionAction>; lastSession?: ExerciseSession; onOpenDetails: () => void }) {
@@ -953,8 +968,50 @@ function ProgressView({ data, onAddProgress, onAddCheckin, onInfo }: { data: App
   const previousWaist = waistEntries.at(-2);
   const saveMeasure = (event: React.FormEvent): void => { event.preventDefault(); onAddProgress(Object.fromEntries(Object.entries(form).filter(([, value]) => value !== '').map(([key, value]) => [key, Number(value)])) as Omit<ProgressEntry, 'id' | 'date'>); setForm({ weightKg: '', waistCm: '', chestCm: '', armCm: '', hipCm: '' }); setMeasureOpen(false); };
   return <section className="view-section"><PageHeader eyebrow="señales, no ruido" title="Tu progreso" action={<button className="icon-button subtle" type="button" aria-label="Información sobre las métricas" onClick={onInfo}><Info size={19} /></button>} /><div className="metric-grid"><MetricCard label="Peso actual" value={lastWeight?.weightKg !== undefined ? formatWeight(lastWeight.weightKg) : formatWeight(data.profile.currentWeightKg)} change={changeLabel(lastWeight?.weightKg, previousWeight?.weightKg)} icon={<Activity size={17} />} /><MetricCard label="Cintura" value={lastWaist?.waistCm !== undefined ? `${lastWaist.waistCm.toLocaleString('es-ES', { maximumFractionDigits: 1 })} cm` : 'Sin registro'} change={changeLabel(lastWaist?.waistCm, previousWaist?.waistCm, ' cm')} icon={<Gauge size={17} />} /><MetricCard label="Adherencia" value={`${Math.min(completedThisWeek, weeklyTarget)}/${weeklyTarget}`} change="esta semana" icon={<Check size={17} />} /></div><section className="progress-card weekly-adherence-card"><div className="section-heading compact"><div><p className="eyebrow">esta semana</p><h2>Tu constancia</h2></div><strong className="weekly-score">{completedThisWeek}/{weeklyTarget}</strong></div><div className="week-strip" aria-label="Entrenamientos de la semana">{weekDays.map((day) => <div className={day.completed ? 'week-day completed' : day.planned ? 'week-day planned' : 'week-day'} key={day.key}><span>{day.label}</span><i aria-hidden="true">{day.completed ? '✓' : day.planned ? '·' : ''}</i></div>)}</div><p className="history-caption">{completedThisWeek === 0 ? 'Todavía no hay entrenamientos guardados esta semana.' : `${completedThisWeek} de ${weeklyTarget} sesiones previstas ya están guardadas.`}</p></section><section className="progress-card"><div className="section-heading compact"><div><p className="eyebrow">evolución corporal</p><h2>Medidas en el tiempo</h2></div><button className="text-button" onClick={() => setMeasureOpen((value) => !value)}><Plus size={16} /> Añadir</button></div>{measureOpen && <form className="measurement-form" onSubmit={saveMeasure}><NumberField label="Peso" unit="kg" value={form.weightKg} onChange={(value) => setForm((current) => ({ ...current, weightKg: value }))} /><NumberField label="Cintura" unit="cm" value={form.waistCm} onChange={(value) => setForm((current) => ({ ...current, waistCm: value }))} /><NumberField label="Pecho" unit="cm" value={form.chestCm} onChange={(value) => setForm((current) => ({ ...current, chestCm: value }))} /><NumberField label="Brazo" unit="cm" value={form.armCm} onChange={(value) => setForm((current) => ({ ...current, armCm: value }))} /><NumberField label="Cadera" unit="cm · opcional" value={form.hipCm} onChange={(value) => setForm((current) => ({ ...current, hipCm: value }))} /><button className="primary-button small" type="submit">Guardar medidas</button></form>}<WeightChart entries={progress} /><div className="trend-list"><TrendRow label="Cintura" values={progress.map((item) => item.waistCm)} unit="cm" /></div>{data.progress.length === 0 && <div className="empty-state"><span className="empty-icon"><Activity size={19} /></span><strong>Aún no hay medidas</strong><p>Registra solo lo que te apetezca comparar. No hace falta hacerlo cada día.</p></div>}</section>{performance.length > 0 && <section className="progress-card performance-card"><div className="section-heading compact"><div><p className="eyebrow">señal de entrenamiento</p><h2>Rendimiento reciente</h2></div><Gauge size={19} /></div><div className="performance-list">{performance.map((item) => <div className="performance-row" key={item.exerciseId}><div><strong>{item.name}</strong><span>{item.load !== undefined ? `${formatWeight(item.load)} · ${item.reps ?? '-'} reps` : 'Sin carga registrada'}</span></div><b>{formatVolume(item.volume)}</b></div>)}</div></section>}<section className="checkin-card"><div className="checkin-mark"><Sun size={21} /></div><div className="checkin-copy"><p className="eyebrow">cierre semanal</p><h2>{currentCheckin ? 'Check-in guardado' : '¿Cómo ha ido la semana?'}</h2><p>{currentCheckin ? 'Puedes editarlo cuando quieras.' : 'Dos minutos para poner contexto a tus datos.'}</p></div><button className="text-button" onClick={() => setCheckinOpen((value) => !value)}>{currentCheckin ? 'Editar' : 'Hacer check-in'} <ChevronRight size={16} /></button></section>{checkinOpen && <CheckinForm existing={currentCheckin} onSave={(value) => { onAddCheckin(value); setCheckinOpen(false); }} />}
+    <ExerciseTrendCard data={data} />
     <HistoryPanel data={data} />
     <WeeklyReviewCard summary={weeklySummary} /></section>;
+}
+
+interface ExerciseTrendOption { id: string; name: string }
+
+function exerciseTrendOptions(data: AppData): ExerciseTrendOption[] {
+  const options = new Map<string, ExerciseTrendOption>();
+  data.sessions.filter((session) => session.status === 'completed').forEach((session) => session.plannedExercises.forEach((exercise) => {
+    if (!options.has(exercise.exerciseId)) options.set(exercise.exerciseId, { id: exercise.exerciseId, name: exercise.name });
+  }));
+  return Array.from(options.values()).sort((a, b) => a.name.localeCompare(b.name, 'es'));
+}
+
+function ExerciseTrendCard({ data }: { data: AppData }) {
+  const [selectedExerciseId, setSelectedExerciseId] = useState('');
+  const options = exerciseTrendOptions(data);
+  const selected = options.find((option) => option.id === selectedExerciseId) ?? options[0];
+  if (!selected) return null;
+  const trend = exerciseTrend(selected.id, data.sessions);
+  const weighted = trend.some((point) => point.maxWeightKg !== undefined);
+  const chartPoints = trend.filter((point) => weighted ? point.maxWeightKg !== undefined : true);
+  if (chartPoints.length === 0) return null;
+  const latest = chartPoints.at(-1)!;
+  const values = chartPoints.map((point) => weighted ? point.maxWeightKg! : point.volumeKg);
+  const minimum = Math.min(...values);
+  const maximum = Math.max(...values);
+  const range = Math.max(maximum - minimum, 1);
+  const width = 320;
+  const plotTop = 14;
+  const plotBottom = 122;
+  const points = chartPoints.map((point, index) => ({
+    x: chartPoints.length === 1 ? width / 2 : 12 + (index / (chartPoints.length - 1)) * (width - 24),
+    y: plotBottom - ((values[index] - minimum) / range) * (plotBottom - plotTop),
+    date: point.date,
+  }));
+  const linePath = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(' ');
+  const areaPath = `${linePath} L ${points.at(-1)!.x.toFixed(2)} ${plotBottom} L ${points[0].x.toFixed(2)} ${plotBottom} Z`;
+  const scaleValues = [maximum, minimum + range / 2, minimum];
+  const numberFormat = { maximumFractionDigits: 1 } as const;
+  const displayValue = (value: number): string => weighted ? `${value.toLocaleString('es-ES', numberFormat)} kg` : formatVolume(value);
+  const metricLabel = weighted ? 'carga máxima' : 'volumen';
+  return <section className="progress-card exercise-trend-card" aria-labelledby="exercise-trend-heading"><div className="section-heading compact"><div><p className="eyebrow">histórico por ejercicio</p><h2 id="exercise-trend-heading">Tu evolución</h2></div><History size={19} /></div><label className="exercise-trend-select" htmlFor="exercise-trend-picker"><span>Ejercicio</span><select id="exercise-trend-picker" value={selected.id} onChange={(event) => setSelectedExerciseId(event.target.value)}>{options.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label><div className="weight-chart-reading exercise-trend-reading"><strong>{displayValue(weighted ? latest.maxWeightKg! : latest.volumeKg)}</strong><span>{metricLabel} · {formatDate(latest.date, { day: 'numeric', month: 'short' })}</span></div><div className="weight-chart-body"><div className="weight-chart-scale" aria-hidden="true">{scaleValues.map((value, index) => <span key={`${value}-${index}`}>{weighted ? `${value.toLocaleString('es-ES', numberFormat)} kg` : formatVolume(value)}</span>)}</div><svg className="weight-chart-svg" viewBox="0 0 320 140" role="img" aria-labelledby="exercise-trend-title exercise-trend-description" preserveAspectRatio="none"><title id="exercise-trend-title">Evolución de {selected.name}</title><desc id="exercise-trend-description">{`${metricLabel} registrado entre ${formatDate(chartPoints[0].date, { day: 'numeric', month: 'long', year: 'numeric' })} y ${formatDate(latest.date, { day: 'numeric', month: 'long', year: 'numeric' })}.`}</desc><defs><linearGradient id="exercise-trend-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="var(--accent)" stopOpacity=".32" /><stop offset="100%" stopColor="var(--accent)" stopOpacity="0" /></linearGradient></defs>{[plotTop, (plotTop + plotBottom) / 2, plotBottom].map((y) => <line className="weight-chart-gridline" key={y} x1="0" x2={width} y1={y} y2={y} />)}{chartPoints.length > 1 && <path className="weight-chart-area exercise-trend-area" d={areaPath} />}<path className="weight-chart-line" d={linePath} />{points.map((point, index) => <circle className={index === points.length - 1 ? 'weight-chart-point is-latest' : 'weight-chart-point'} key={`${point.x}-${point.y}`} cx={point.x} cy={point.y} r={index === points.length - 1 ? 4.5 : 3} />)}</svg></div><div className="weight-chart-footer"><span>{formatDate(chartPoints[0].date, { month: 'short', year: 'numeric' })}</span><span>{chartPoints.length} {chartPoints.length === 1 ? 'registro' : 'registros'}</span><span>{formatDate(latest.date, { month: 'short', year: 'numeric' })}</span></div>{chartPoints.length === 1 ? <p className="weight-chart-note">Añade otra sesión con este ejercicio para ver la tendencia.</p> : latest.discomfort ? <p className="weight-chart-note exercise-trend-warning">El último registro incluye molestias; prioriza control y comodidad antes de progresar.</p> : <p className="weight-chart-note">La línea muestra {weighted ? 'la carga máxima registrada en una serie' : 'el volumen de trabajo registrado'}.</p>}</section>;
 }
 
 function WeeklyReviewCard({ summary }: { summary: ReturnType<typeof buildWeeklySummary> }) {

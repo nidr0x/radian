@@ -27,7 +27,8 @@ const EXERCISE_KEYS = ['id', 'name', 'muscleGroup', 'equipment', 'aliases', 'ima
 const PLAN_KEYS = ['id', 'version', 'days'] as const;
 const DAY_KEYS = ['id', 'weekday', 'shortLabel', 'name', 'focus', 'exercises'] as const;
 const PLANNED_EXERCISE_KEYS = ['id', 'exerciseId', 'name', 'sets', 'repMin', 'repMax', 'restSeconds', 'active', 'warmupSets', 'progressionPolicy', 'progressionIncrementKg', 'imageUrl', 'imagePosition'] as const;
-const SESSION_KEYS = ['id', 'workoutDayId', 'dateKey', 'startedAt', 'completedAt', 'status', 'plannedExercises', 'activeExerciseIndex'] as const;
+const SESSION_KEYS = ['id', 'workoutDayId', 'dateKey', 'startedAt', 'completedAt', 'status', 'plannedExercises', 'activeExerciseIndex', 'readiness'] as const;
+const REQUIRED_SESSION_KEYS = ['id', 'workoutDayId', 'dateKey', 'startedAt', 'completedAt', 'status', 'plannedExercises', 'activeExerciseIndex'] as const;
 const EXERCISE_SESSION_KEYS = ['plannedExerciseId', 'exerciseId', 'name', 'sets', 'repMin', 'repMax', 'restSeconds', 'warmupSets', 'progressionPolicy', 'progressionIncrementKg', 'progressionStatus', 'progressionReason', 'imageUrl', 'imagePosition', 'completed', 'setLogs', 'difficulty', 'actualWeightKg', 'actualReps', 'discomfort', 'discomfortNote', 'completedAt'] as const;
 const SET_LOG_KEYS = ['setNumber', 'phase', 'targetReps', 'actualReps', 'weightKg', 'completed'] as const;
 const PROGRESS_KEYS = ['id', 'date', 'weightKg', 'waistCm', 'chestCm', 'armCm', 'hipCm'] as const;
@@ -306,7 +307,7 @@ const validateWorkoutPlan = (plan: Record<string, unknown>, knownExerciseIds: Se
 
 const validateWorkoutSession = (session: Record<string, unknown>, index: number, knownDayIds: Set<string> | undefined, knownExerciseIds: Set<string> | undefined, seenIds: Set<string>): void => {
   assertAllowedKeys(session, SESSION_KEYS, `sessions[${index}]`);
-  assertRequiredKeys(session, SESSION_KEYS, `sessions[${index}]`);
+  assertRequiredKeys(session, REQUIRED_SESSION_KEYS, `sessions[${index}]`);
   const id = assertId(session.id, `sessions[${index}].id`);
   if (seenIds.has(id)) throw new Error(`sessions[${index}].id está duplicado.`);
   seenIds.add(id);
@@ -321,6 +322,13 @@ const validateWorkoutSession = (session: Record<string, unknown>, index: number,
     validateExerciseSession(assertRecord(exercise, `sessions[${index}].plannedExercises[${exerciseIndex}]`), `sessions[${index}].plannedExercises[${exerciseIndex}]`, knownExerciseIds);
   });
   assertInteger(session.activeExerciseIndex, `sessions[${index}].activeExerciseIndex`, 0, Math.max(0, (session.plannedExercises as unknown[]).length));
+  if (session.readiness !== undefined) {
+    const readiness = assertRecord(session.readiness, `sessions[${index}].readiness`);
+    assertAllowedKeys(readiness, ['energy', 'soreness'], `sessions[${index}].readiness`);
+    assertRequiredKeys(readiness, ['energy', 'soreness'], `sessions[${index}].readiness`);
+    assertEnum(readiness.energy, ENERGIES, `sessions[${index}].readiness.energy`);
+    assertEnum(readiness.soreness, new Set(['none', 'some', 'high']), `sessions[${index}].readiness.soreness`);
+  }
 };
 
 const validateHistoricalWorkoutSession = (session: Record<string, unknown>, index: number, seenIds: Set<string>): void => {

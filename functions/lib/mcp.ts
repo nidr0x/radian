@@ -1,6 +1,6 @@
-import { dateKey, weekKey } from '../../src/lib/date';
+import { currentWeekday, dateKey, scheduledWorkoutDays, weekKey } from '../../src/lib/date';
 import { progressionAction, recommendationFor } from '../../src/lib/recommendations';
-import { isWorkSet } from '../../src/lib/progression';
+import { isWorkSet, nextPrescription, type ProgressionPlan } from '../../src/lib/progression';
 import { summarizeSession } from '../../src/lib/sessionSummary';
 import { buildWeeklySummary, weeklySummaryText } from '../../src/lib/weeklySummary';
 import type { AppData, ExerciseSession, ProgressEntry, WorkoutSession } from '../../src/types';
@@ -111,6 +111,12 @@ export const MCP_TOOL_DEFINITIONS = [
     name: 'get_recommendations',
     title: 'Consultar próxima progresión',
     description: 'Devuelve las acciones sugeridas para los ejercicios activos según el historial del usuario.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'get_next_session',
+    title: 'Preparar próximo entrenamiento',
+    description: 'Devuelve la sesión que toca hoy o la siguiente disponible, con la prescripción de cada ejercicio. Solo lectura.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
 ];
@@ -1189,6 +1195,73 @@ const recommendationsResult = (data: AppData) => {
     .slice(0, 12);
 };
 
+const prescriptionResult = (plan: ProgressionPlan) => ({
+  status: plan.status,
+  reason: plan.reason,
+  targetReps: plan.targetReps,
+  nextWeightKg: plan.nextWeightKg,
+});
+
+const activePrescription = (exercise: ExerciseSession) => ({
+  status: exercise.progressionStatus ?? 'start',
+  reason: exercise.progressionReason ?? 'Sesión preparada en Radian.',
+  targetReps: workSets(exercise)[0]?.targetReps ?? exercise.repMin,
+  nextWeightKg: workSets(exercise)[0]?.weightKg ?? exercise.actualWeightKg,
+});
+
+const nextSessionResult = (data: AppData) => {
+  const inProgress = data.sessions.find((session) => session.status === 'in_progress');
+  if (inProgress) {
+    const day = data.plan.days.find((candidate) => candidate.id === inProgress.workoutDayId);
+    return {
+      status: 'in_progress',
+      date: inProgress.dateKey,
+      workoutDayId: inProgress.workoutDayId,
+      workoutName: day?.name,
+      focus: day?.focus,
+      weekday: day?.weekday,
+      readiness: inProgress.readiness,
+      exercises: inProgress.plannedExercises.map((exercise) => ({
+        exerciseId: exercise.exerciseId,
+        name: exercise.name,
+        sets: exercise.sets,
+        repRange: { min: exercise.repMin, max: exercise.repMax },
+        restSeconds: exercise.restSeconds,
+        prescription: activePrescription(exercise),
+      })),
+    };
+  }
+
+  const today = dateKey();
+  const weekday = currentWeekday();
+  const days = scheduledWorkoutDays(data.plan.days, data.profile.trainingDays);
+  const completedToday = data.sessions.some((session) => session.status === 'completed' && session.dateKey === today);
+  const day = completedToday
+    ? days.find((candidate) => candidate.weekday > weekday) ?? days[0]
+    : days.find((candidate) => candidate.weekday >= weekday) ?? days[0];
+  if (!day) return { status: 'no_session', date: today, exercises: [] };
+
+  const daysAhead = completedToday
+    ? (day.weekday > weekday ? day.weekday - weekday : 7 - weekday + day.weekday)
+    : (day.weekday >= weekday ? day.weekday - weekday : 7 - weekday + day.weekday);
+  return {
+    status: 'scheduled',
+    date: shiftDate(today, daysAhead),
+    workoutDayId: day.id,
+    workoutName: day.name,
+    focus: day.focus,
+    weekday: day.weekday,
+    exercises: day.exercises.filter((exercise) => exercise.active).map((exercise) => ({
+      exerciseId: exercise.exerciseId,
+      name: exercise.name,
+      sets: exercise.sets,
+      repRange: { min: exercise.repMin, max: exercise.repMax },
+      restSeconds: exercise.restSeconds,
+      prescription: prescriptionResult(nextPrescription(exercise, data.sessions)),
+    })),
+  };
+};
+
 export const handleMcpTool = async (name: string, args: Record<string, unknown>, loaded: AppData | null | McpLoadedUserData): Promise<Record<string, unknown>> => {
   const { data, updatedAt } = normalizeLoadedData(loaded);
   if (!data) return { message: 'Tu cuenta está conectada, pero todavía no hay una copia de Radian subida a D1.' };
@@ -1198,6 +1271,7 @@ export const handleMcpTool = async (name: string, args: Record<string, unknown>,
     return withVersion({ ...summary, text: weeklySummaryText(data) }, updatedAt);
   }
   if (name === 'get_recommendations') return withVersion({ recommendations: recommendationsResult(data) }, updatedAt);
+  if (name === 'get_next_session') return withVersion(nextSessionResult(data), updatedAt);
   if (name === 'list_workouts') {
     const range = rangeFor(args);
     const limit = args.limit === undefined ? 20 : args.limit;

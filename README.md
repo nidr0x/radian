@@ -122,7 +122,7 @@ The remote server exposes two scopes:
 - `radian:read` for read-only access to the authenticated copy in D1.
 - `radian:write` for write access, which requires a separate consent step from read access.
 
-Read tools stay limited to profile, weekly coaching, workouts, exercise history, bodyweight, progression recommendations, and revision history. Write tools are separate and only available after `radian:write` consent.
+Read tools stay limited to profile, weekly coaching, workouts, exercise history, bodyweight, progression recommendations, the next session with per-exercise prescriptions, and revision history. Write tools are separate and only available after `radian:write` consent. `get_next_session` is read-only and includes the current in-progress session when one exists.
 
 To connect it from a compatible MCP client:
 

@@ -1097,6 +1097,23 @@ h3 { font-weight: 650; letter-spacing: -.02em; }
 .weight-chart-footer { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0 0 35px; color: var(--muted); font-size: 9px; }
 .weight-chart-footer span:nth-child(2) { color: var(--accent-deep); font-weight: 700; }
 .weight-chart-note { margin: 9px 0 0 35px; color: var(--muted); font-size: 10px; }
+.exercise-trend-card { display: grid; gap: 2px; }
+.exercise-trend-select { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: center; margin: 1px 0 9px; color: var(--muted); font-size: 10px; font-weight: 700; }
+.exercise-trend-select select { min-width: 0; width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 11px; color: var(--ink); background: var(--surface-soft); font-size: 12px; outline: 0; }
+.exercise-trend-reading { margin: 2px 0 0 35px; }
+.exercise-trend-reading strong { font-size: 23px; letter-spacing: -.05em; }
+.exercise-trend-warning { color: var(--warning); }
+
+/* A light recovery check-in keeps context visible without adding friction before training. */
+.readiness-panel { display: grid; gap: 13px; margin: 14px 0 10px; padding: 16px; border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line)); border-radius: 19px 19px 19px 5px; background: color-mix(in srgb, var(--accent-pale) 55%, var(--surface)); }
+.readiness-panel h3 { margin: 3px 0 5px; font-size: 17px; }
+.readiness-panel p:last-child { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.readiness-group { display: grid; gap: 7px; }
+.readiness-group > span { color: var(--ink); font-size: 11px; font-weight: 800; }
+.readiness-choices { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.readiness-choice { min-height: 42px; padding: 8px 7px; border: 1px solid var(--line); border-radius: 11px; color: var(--muted); background: var(--surface); font-size: 11px; font-weight: 700; }
+.readiness-choice.selected { border-color: var(--accent); color: var(--action-ink); background: var(--action); }
+.readiness-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; padding-top: 2px; }
 
 .weekly-review-recommendations { padding-top: 14px; border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent); }
 .weekly-review-recommendations > .eyebrow { margin-bottom: 9px; }
@@ -1111,4 +1128,8 @@ h3 { font-weight: 650; letter-spacing: -.02em; }
   .weight-chart-body { grid-template-columns: 28px minmax(0, 1fr); gap: 2px; }
   .weight-chart-footer { padding-left: 30px; }
   .weight-chart-note { margin-left: 30px; }
+  .exercise-trend-select { grid-template-columns: 1fr; gap: 5px; }
+  .exercise-trend-reading { margin-left: 30px; }
+  .readiness-actions { justify-content: stretch; }
+  .readiness-actions button { flex: 1 1 160px; }
 }

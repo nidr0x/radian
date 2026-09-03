@@ -1,6 +1,6 @@
 import { defaultData } from '../data/initialPlan';
 import { nextPrescription } from './progression';
-import type { AppData, BackupPayload, ExerciseSession, PlannedExercise, ProgressionPolicy, SetLog, WorkoutDay, WorkoutSession } from '../types';
+import type { AppData, BackupPayload, Energy, ExerciseSession, PlannedExercise, ProgressionPolicy, SessionReadiness, SetLog, Soreness, WorkoutDay, WorkoutSession } from '../types';
 
 export const STORAGE_KEY = 'radian-data-v1';
 
@@ -10,6 +10,14 @@ const clampWarmupSets = (value: unknown): number => typeof value === 'number' &&
 const optionalNumber = (value: unknown): number | undefined => typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 const validIncrement = (value: unknown): number => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 2.5;
 const validPolicy = (value: unknown): ProgressionPolicy => value === 'off' || value === 'linear' || value === 'double' ? value : 'double';
+const validEnergy = (value: unknown): Energy | undefined => value === 'low' || value === 'normal' || value === 'high' ? value : undefined;
+const validSoreness = (value: unknown): Soreness | undefined => value === 'none' || value === 'some' || value === 'high' ? value : undefined;
+const normalizeReadiness = (value: unknown): SessionReadiness | undefined => {
+  if (!isRecord(value)) return undefined;
+  const energy = validEnergy(value.energy);
+  const soreness = validSoreness(value.soreness);
+  return energy && soreness ? { energy, soreness } : undefined;
+};
 
 interface SetLogOptions {
   warmupSets?: number;
@@ -41,13 +49,14 @@ const latestCompletedExercise = (exerciseId: string, sessions: WorkoutSession[])
   .sort((a, b) => (b.completedAt ?? b.startedAt).localeCompare(a.completedAt ?? a.startedAt))
   .flatMap((session) => session.plannedExercises.filter((exercise) => exercise.exerciseId === exerciseId))[0];
 
-export const createSession = (day: WorkoutDay, date: string, now = new Date(), history: WorkoutSession[] = []): WorkoutSession => ({
+export const createSession = (day: WorkoutDay, date: string, now = new Date(), history: WorkoutSession[] = [], readiness?: SessionReadiness): WorkoutSession => ({
   id: `session-${date}`,
   workoutDayId: day.id,
   dateKey: date,
   startedAt: now.toISOString(),
   status: 'in_progress',
   activeExerciseIndex: 0,
+  ...(readiness ? { readiness } : {}),
   plannedExercises: day.exercises.filter((exercise) => exercise.active).map((exercise): ExerciseSession => ({
     ...(() => {
       const plan = nextPrescription(exercise, history);
@@ -131,6 +140,7 @@ export const migrateData = (value: unknown): AppData => {
   }));
   const sessions = (Array.isArray(candidate.sessions) ? candidate.sessions : []).map((session) => ({
     ...session,
+    ...(normalizeReadiness(session.readiness) ? { readiness: normalizeReadiness(session.readiness) } : {}),
     plannedExercises: session.plannedExercises.map((exercise) => {
       const visual = exerciseVisuals.get(exercise.exerciseId);
       const planned = fallbackPlanned.get(exercise.exerciseId);

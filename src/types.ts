@@ -1,5 +1,6 @@
 export type Difficulty = 'easy' | 'good' | 'hard' | 'incomplete';
 export type Energy = 'low' | 'normal' | 'high';
+export type Soreness = 'none' | 'some' | 'high';
 export type ExperienceLevel = 'beginner' | 'intermediate' | 'advanced';
 export type Theme = 'system' | 'light' | 'dark';
 export type View = 'today' | 'routine' | 'progress' | 'profile';
@@ -112,6 +113,12 @@ export interface WorkoutSession {
   status: 'in_progress' | 'completed';
   plannedExercises: ExerciseSession[];
   activeExerciseIndex: number;
+  readiness?: SessionReadiness;
+}
+
+export interface SessionReadiness {
+  energy: Energy;
+  soreness: Soreness;
 }
 
 export interface ProgressEntry {

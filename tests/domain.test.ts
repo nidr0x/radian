@@ -6,6 +6,7 @@ import { isWorkSet, nextPrescription } from '../src/lib/progression';
 import { bestRecordForExercise, detectPersonalRecord } from '../src/lib/records';
 import { summarizeSession } from '../src/lib/sessionSummary';
 import { createSession, createSetLogs, migrateData, parseBackup, serializeBackup, snapshotMatchesPlan } from '../src/lib/storage';
+import { exerciseTrend } from '../src/lib/exerciseHistory';
 import { buildWeeklySummary, weeklySummaryText } from '../src/lib/weeklySummary';
 import { scheduledWorkoutDays } from '../src/lib/date';
 import type { WorkoutSession } from '../src/types';
@@ -138,6 +139,37 @@ describe('persistencia y backups', () => {
     expect(snapshotMatchesPlan(session, day.exercises[0])).toBe(true);
     expect(snapshotMatchesPlan(session, changed)).toBe(false);
     expect(session.plannedExercises[0].sets).toBe(3);
+  });
+
+  it('guarda el check-in de recuperación sin romper el esquema actual', () => {
+    const data = defaultData();
+    const session = createSession(data.plan.days[0], '2026-08-19', new Date('2026-08-19T10:00:00Z'), [], {
+      energy: 'low',
+      soreness: 'some',
+    });
+
+    expect(session.readiness).toEqual({ energy: 'low', soreness: 'some' });
+    expect(migrateData({ ...data, sessions: [session] }).sessions[0].readiness).toEqual(session.readiness);
+    expect(migrateData({ ...data, sessions: [{ ...session, readiness: undefined }] }).sessions[0].readiness).toBeUndefined();
+  });
+
+  it('construye una tendencia por ejercicio con carga máxima, repeticiones y volumen', () => {
+    const first = completedSession('first', '2026-08-10', 'good');
+    const second = completedSession('second', '2026-08-17', 'easy');
+    [first, second].forEach((session, index) => {
+      session.plannedExercises[0].difficulty = index === 0 ? 'good' : 'easy';
+      session.plannedExercises[0].discomfort = index === 1;
+      session.plannedExercises[0].setLogs.filter(isWorkSet).forEach((set) => Object.assign(set, {
+        actualReps: index === 0 ? 8 : 10,
+        weightKg: index === 0 ? 35 : 40,
+        completed: true,
+      }));
+    });
+
+    expect(exerciseTrend('incline-press', [second, first])).toEqual([
+      { date: '2026-08-10', maxWeightKg: 35, maxReps: 8, volumeKg: 840, difficulty: 'good', discomfort: false },
+      { date: '2026-08-17', maxWeightKg: 40, maxReps: 10, volumeKg: 1200, difficulty: 'easy', discomfort: true },
+    ]);
   });
 
   it('redondea un export y lo puede importar con su esquema', () => {

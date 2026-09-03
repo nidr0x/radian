@@ -3,6 +3,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { defaultData } from '../src/data/initialPlan';
+import { isWorkSet } from '../src/lib/progression';
+import { createSession } from '../src/lib/storage';
 import { onRequestPost as onMcpPost } from '../functions/api/mcp';
 import {
   applyChange,
@@ -344,6 +346,7 @@ describe('puente MCP remoto de Radian', () => {
       'exercise_history',
       'get_bodyweight',
       'get_recommendations',
+      'get_next_session',
     ]);
     expect(MCP_TOOL_DEFINITIONS.every((tool) => !tool.name.includes('write') && !tool.name.includes('delete'))).toBe(true);
   });
@@ -809,6 +812,53 @@ describe('puente MCP remoto de Radian', () => {
     });
   });
 
+  it('devuelve la sesión prevista con la prescripción de cada ejercicio', async () => {
+    const data = defaultData();
+    const result = await handleMcpTool('get_next_session', {}, {
+      data,
+      updatedAt: '2026-08-31T21:00:00.000Z',
+    });
+
+    const expectedDay = data.plan.days[1];
+    expect(result).toMatchObject({
+      status: 'scheduled',
+      date: '2026-09-01',
+      workoutDayId: expectedDay.id,
+      workoutName: expectedDay.name,
+      focus: expectedDay.focus,
+      weekday: 2,
+      updatedAt: '2026-08-31T21:00:00.000Z',
+      exercises: expect.arrayContaining([
+        expect.objectContaining({
+          exerciseId: expectedDay.exercises[0].exerciseId,
+          name: expectedDay.exercises[0].name,
+          prescription: expect.objectContaining({ status: 'start', targetReps: expectedDay.exercises[0].repMin }),
+        }),
+      ]),
+    });
+  });
+
+  it('devuelve la sesión en curso y conserva su prescripción actual', async () => {
+    const data = defaultData();
+    const session = createSession(data.plan.days[0], '2026-08-31', new Date('2026-08-31T10:00:00.000Z'), [], { energy: 'low', soreness: 'high' });
+    session.plannedExercises[0].progressionStatus = 'hold';
+    session.plannedExercises[0].progressionReason = 'Mantén la carga actual.';
+    session.plannedExercises[0].setLogs.filter(isWorkSet).forEach((set) => { set.targetReps = 10; set.weightKg = 40; });
+    data.sessions = [session];
+
+    await expect(handleMcpTool('get_next_session', {}, data)).resolves.toMatchObject({
+      status: 'in_progress',
+      date: '2026-08-31',
+      workoutDayId: data.plan.days[0].id,
+      readiness: { energy: 'low', soreness: 'high' },
+      exercises: expect.arrayContaining([
+        expect.objectContaining({
+          prescription: { status: 'hold', reason: 'Mantén la carga actual.', targetReps: 10, nextWeightKg: 40 },
+        }),
+      ]),
+    });
+  });
+
   it('expone updatedAt en las lecturas cuando la carga viene versionada', async () => {
     const data = defaultData();
     const result = await handleMcpTool('get_profile', {}, {
@@ -845,6 +895,14 @@ describe('puente MCP remoto de Radian', () => {
       ...data,
       extra: true,
     })).toThrow(/válid|desconoc/i);
+  });
+
+  it('valida el contexto opcional de recuperación en una sesión MCP', () => {
+    const data = defaultData();
+    const session = createSession(data.plan.days[0], '2026-08-19', new Date('2026-08-19T10:00:00.000Z'), [], { energy: 'normal', soreness: 'some' });
+    session.completedAt = '2026-08-19T11:00:00.000Z';
+    expect(() => validateMcpAppData({ ...data, sessions: [session] })).not.toThrow();
+    expect(() => validateMcpAppData({ ...data, sessions: [{ ...session, readiness: { energy: 'unknown', soreness: 'some' } }] })).toThrow(/readiness|válido/i);
   });
 
   it('rechaza payloads MCP con IDs, fechas y rangos inválidos', () => {
