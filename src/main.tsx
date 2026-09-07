@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import './styles.css';
+import { registerAppWorker } from './lib/pwa';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -9,6 +10,4 @@ createRoot(document.getElementById('root')!).render(
   </StrictMode>,
 );
 
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js?v=11').catch(() => undefined));
-}
+if (import.meta.env.PROD) window.addEventListener('load', () => void registerAppWorker().catch(() => undefined));

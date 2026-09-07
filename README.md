@@ -161,7 +161,7 @@ Radian can work without an account and keep data on the device. If you want to s
 To prepare the Cloudflare environment:
 
 1. Create a D1 database named `radian-prod` and replace the example identifier in `wrangler.jsonc` with your own. The official deployment already has this database created and configured.
-2. Apply the migrations with `npx wrangler d1 migrations apply radian-prod --remote --env production` (from `0001_sync_records.sql` through `0007_mcp_recovery_hardening.sql`). Repeat the process with the preview database using the preview environment.
+2. Apply the migrations with `npx wrangler d1 migrations apply radian-prod --remote --env production` (from `0001_sync_records.sql` through the latest numbered migration, currently `0008_mcp_receipts.sql`). Repeat the process with the preview database using the preview environment.
 3. Configure the `SESSION_SECRET` secret in Pages Functions and, in production, `WEBAUTHN_RP_ID`, `WEBAUTHN_ORIGIN`, `WEBAUTHN_RP_NAME`, and `MCP_ORIGIN`.
 4. For `radian.nidr0x.win`, use `WEBAUTHN_RP_ID=radian.nidr0x.win` and `WEBAUTHN_ORIGIN=https://radian.nidr0x.win`.
 

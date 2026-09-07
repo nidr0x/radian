@@ -8,6 +8,7 @@ import { summarizeSession } from '../src/lib/sessionSummary';
 import { createSession, createSetLogs, migrateData, parseBackup, serializeBackup, snapshotMatchesPlan } from '../src/lib/storage';
 import { exerciseTrend } from '../src/lib/exerciseHistory';
 import { buildWeeklySummary, weeklySummaryText } from '../src/lib/weeklySummary';
+import { syncDecision } from '../src/lib/syncRecovery';
 import { scheduledWorkoutDays } from '../src/lib/date';
 import type { WorkoutSession } from '../src/types';
 
@@ -101,6 +102,35 @@ describe('motor de recomendaciones', () => {
 
     expect(recommendation).toMatchObject({ tone: 'positive', title: 'Próxima vez: prueba 42,5 kg' });
     expect(weeklySummaryText(data, new Date('2026-08-20T12:00:00'))).toContain('RECOMENDACIONES PARA LA PRÓXIMA SEMANA');
+  });
+
+  it('compara las cuatro semanas y la fuerza con una referencia equivalente', () => {
+    const data = defaultData();
+    const previous = completedSession('previous', '2026-08-10', 'good');
+    const current = completedSession('current', '2026-08-17', 'good');
+    previous.plannedExercises[0].setLogs.filter(isWorkSet).forEach((set) => Object.assign(set, { actualReps: 10, weightKg: 40, completed: true }));
+    current.plannedExercises[0].setLogs.filter(isWorkSet).forEach((set) => Object.assign(set, { actualReps: 10, weightKg: 42.5, completed: true }));
+    data.sessions = [previous, current];
+    const summary = buildWeeklySummary(data, new Date('2026-08-20T12:00:00'));
+    expect(summary.trends).toHaveLength(4);
+    expect(summary.trends.at(-1)).toMatchObject({ sessions: 1, volumeKg: 1275 });
+    expect(summary.strengthChanges).toContainEqual(expect.objectContaining({ name: current.plannedExercises[0].name, previousKg: 40, currentKg: 42.5, changePercent: 6 }));
+  });
+});
+
+describe('decisiones de sincronización', () => {
+  it('distingue descarga, subida y conflicto usando el último checkpoint', () => {
+    const base = defaultData();
+    const local = structuredClone(base);
+    const remote = structuredClone(base);
+    const checkpoint = { userId: 'user-1', version: 'v1', snapshot: JSON.stringify(base), syncedAt: '2026-09-01T10:00:00.000Z' };
+    local.profile.gym = 'Local';
+    remote.profile.gym = 'Remoto';
+    expect(syncDecision(base, remote, 'v2', checkpoint, 'user-1')).toBe('download');
+    remote.profile.gym = base.profile.gym;
+    expect(syncDecision(local, remote, 'v1', checkpoint, 'user-1')).toBe('upload');
+    remote.profile.gym = 'Remoto';
+    expect(syncDecision(local, remote, 'v2', checkpoint, 'user-1')).toBe('conflict');
   });
 });
 

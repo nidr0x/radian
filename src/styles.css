@@ -393,6 +393,7 @@ h3 { font-size: 15px; }
 .sync-code-field .icon-button { width: 43px; height: 43px; }
 .sync-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; }
 .sync-status { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.sync-last-updated { margin: -8px 0 0; color: var(--muted); font-size: 9px; line-height: 1.45; }
 .sync-security { margin: 0; color: var(--muted); font-size: 9px; line-height: 1.45; }
 
 @media (max-width: 480px) {
@@ -1133,3 +1134,7 @@ h3 { font-weight: 650; letter-spacing: -.02em; }
   .readiness-actions { justify-content: stretch; }
   .readiness-actions button { flex: 1 1 160px; }
 }
+/* Weekly comparison stays readable on narrow screens. */
+.weekly-trends-table { overflow-x: auto; margin-block: 16px; }
+.weekly-trends-table table { width: 100%; border-collapse: collapse; text-align: left; }
+.weekly-trends-table th, .weekly-trends-table td { padding: 10px 8px; white-space: nowrap; border-bottom: 1px solid currentColor; }

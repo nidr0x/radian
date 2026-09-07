@@ -15,6 +15,8 @@ import { createSession, createSetLogs, loadData, migrateData, parseBackup, persi
 import { exerciseTrend } from './lib/exerciseHistory';
 import { deleteSyncData, generateSyncKey, loadSyncState, normalizeSyncKey, persistSyncState, pullSyncData, pushSyncData, SyncApiError, type SyncState } from './lib/sync';
 import { buildWeeklySummary } from './lib/weeklySummary';
+import { applyAppUpdate, hasAppUpdate } from './lib/pwa';
+import { readCheckpoint, saveCheckpoint, syncDecision, readRecovery, preserveRecovery } from './lib/syncRecovery';
 import { requestScreenWakeLock, type ScreenWakeLock } from './lib/wakeLock';
 import { summarizeSession, type SessionSummary } from './lib/sessionSummary';
 import { addPasskey, AuthApiError, currentUser, listPasskeys, loginWithPasskey, logout, logoutEverywhere, pullCloudData, pushCloudData, registerPasskey, renamePasskey, revokePasskey, type AuthPasskey, type AuthUser, type CloudData } from './lib/auth';
@@ -68,6 +70,33 @@ function App() {
   const [passkeys, setPasskeys] = useState<AuthPasskey[]>([]);
   const [cloudUpdatedAt, setCloudUpdatedAt] = useState<string>();
   const [cloudConflict, setCloudConflict] = useState<CloudData>();
+  const [online, setOnline] = useState(navigator.onLine);
+  const [updateAvailable, setUpdateAvailable] = useState(hasAppUpdate);
+  const [recovery, setRecovery] = useState(readRecovery);
+  const [acknowledged, setAcknowledged] = useState(() => readCheckpoint()?.snapshot);
+  const [syncAttempt, setSyncAttempt] = useState(0);
+  const dataRef = useRef(data);
+  dataRef.current = data;
+  const cloudBusyRef = useRef(false);
+  const acknowledge = (snapshot: AppData, updatedAt?: string): void => {
+    if (!updatedAt || !authUserRef.current) return;
+    saveCheckpoint(authUserRef.current.id, updatedAt, snapshot);
+    setAcknowledged(JSON.stringify(snapshot));
+    cloudUpdatedAtRef.current = updatedAt;
+    setCloudUpdatedAt(updatedAt);
+  };
+  useEffect(() => {
+    const connected = () => setOnline(navigator.onLine);
+    const updated = () => setUpdateAvailable(true);
+    window.addEventListener('online', connected);
+    window.addEventListener('offline', connected);
+    window.addEventListener('radian-update', updated);
+    return () => {
+      window.removeEventListener('online', connected);
+      window.removeEventListener('offline', connected);
+      window.removeEventListener('radian-update', updated);
+    };
+  }, []);
   const [lastSessionChange, setLastSessionChange] = useState<{ sessionId: string; snapshot: WorkoutSession }>();
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [isInstalled, setIsInstalled] = useState(false);
@@ -100,7 +129,7 @@ function App() {
   useEffect(() => {
     const persisted = persistData(data);
     setStorageWarning((current) => persisted ? current === 'No se pudo guardar la configuración local. Comprueba el espacio disponible.' ? undefined : current : 'No se pudo guardar el progreso en este dispositivo.');
-    if (!syncReady || !syncState.key) return undefined;
+    if (!online || !syncReady || !syncState.key) return undefined;
     const timer = window.setTimeout(() => {
       const currentState = syncStateRef.current;
       setSyncStatus('syncing');
@@ -116,14 +145,14 @@ function App() {
       });
     }, 900);
     return () => window.clearTimeout(timer);
-  }, [data, syncReady, syncState.key]);
+  }, [data, syncReady, syncState.key, online]);
   useEffect(() => {
-    if (!authUser || !cloudSyncReadyRef.current) return undefined;
+    if (!online || !authUser || !cloudSyncReadyRef.current || cloudBusyRef.current || JSON.stringify(data) === acknowledged) return undefined;
     const timer = window.setTimeout(() => {
       setAuthStatus('syncing');
+      cloudBusyRef.current = true;
       pushCloudData(data, cloudUpdatedAtRef.current).then(({ updatedAt }) => {
-        cloudUpdatedAtRef.current = updatedAt;
-        setCloudUpdatedAt(updatedAt);
+        acknowledge(data, updatedAt);
         setAuthStatus('signed_in');
         setAuthError(undefined);
       }).catch((error: unknown) => {
@@ -140,10 +169,13 @@ function App() {
           setAuthStatus('error');
         }
         reportAuthError(value, 'No se pudo sincronizar con D1.');
+      }).finally(() => {
+        cloudBusyRef.current = false;
+        if (dataRef.current !== data) setSyncAttempt((value) => value + 1);
       });
     }, 900);
     return () => window.clearTimeout(timer);
-  }, [authUser, data]);
+  }, [authUser, data, online, syncAttempt, acknowledged]);
   useEffect(() => {
     let cancelled = false;
     currentUser().then(async (user) => {
@@ -152,33 +184,8 @@ function App() {
         setAuthStatus('signed_out');
         return;
       }
-      authUserRef.current = user;
-      setAuthUser(user);
-      listPasskeys().then(setPasskeys).catch(() => undefined);
-      setAuthStatus('syncing');
       try {
-        const remote = await pullCloudData();
-        if (cancelled) return;
-        if (remote.data) {
-          const localHasActivity = data.sessions.length > 0 || data.progress.length > 0 || data.checkins.length > 0 || data.onboardingComplete;
-          const keepLocal = localHasActivity && window.confirm('Ya hay una copia de Radian en tu cuenta. ¿Quieres conservar los datos de este dispositivo y subirlos a la nube?');
-          if (keepLocal) {
-            const saved = await pushCloudData(data, remote.updatedAt);
-            cloudUpdatedAtRef.current = saved.updatedAt;
-            setCloudUpdatedAt(saved.updatedAt);
-          } else {
-            setData(migrateData(remote.data));
-            if (remote.updatedAt) cloudUpdatedAtRef.current = remote.updatedAt;
-            setCloudUpdatedAt(remote.updatedAt);
-          }
-        } else {
-          const saved = await pushCloudData(data);
-          cloudUpdatedAtRef.current = saved.updatedAt;
-          setCloudUpdatedAt(saved.updatedAt);
-        }
-        cloudSyncReadyRef.current = true;
-        setAuthStatus('signed_in');
-        setAuthError(undefined);
+        await hydrateAccount(user, dataRef.current);
       } catch (error: unknown) {
         if (cancelled) return;
         cloudSyncReadyRef.current = false;
@@ -531,42 +538,67 @@ function App() {
   };
 
   const hydrateAccount = async (user: AuthUser, localSnapshot: AppData): Promise<void> => {
+    if (cloudBusyRef.current) return;
+    cloudBusyRef.current = true;
+    try {
     authUserRef.current = user;
     setAuthUser(user);
     setAuthStatus('syncing');
     setAuthError(undefined);
     cloudSyncReadyRef.current = false;
     const remote = await pullCloudData();
+    localSnapshot = dataRef.current;
     if (remote.data) {
-      const localHasActivity = localSnapshot.sessions.length > 0 || localSnapshot.progress.length > 0 || localSnapshot.checkins.length > 0 || localSnapshot.onboardingComplete;
-      const keepLocal = localHasActivity && window.confirm('Ya hay una copia de Radian en tu cuenta. ¿Quieres conservar los datos de este dispositivo y subirlos a la nube?');
-      if (keepLocal) {
+      const normalized = migrateData(remote.data);
+      const decision = syncDecision(localSnapshot, normalized, remote.updatedAt, readCheckpoint(), user.id);
+      if (decision === 'conflict') {
+        setCloudConflict(remote);
+        setAuthStatus('error');
+        setAuthError('Hay cambios en ambas copias. Revisa cuál conservar.');
+        return;
+      }
+      if (decision === 'upload') {
         const saved = await pushCloudData(localSnapshot, remote.updatedAt);
-        cloudUpdatedAtRef.current = saved.updatedAt;
-        setCloudUpdatedAt(saved.updatedAt);
+        acknowledge(localSnapshot, saved.updatedAt);
       } else {
-        setData(migrateData(remote.data));
-        if (remote.updatedAt) cloudUpdatedAtRef.current = remote.updatedAt;
-        setCloudUpdatedAt(remote.updatedAt);
+        if (decision === 'download') {
+          setRecovery(preserveRecovery(localSnapshot));
+          setData(normalized);
+        }
+        acknowledge(normalized, remote.updatedAt);
       }
     } else {
+      if (readCheckpoint()?.userId === user.id) {
+        setAuthStatus('error');
+        setAuthError('La copia remota se ha borrado. Tus datos locales siguen guardados; revisa las revisiones del MCP antes de volver a subirlos.');
+        return;
+      }
       const saved = await pushCloudData(localSnapshot);
-      cloudUpdatedAtRef.current = saved.updatedAt;
-      setCloudUpdatedAt(saved.updatedAt);
+      acknowledge(localSnapshot, saved.updatedAt);
     }
     cloudSyncReadyRef.current = true;
     setAuthStatus('signed_in');
     listPasskeys().then(setPasskeys).catch(() => undefined);
     setToast(`Cuenta conectada como ${user.displayName}`);
+    } finally {
+      cloudBusyRef.current = false;
+      setSyncAttempt((value) => value + 1);
+    }
   };
 
   const resolveCloudConflict = async (choice: 'local' | 'remote'): Promise<void> => {
     const conflict = cloudConflict;
     if (!conflict?.data || !authUserRef.current) return;
+    try {
+      setRecovery(preserveRecovery(choice === 'remote' ? data : migrateData(conflict.data)));
+    } catch {
+      setAuthError('No hay espacio para guardar la copia recuperable. Exporta tus datos antes de resolver el conflicto.');
+      return;
+    }
     if (choice === 'remote') {
-      setData(migrateData(conflict.data));
-      cloudUpdatedAtRef.current = conflict.updatedAt;
-      setCloudUpdatedAt(conflict.updatedAt);
+      const next = migrateData(conflict.data);
+      setData(next);
+      acknowledge(next, conflict.updatedAt);
       setCloudConflict(undefined);
       setAuthError(undefined);
       cloudSyncReadyRef.current = true;
@@ -577,8 +609,7 @@ function App() {
     setAuthStatus('syncing');
     try {
       const saved = await pushCloudData(data, conflict.updatedAt);
-      cloudUpdatedAtRef.current = saved.updatedAt;
-      setCloudUpdatedAt(saved.updatedAt);
+      acknowledge(data, saved.updatedAt);
       setCloudConflict(undefined);
       setAuthError(undefined);
       cloudSyncReadyRef.current = true;
@@ -685,14 +716,39 @@ function App() {
     }
   };
 
+  const refreshCloud = async (): Promise<void> => {
+    try {
+      const user = authUserRef.current ?? await currentUser();
+      if (user) await hydrateAccount(user, dataRef.current);
+      else setAuthStatus('signed_out');
+    } catch (error) {
+      setAuthStatus('error');
+      reportAuthError(error, 'No se pudo sincronizar. Los cambios siguen en este dispositivo.');
+    }
+  };
+
+  const restoreLocalRecovery = (): void => {
+    if (!recovery || !window.confirm('¿Restaurar esta copia? Se guardará la versión actual para poder volver atrás.')) return;
+    try {
+      const next = parseBackup(recovery.backup);
+      setRecovery(preserveRecovery(data));
+      setData(next);
+      setToast('Copia recuperada en este dispositivo');
+    } catch { setAuthError('No se pudo restaurar la copia. Comprueba el espacio disponible.'); }
+  };
+  const pendingChanges = JSON.stringify(data) !== acknowledged;
+
   return (
     <div className="app-shell">
       <a className="skip-link" href="#main-content">Ir al contenido</a>
       <header className="topbar">
         <div className="brand-lockup"><span className="brand-mark">R</span><span>radian</span></div>
-        <div className="connection-state" aria-label={authUser ? 'Cuenta protegida con passkey y sincronizada con D1' : 'Los datos se guardan primero en este dispositivo'}><span className="status-dot" /> {authUser ? authStatus === 'syncing' ? 'sincronizando' : 'D1 · passkey' : 'local-first'}</div>
+        <div className="connection-state" role="status"><span className="status-dot" /> {!online ? 'sin conexión' : cloudConflict ? 'conflicto' : authStatus === 'syncing' ? 'sincronizando' : authUser ? pendingChanges ? 'cambios pendientes' : 'sincronizado' : 'guardado local'}</div>
       </header>
       <main className="app-main" id="main-content">
+        {!online && <section className="profile-section" role="status">Sin conexión. Puedes seguir registrando el entrenamiento; los cambios quedan en este dispositivo.</section>}
+        {updateAvailable && <section className="profile-section" role="status"><strong>Hay una actualización disponible</strong><p>{activeSession ? 'Puedes actualizar al terminar el entrenamiento.' : 'Tus datos guardados se conservarán al actualizar.'}</p><button className="secondary-button small" disabled={Boolean(activeSession) || Boolean(storageWarning) || authStatus === 'syncing'} onClick={() => { if (persistData(dataRef.current)) applyAppUpdate(); else setStorageWarning('No se pudo guardar antes de actualizar.'); }}>Actualizar Radian</button></section>}
+        {view === 'profile' && <section className="profile-section"><h2>Estado de tus datos</h2><p>{authUser ? pendingChanges ? 'Hay cambios locales pendientes de sincronizar.' : 'Tu copia local coincide con la última sincronización.' : 'Los datos están guardados en este dispositivo.'}</p><p>{cloudUpdatedAt ? `Última versión sincronizada: ${new Date(cloudUpdatedAt).toLocaleString('es-ES')}` : 'Todavía no se ha confirmado una sincronización en esta sesión.'}</p><button className="secondary-button small" disabled={!online || authStatus === 'syncing'} onClick={() => void refreshCloud()}>Comprobar sincronización</button>{recovery && <div><p>Copia anterior conservada: {new Date(recovery.savedAt).toLocaleString('es-ES')}</p><button className="secondary-button small" disabled={authStatus === 'syncing'} onClick={restoreLocalRecovery}>Restaurar copia anterior</button><button className="text-button" onClick={() => downloadFile('radian-recovery.json', recovery.backup, 'application/json')}>Exportar copia anterior</button></div>}</section>}
         {view === 'profile' && <AccountPanel user={authUser} passkeys={passkeys} status={authStatus} error={authError} cloudUpdatedAt={cloudUpdatedAt} onRegister={handleRegisterPasskey} onLogin={handleLoginPasskey} onAddPasskey={handleAddPasskey} onRenamePasskey={handleRenamePasskey} onRevokePasskey={handleRevokePasskey} onLogout={handleLogout} onLogoutEverywhere={handleLogoutEverywhere} />}
         {cloudConflict?.data && <section className="profile-section cloud-conflict" role="alert"><strong>Hay dos versiones de tus datos</strong><span>La nube cambió desde la última sincronización. Elige qué copia conservar.</span><div className="account-actions"><button className="primary-button small" type="button" onClick={() => resolveCloudConflict('local')}>Conservar este dispositivo</button><button className="secondary-button small" type="button" onClick={() => resolveCloudConflict('remote')}>Usar copia de la nube</button></div></section>}
         {activeSession && view !== 'today' && <ResumeSessionBanner session={activeSession} onResume={() => setView('today')} />}
@@ -970,7 +1026,7 @@ function ProgressView({ data, onAddProgress, onAddCheckin, onInfo }: { data: App
   return <section className="view-section"><PageHeader eyebrow="señales, no ruido" title="Tu progreso" action={<button className="icon-button subtle" type="button" aria-label="Información sobre las métricas" onClick={onInfo}><Info size={19} /></button>} /><div className="metric-grid"><MetricCard label="Peso actual" value={lastWeight?.weightKg !== undefined ? formatWeight(lastWeight.weightKg) : formatWeight(data.profile.currentWeightKg)} change={changeLabel(lastWeight?.weightKg, previousWeight?.weightKg)} icon={<Activity size={17} />} /><MetricCard label="Cintura" value={lastWaist?.waistCm !== undefined ? `${lastWaist.waistCm.toLocaleString('es-ES', { maximumFractionDigits: 1 })} cm` : 'Sin registro'} change={changeLabel(lastWaist?.waistCm, previousWaist?.waistCm, ' cm')} icon={<Gauge size={17} />} /><MetricCard label="Adherencia" value={`${Math.min(completedThisWeek, weeklyTarget)}/${weeklyTarget}`} change="esta semana" icon={<Check size={17} />} /></div><section className="progress-card weekly-adherence-card"><div className="section-heading compact"><div><p className="eyebrow">esta semana</p><h2>Tu constancia</h2></div><strong className="weekly-score">{completedThisWeek}/{weeklyTarget}</strong></div><div className="week-strip" aria-label="Entrenamientos de la semana">{weekDays.map((day) => <div className={day.completed ? 'week-day completed' : day.planned ? 'week-day planned' : 'week-day'} key={day.key}><span>{day.label}</span><i aria-hidden="true">{day.completed ? '✓' : day.planned ? '·' : ''}</i></div>)}</div><p className="history-caption">{completedThisWeek === 0 ? 'Todavía no hay entrenamientos guardados esta semana.' : `${completedThisWeek} de ${weeklyTarget} sesiones previstas ya están guardadas.`}</p></section><section className="progress-card"><div className="section-heading compact"><div><p className="eyebrow">evolución corporal</p><h2>Medidas en el tiempo</h2></div><button className="text-button" onClick={() => setMeasureOpen((value) => !value)}><Plus size={16} /> Añadir</button></div>{measureOpen && <form className="measurement-form" onSubmit={saveMeasure}><NumberField label="Peso" unit="kg" value={form.weightKg} onChange={(value) => setForm((current) => ({ ...current, weightKg: value }))} /><NumberField label="Cintura" unit="cm" value={form.waistCm} onChange={(value) => setForm((current) => ({ ...current, waistCm: value }))} /><NumberField label="Pecho" unit="cm" value={form.chestCm} onChange={(value) => setForm((current) => ({ ...current, chestCm: value }))} /><NumberField label="Brazo" unit="cm" value={form.armCm} onChange={(value) => setForm((current) => ({ ...current, armCm: value }))} /><NumberField label="Cadera" unit="cm · opcional" value={form.hipCm} onChange={(value) => setForm((current) => ({ ...current, hipCm: value }))} /><button className="primary-button small" type="submit">Guardar medidas</button></form>}<WeightChart entries={progress} /><div className="trend-list"><TrendRow label="Cintura" values={progress.map((item) => item.waistCm)} unit="cm" /></div>{data.progress.length === 0 && <div className="empty-state"><span className="empty-icon"><Activity size={19} /></span><strong>Aún no hay medidas</strong><p>Registra solo lo que te apetezca comparar. No hace falta hacerlo cada día.</p></div>}</section>{performance.length > 0 && <section className="progress-card performance-card"><div className="section-heading compact"><div><p className="eyebrow">señal de entrenamiento</p><h2>Rendimiento reciente</h2></div><Gauge size={19} /></div><div className="performance-list">{performance.map((item) => <div className="performance-row" key={item.exerciseId}><div><strong>{item.name}</strong><span>{item.load !== undefined ? `${formatWeight(item.load)} · ${item.reps ?? '-'} reps` : 'Sin carga registrada'}</span></div><b>{formatVolume(item.volume)}</b></div>)}</div></section>}<section className="checkin-card"><div className="checkin-mark"><Sun size={21} /></div><div className="checkin-copy"><p className="eyebrow">cierre semanal</p><h2>{currentCheckin ? 'Check-in guardado' : '¿Cómo ha ido la semana?'}</h2><p>{currentCheckin ? 'Puedes editarlo cuando quieras.' : 'Dos minutos para poner contexto a tus datos.'}</p></div><button className="text-button" onClick={() => setCheckinOpen((value) => !value)}>{currentCheckin ? 'Editar' : 'Hacer check-in'} <ChevronRight size={16} /></button></section>{checkinOpen && <CheckinForm existing={currentCheckin} onSave={(value) => { onAddCheckin(value); setCheckinOpen(false); }} />}
     <ExerciseTrendCard data={data} />
     <HistoryPanel data={data} />
-    <WeeklyReviewCard summary={weeklySummary} /></section>;
+    <WeeklyTrends summary={weeklySummary} /><WeeklyReviewCard summary={weeklySummary} /></section>;
 }
 
 interface ExerciseTrendOption { id: string; name: string }
@@ -1012,6 +1068,10 @@ function ExerciseTrendCard({ data }: { data: AppData }) {
   const displayValue = (value: number): string => weighted ? `${value.toLocaleString('es-ES', numberFormat)} kg` : formatVolume(value);
   const metricLabel = weighted ? 'carga máxima' : 'volumen';
   return <section className="progress-card exercise-trend-card" aria-labelledby="exercise-trend-heading"><div className="section-heading compact"><div><p className="eyebrow">histórico por ejercicio</p><h2 id="exercise-trend-heading">Tu evolución</h2></div><History size={19} /></div><label className="exercise-trend-select" htmlFor="exercise-trend-picker"><span>Ejercicio</span><select id="exercise-trend-picker" value={selected.id} onChange={(event) => setSelectedExerciseId(event.target.value)}>{options.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label><div className="weight-chart-reading exercise-trend-reading"><strong>{displayValue(weighted ? latest.maxWeightKg! : latest.volumeKg)}</strong><span>{metricLabel} · {formatDate(latest.date, { day: 'numeric', month: 'short' })}</span></div><div className="weight-chart-body"><div className="weight-chart-scale" aria-hidden="true">{scaleValues.map((value, index) => <span key={`${value}-${index}`}>{weighted ? `${value.toLocaleString('es-ES', numberFormat)} kg` : formatVolume(value)}</span>)}</div><svg className="weight-chart-svg" viewBox="0 0 320 140" role="img" aria-labelledby="exercise-trend-title exercise-trend-description" preserveAspectRatio="none"><title id="exercise-trend-title">Evolución de {selected.name}</title><desc id="exercise-trend-description">{`${metricLabel} registrado entre ${formatDate(chartPoints[0].date, { day: 'numeric', month: 'long', year: 'numeric' })} y ${formatDate(latest.date, { day: 'numeric', month: 'long', year: 'numeric' })}.`}</desc><defs><linearGradient id="exercise-trend-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="var(--accent)" stopOpacity=".32" /><stop offset="100%" stopColor="var(--accent)" stopOpacity="0" /></linearGradient></defs>{[plotTop, (plotTop + plotBottom) / 2, plotBottom].map((y) => <line className="weight-chart-gridline" key={y} x1="0" x2={width} y1={y} y2={y} />)}{chartPoints.length > 1 && <path className="weight-chart-area exercise-trend-area" d={areaPath} />}<path className="weight-chart-line" d={linePath} />{points.map((point, index) => <circle className={index === points.length - 1 ? 'weight-chart-point is-latest' : 'weight-chart-point'} key={`${point.x}-${point.y}`} cx={point.x} cy={point.y} r={index === points.length - 1 ? 4.5 : 3} />)}</svg></div><div className="weight-chart-footer"><span>{formatDate(chartPoints[0].date, { month: 'short', year: 'numeric' })}</span><span>{chartPoints.length} {chartPoints.length === 1 ? 'registro' : 'registros'}</span><span>{formatDate(latest.date, { month: 'short', year: 'numeric' })}</span></div>{chartPoints.length === 1 ? <p className="weight-chart-note">Añade otra sesión con este ejercicio para ver la tendencia.</p> : latest.discomfort ? <p className="weight-chart-note exercise-trend-warning">El último registro incluye molestias; prioriza control y comodidad antes de progresar.</p> : <p className="weight-chart-note">La línea muestra {weighted ? 'la carga máxima registrada en una serie' : 'el volumen de trabajo registrado'}.</p>}</section>;
+}
+
+function WeeklyTrends({ summary }: { summary: ReturnType<typeof buildWeeklySummary> }) {
+  return <section className="progress-card"><h2>Últimas cuatro semanas</h2><p>La semana actual está en curso. La adherencia usa el objetivo de tu rutina actual.</p><div className="weekly-trends-table"><table><thead><tr><th>Desde</th><th>Sesiones</th><th>Adherencia</th><th>Volumen</th></tr></thead><tbody>{summary.trends.map((week) => <tr key={week.week}><td>{formatDate(week.week, { day: 'numeric', month: 'short' })}</td><td>{week.sessions}</td><td>{week.adherencePercent}%</td><td>{formatVolume(week.volumeKg)}</td></tr>)}</tbody></table></div><h3>Fuerza respecto a la semana anterior</h3><p>Carga comparada en el mismo ejercicio y con las mismas repeticiones.</p>{summary.strengthChanges.length ? <ul>{summary.strengthChanges.map((entry) => <li key={entry.exerciseId}>{entry.name}: {entry.previousKg} → {entry.currentKg} kg ({entry.changePercent > 0 ? '+' : ''}{entry.changePercent}%)</li>)}</ul> : <p>Aún no hay series comparables entre ambas semanas.</p>}</section>;
 }
 
 function WeeklyReviewCard({ summary }: { summary: ReturnType<typeof buildWeeklySummary> }) {
@@ -1235,7 +1295,7 @@ function SyncPanel({ syncState, syncStatus, syncError, onConnect, onUpload, onDo
   const status = syncStatus === 'remote' ? 'Hay una copia remota pendiente de elegir.' : syncStatus === 'synced' ? 'Sincronizado ahora.' : syncStatus === 'unavailable' ? 'Cloudflare aún no está conectado.' : syncStatus === 'conflict' ? 'Hay cambios distintos en los dos dispositivos.' : syncStatus === 'checking' ? 'Comprobando el código…' : syncStatus === 'syncing' ? 'Sincronizando…' : syncState.key ? 'Código preparado.' : 'Aún no hay ningún dispositivo conectado.';
   const generate = (): void => setKey(generateSyncKey());
   const copy = (): void => { if (key) navigator.clipboard.writeText(key).catch(() => undefined); };
-  return <section className="profile-section sync-section"><div className="section-heading compact"><div><p className="eyebrow">opcional · cloudflare</p><h2>Sincronizar dispositivos</h2></div><LockKeyhole size={20} /></div><p className="section-description">Empareja el móvil y el ordenador con un código. El modo local sigue funcionando si no configuras la nube.</p><div className="sync-code-field"><label>Código de sincronización<input value={key} onChange={(event) => setKey(normalizeSyncKey(event.target.value))} placeholder="XXXX-XXXX-XXXX" autoCapitalize="characters" spellCheck={false} /></label>{key && <button className="icon-button" type="button" onClick={copy} aria-label="Copiar código"><Clipboard size={16} /></button>}</div><div className="backup-actions"><button className="secondary-button" type="button" onClick={generate}><KeyRound size={15} /> Generar código</button><button className="primary-button small" type="button" onClick={() => onConnect(key)} disabled={busy || !key}>Conectar</button></div>{syncState.key && <div className="sync-actions"><button className="secondary-button small" type="button" onClick={onDownload} disabled={busy}>Descargar nube</button><button className="secondary-button small" type="button" onClick={onUpload} disabled={busy}>Subir local</button><button className="text-button" type="button" onClick={onDisconnect}>Desconectar</button><button className="text-button danger-text" type="button" onClick={onRevoke}>Revocar código</button></div>}<p className="sync-status" role="status">{status}</p>{syncError && <p className="error-message" role="alert">{syncError}</p>}<p className="sync-security"><LockKeyhole size={13} /> La copia se cifra en el dispositivo antes de subirla. Revoca el código si cambias de móvil.</p></section>;
+  return <section className="profile-section sync-section"><div className="section-heading compact"><div><p className="eyebrow">opcional · cloudflare</p><h2>Sincronizar dispositivos</h2></div><LockKeyhole size={20} /></div><p className="section-description">Empareja el móvil y el ordenador con un código. El modo local sigue funcionando si no configuras la nube.</p><div className="sync-code-field"><label>Código de sincronización<input value={key} onChange={(event) => setKey(normalizeSyncKey(event.target.value))} placeholder="XXXX-XXXX-XXXX" autoCapitalize="characters" spellCheck={false} /></label>{key && <button className="icon-button" type="button" onClick={copy} aria-label="Copiar código"><Clipboard size={16} /></button>}</div><div className="backup-actions"><button className="secondary-button" type="button" onClick={generate}><KeyRound size={15} /> Generar código</button><button className="primary-button small" type="button" onClick={() => onConnect(key)} disabled={busy || !key}>Conectar</button></div>{syncState.key && <div className="sync-actions"><button className="secondary-button small" type="button" onClick={onDownload} disabled={busy}>Descargar nube</button><button className="secondary-button small" type="button" onClick={onUpload} disabled={busy}>Subir local</button><button className="text-button" type="button" onClick={onDisconnect}>Desconectar</button><button className="text-button danger-text" type="button" onClick={onRevoke}>Revocar código</button></div>}<p className="sync-status" role="status">{status}</p>{syncState.remoteUpdatedAt && <p className="sync-last-updated">Última versión confirmada: {new Date(syncState.remoteUpdatedAt).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' })}</p>}{syncError && <p className="error-message" role="alert">{syncError}</p>}<p className="sync-security"><LockKeyhole size={13} /> La copia se cifra en el dispositivo antes de subirla. Revoca el código si cambias de móvil.</p></section>;
 }
 
 function Fact({ label, value }: { label: string; value: string }) { return <div className="fact"><span>{label}</span><strong>{value}</strong></div>; }

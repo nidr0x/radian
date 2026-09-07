@@ -11,6 +11,7 @@ import {
   handleMcpTool,
   listRevisions,
   loadMcpUserData,
+  MCP_AUDIT_TOOL_DEFINITION,
   MCP_TOOL_DEFINITIONS,
   MCP_WRITE_TOOL_DEFINITIONS,
   previewChange,
@@ -18,6 +19,7 @@ import {
   writeMcpData,
 } from '../functions/lib/mcp';
 import { validateMcpAppData, validateMcpWriteOperation, validateMcpWriteRequest } from '../functions/lib/mcpWrite';
+import { listMcpAudit } from '../functions/lib/mcpReceipts';
 import { hasMcpScope, isAllowedRedirectUri, normalizeScope, sha256 } from '../functions/lib/mcpAuth';
 import { consentPage } from '../functions/api/mcp/authorize';
 import { onRequestGet as onProtectedResourceGet } from '../functions/.well-known/oauth-protected-resource';
@@ -70,6 +72,7 @@ const openMigratedDatabase = (): DatabaseSync => {
   const database = openBaseDatabase();
   database.exec(loadMigration('0006_mcp_revisions.sql'));
   database.exec(loadMigration('0007_mcp_recovery_hardening.sql'));
+  database.exec(loadMigration('0008_mcp_receipts.sql'));
   return database;
 };
 
@@ -377,7 +380,7 @@ describe('puente MCP remoto de Radian', () => {
     expect(readOnlyResponse.status).toBe(200);
     await expect(readOnlyResponse.json()).resolves.toMatchObject({
       result: {
-        tools: MCP_TOOL_DEFINITIONS,
+        tools: [...MCP_TOOL_DEFINITIONS, MCP_AUDIT_TOOL_DEFINITION],
       },
     });
 
@@ -395,7 +398,7 @@ describe('puente MCP remoto de Radian', () => {
     expect(readWriteResponse.status).toBe(200);
     await expect(readWriteResponse.json()).resolves.toMatchObject({
       result: {
-        tools: [...MCP_TOOL_DEFINITIONS, ...MCP_WRITE_TOOL_DEFINITIONS],
+        tools: [...MCP_TOOL_DEFINITIONS, MCP_AUDIT_TOOL_DEFINITION, ...MCP_WRITE_TOOL_DEFINITIONS],
       },
     });
     database.close();
@@ -1147,6 +1150,18 @@ describe('puente MCP remoto de Radian', () => {
     database.close();
   });
 
+  it('reproduce una escritura idempotente y deja un recibo de auditoría', async () => {
+    const database = openMigratedDatabase();
+    const baseUpdatedAt = seedUserData(database, defaultData());
+    const operation = { kind: 'update_profile' as const, profile: { gym: 'Evanfit Picanya' } };
+    const first = await writeMcpData(d1FromSqlite(database), 'user-1', 'client-1', baseUpdatedAt, operation, 'profile-1');
+    const second = await writeMcpData(d1FromSqlite(database), 'user-1', 'client-1', baseUpdatedAt, operation, 'profile-1');
+    expect(second).toEqual(first);
+    expect(readRevisionRows(database)).toHaveLength(1);
+    await expect(listMcpAudit(d1FromSqlite(database), 'user-1')).resolves.toMatchObject({ entries: [{ tool: 'update_profile', clientId: 'client-1' }] });
+    database.close();
+  });
+
   it('devuelve needs_version y no escribe nada cuando falta la versión base', async () => {
     const database = openMigratedDatabase();
     const data = defaultData();
@@ -1596,7 +1611,9 @@ describe('puente MCP remoto de Radian', () => {
     expect(readRevisionRows(database)).toHaveLength(1);
 
     await expect(applyChange(d1FromSqlite(database), 'user-1', 'client-1', preview.changeId, true)).resolves.toMatchObject({
-      error: 'change_unavailable',
+      updatedAt: expect.any(String),
+      revisionId: expect.any(String),
+      summary: { kind: 'delete_workout', workoutId: workout.id },
     });
     expect((await readStoredPayload(database)).sessions).toEqual([]);
     database.close();
@@ -2062,10 +2079,9 @@ describe('puente MCP remoto de Radian', () => {
     ]);
 
     const successes = [first, second].filter((result) => 'summary' in result && result.summary.kind === 'delete_measurement');
-    const unavailable = [first, second].filter((result) => 'error' in result && result.error === 'change_unavailable');
-
-    expect(successes).toHaveLength(1);
-    expect(unavailable).toHaveLength(1);
+    expect(successes).toHaveLength(2);
+    expect(first).toEqual(second);
+    expect(new Set(successes.map((result) => 'revisionId' in result ? result.revisionId : undefined)).size).toBe(1);
     expect((await readStoredPayload(database)).progress).toEqual([]);
     expect(readRevisionRows(database)).toHaveLength(1);
     expect(readPendingChangeRow(database, preview.changeId)?.usedAt).toEqual(expect.any(String));

@@ -5,10 +5,12 @@ import {
   isMcpReadTool,
   isMcpWriteTool,
   listMcpToolsForScope,
+  MCP_AUDIT_TOOL_DEFINITION,
   loadMcpUserData,
   writeMcpData,
 } from '../lib/mcp';
 import { validateMcpWriteOperation } from '../lib/mcpWrite';
+import { listMcpAudit } from '../lib/mcpReceipts';
 import type { SyncContext } from '../types';
 
 const SUPPORTED_PROTOCOL_VERSIONS = ['2025-06-18', '2026-07-28'];
@@ -102,7 +104,7 @@ const validatedWriteOperation = (toolName: string, args: Record<string, unknown>
   const definition = MCP_WRITE_TOOL_DEFINITIONS.find((tool) => tool.name === toolName);
   if (!definition) throw new Error('La herramienta solicitada no está disponible.');
   assertWriteSchema(args, definition.inputSchema as McpInputSchema, 'arguments');
-  const { baseUpdatedAt: _baseUpdatedAt, ...operationArgs } = args;
+  const { baseUpdatedAt: _baseUpdatedAt, idempotencyKey: _idempotencyKey, ...operationArgs } = args;
   return validateMcpWriteOperation({ kind: toolName, ...operationArgs });
 };
 
@@ -171,11 +173,18 @@ export const onRequestPost = async (context: SyncContext): Promise<Response> => 
   if (body.method === 'notifications/initialized') return new Response(null, { status: 202, headers: { 'Cache-Control': 'no-store' } });
   if (body.method !== 'tools/call') return mcpJson(rpcError(body.id, -32601, 'Método MCP no disponible.'), 404);
 
+  const args = isRecord(params.arguments) ? params.arguments : {};
+  if (params.name === MCP_AUDIT_TOOL_DEFINITION.name) {
+    if (Object.keys(args).length) return mcpJson(rpcError(body.id, -32602, 'Esta consulta no admite parámetros.'), 400);
+    try {
+      return toolResult(body, await listMcpAudit(authenticated.database, authenticated.userId));
+    } catch {
+      return mcpJson(rpcError(body.id, MCP_RUNTIME_ERROR_CODE, 'No se pudo consultar el historial de cambios.'));
+    }
+  }
   if (typeof params.name !== 'string' || (!isMcpReadTool(params.name) && !isMcpWriteTool(params.name))) {
     return mcpJson(rpcError(body.id, -32602, 'La herramienta solicitada no está disponible.'), 400);
   }
-  const args = isRecord(params.arguments) ? params.arguments : {};
-
   if (isMcpWriteTool(params.name)) {
     if (!hasMcpScope(authenticated.scope, MCP_WRITE_SCOPE)) {
       return toolError(body, `La herramienta ${params.name} requiere el scope ${MCP_WRITE_SCOPE}.`, {
@@ -194,6 +203,7 @@ export const onRequestPost = async (context: SyncContext): Promise<Response> => 
         authenticated.clientId,
         validated.baseUpdatedAt,
         validated.operation,
+        typeof args.idempotencyKey === 'string' ? args.idempotencyKey : undefined,
       );
       const controlledError = asControlledWriteError(value);
       return controlledError

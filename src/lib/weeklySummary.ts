@@ -9,6 +9,8 @@ export interface WeeklySummary {
   completedSessions: number;
   completedExercises: number;
   volumeKg: number;
+  trends: { week: string; sessions: number; adherencePercent: number; volumeKg: number }[];
+  strengthChanges: { exerciseId: string; name: string; previousKg: number; currentKg: number; changePercent: number }[];
   difficultyCounts: Record<Difficulty, number>;
   discomfortExercises: string[];
   progressingExercises: string[];
@@ -109,6 +111,36 @@ export const buildWeeklySummary = (data: AppData, now = new Date()): WeeklySumma
   const lastMeasure = measures.at(-1) ?? orderedProgress.at(-1);
   const checkin = data.checkins.find((entry) => entry.weekKey === weekKey(now));
   const targetSessions = Math.max(Math.min(normalizeTrainingDays(data.profile.trainingDays).length, data.plan.days.length), 1);
+  const trends = Array.from({ length: 4 }, (_, index) => {
+    const from = new Date(start);
+    from.setDate(from.getDate() - (3 - index) * 7);
+    const to = new Date(from);
+    to.setDate(to.getDate() + 6);
+    const entries = sessionsInWeek(data.sessions, from, to);
+    return { week: dateKey(from), sessions: entries.length, adherencePercent: Math.min(100, Math.round(entries.length / targetSessions * 100)), volumeKg: volumeFor(entries) };
+  });
+  const previousStart = new Date(start);
+  previousStart.setDate(previousStart.getDate() - 7);
+  const previousEnd = new Date(start);
+  previousEnd.setDate(previousEnd.getDate() - 1);
+  // Compare the same exercise and rep count: changing exercises or reps is not a strength gain.
+  const loads = (entries: WorkoutSession[]) => {
+    const result = new Map<string, { exerciseId: string; name: string; kg: number }>();
+    entries.forEach((session) => session.plannedExercises.forEach((exercise) => exercise.setLogs.filter(isWorkSet).forEach((set) => {
+      if (!set.completed || !set.weightKg || !set.actualReps) return;
+      const key = `${exercise.exerciseId}:${set.actualReps}`;
+      if (set.weightKg > (result.get(key)?.kg ?? 0)) result.set(key, { exerciseId: exercise.exerciseId, name: exercise.name, kg: set.weightKg });
+    })));
+    return result;
+  };
+  const previousLoads = loads(sessionsInWeek(data.sessions, previousStart, previousEnd));
+  const seenStrength = new Set<string>();
+  const strengthChanges = [...loads(sessions)].flatMap(([key, current]) => {
+    const previous = previousLoads.get(key);
+    if (!previous || seenStrength.has(current.exerciseId)) return [];
+    seenStrength.add(current.exerciseId);
+    return [{ exerciseId: current.exerciseId, name: current.name, previousKg: previous.kg, currentKg: current.kg, changePercent: Math.round((current.kg / previous.kg - 1) * 100) }];
+  });
   const feedback = overallFeedback(sessions);
   const remainingSessions = Math.max(targetSessions - sessions.length, 0);
   const recommendations = weeklyRecommendationsFor(data);
@@ -137,6 +169,8 @@ export const buildWeeklySummary = (data: AppData, now = new Date()): WeeklySumma
     completedSessions: sessions.length,
     completedExercises,
     volumeKg: volumeFor(sessions),
+    trends,
+    strengthChanges,
     difficultyCounts,
     discomfortExercises,
     progressingExercises,
@@ -184,6 +218,10 @@ export const weeklySummaryText = (data: AppData, now = new Date()): string => {
     'CAMBIOS',
     `Peso: ${formatMeasure(summary.weightStart, 'kg')} → ${formatMeasure(summary.weightEnd, 'kg')}`,
     `Cintura: ${formatMeasure(summary.waistStart, 'cm')} → ${formatMeasure(summary.waistEnd, 'cm')}`,
+    '',
+    'TENDENCIAS',
+    ...summary.trends.map((trend) => `${trend.week}: ${trend.sessions} sesiones · ${trend.adherencePercent}% del objetivo · ${formatMeasure(trend.volumeKg, 'kg')} de volumen`),
+    summary.strengthChanges.length ? `Fuerza comparable: ${summary.strengthChanges.map((change) => `${change.name} ${change.previousKg} → ${change.currentKg} kg`).join('; ')}` : 'Fuerza comparable: sin datos entre semanas consecutivas',
     '',
     'LECTURA',
     summary.feedback,

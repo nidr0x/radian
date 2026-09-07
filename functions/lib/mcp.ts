@@ -3,6 +3,7 @@ import { progressionAction, recommendationFor } from '../../src/lib/recommendati
 import { isWorkSet, nextPrescription, type ProgressionPlan } from '../../src/lib/progression';
 import { summarizeSession } from '../../src/lib/sessionSummary';
 import { buildWeeklySummary, weeklySummaryText } from '../../src/lib/weeklySummary';
+import { readReceipt, receiptStatement, requestFingerprint } from './mcpReceipts';
 import type { AppData, ExerciseSession, ProgressEntry, WorkoutSession } from '../../src/types';
 import { hasMcpScope, MCP_WRITE_SCOPE } from './mcpAuth';
 import { validateMcpAppData, validateMcpAppDataWithHistoricalSessions, validateMcpWriteOperation } from './mcpWrite';
@@ -47,6 +48,13 @@ export type McpWriteResult =
   | McpConfirmationRequiredResult
   | McpChangeUnavailableResult
   | { revisions: RevisionSummary[] };
+
+export const MCP_AUDIT_TOOL_DEFINITION = {
+  name: 'get_change_history',
+  title: 'Consultar cambios del MCP',
+  description: 'Lista las últimas 100 operaciones aplicadas desde la activación de la auditoría, con fecha, cliente y revisión recuperable cuando existe. No devuelve datos de entrenamiento.',
+  inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+} as const;
 
 export const MCP_TOOL_DEFINITIONS = [
   {
@@ -130,6 +138,7 @@ export const MCP_WRITE_TOOL_DEFINITIONS = [
       type: 'object',
       properties: {
         baseUpdatedAt: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}T' },
+        idempotencyKey: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,100}$' },
         profile: { type: 'object' },
       },
       required: ['baseUpdatedAt', 'profile'],
@@ -144,6 +153,7 @@ export const MCP_WRITE_TOOL_DEFINITIONS = [
       type: 'object',
       properties: {
         baseUpdatedAt: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}T' },
+        idempotencyKey: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,100}$' },
         plan: { type: 'object' },
         exercises: { type: 'array' },
       },
@@ -159,6 +169,7 @@ export const MCP_WRITE_TOOL_DEFINITIONS = [
       type: 'object',
       properties: {
         baseUpdatedAt: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}T' },
+        idempotencyKey: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,100}$' },
         workout: { type: 'object' },
       },
       required: ['baseUpdatedAt', 'workout'],
@@ -173,6 +184,7 @@ export const MCP_WRITE_TOOL_DEFINITIONS = [
       type: 'object',
       properties: {
         baseUpdatedAt: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}T' },
+        idempotencyKey: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,100}$' },
         entry: { type: 'object' },
       },
       required: ['baseUpdatedAt', 'entry'],
@@ -187,6 +199,7 @@ export const MCP_WRITE_TOOL_DEFINITIONS = [
       type: 'object',
       properties: {
         baseUpdatedAt: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}T' },
+        idempotencyKey: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,100}$' },
         checkin: { type: 'object' },
       },
       required: ['baseUpdatedAt', 'checkin'],
@@ -247,8 +260,8 @@ const MCP_READ_TOOL_NAMES = new Set<string>(MCP_TOOL_DEFINITIONS.map((tool) => t
 const MCP_WRITE_TOOL_NAMES = new Set<string>(MCP_WRITE_TOOL_DEFINITIONS.map((tool) => tool.name));
 
 export const listMcpToolsForScope = (scope: string) => hasMcpScope(scope, MCP_WRITE_SCOPE)
-  ? [...MCP_TOOL_DEFINITIONS, ...MCP_WRITE_TOOL_DEFINITIONS]
-  : [...MCP_TOOL_DEFINITIONS];
+  ? [...MCP_TOOL_DEFINITIONS, MCP_AUDIT_TOOL_DEFINITION, ...MCP_WRITE_TOOL_DEFINITIONS]
+  : [...MCP_TOOL_DEFINITIONS, MCP_AUDIT_TOOL_DEFINITION];
 
 export const isMcpReadTool = (name: string): boolean => MCP_READ_TOOL_NAMES.has(name);
 export const isMcpWriteTool = (name: string): boolean => MCP_WRITE_TOOL_NAMES.has(name);
@@ -335,6 +348,7 @@ const runRevisionedMutation = async (
   revisionId: string,
   createdAt: string,
   mutation: D1PreparedStatementLike,
+  receipt?: D1PreparedStatementLike,
 ): Promise<D1ResultLike> => {
   const results = await database.batch([
     database.prepare(
@@ -342,6 +356,7 @@ const runRevisionedMutation = async (
        VALUES (?, ?, ?)`,
     ).bind(userId, revisionId, createdAt),
     mutation,
+    ...(receipt ? [receipt] : []),
     database.prepare(
       `DELETE FROM mcp_revision_context
         WHERE user_id = ? AND revision_id = ?`,
@@ -673,6 +688,9 @@ export const applyChange = async (
   if (!await hasActiveWriteOwnership(database, userId, clientId)) return oauthOwnershipConflictResult();
 
   const now = new Date().toISOString();
+  const fingerprint = await requestFingerprint({ changeId, confirm });
+  const replay = await readReceipt(database, userId, clientId, `apply:${changeId}`, fingerprint);
+  if (replay) return replay;
   const pending = await database.prepare(
     `SELECT
         id,
@@ -838,7 +856,8 @@ export const applyChange = async (
 
   let result: D1ResultLike;
   try {
-    result = await runRevisionedMutation(database, userId, revisionId, updatedAt, mutation);
+    result = await runRevisionedMutation(database, userId, revisionId, updatedAt, mutation,
+      receiptStatement(database, userId, clientId, `apply:${changeId}`, fingerprint, pending.kind, { updatedAt, summary, revisionId }));
   } catch (error) {
     await releasePendingChangeClaim(database, userId, clientId, changeId, claimId);
     throw error;
@@ -903,6 +922,10 @@ export const restoreRevision = async (
   baseUpdatedAt: string | undefined,
 ): Promise<McpMutationResult | McpConflictResult | McpNeedsVersionResult | McpChangeUnavailableResult> => {
   if (!await hasActiveWriteOwnership(database, userId, clientId)) return oauthOwnershipConflictResult();
+  const fingerprint = await requestFingerprint({ revisionId, baseUpdatedAt });
+  const requestKey = `restore:${fingerprint}`;
+  const replay = await readReceipt(database, userId, clientId, requestKey, fingerprint);
+  if (replay) return replay;
   const current = await loadMcpUserData(database, userId);
   if (!baseUpdatedAt) return needsVersionResult(current);
 
@@ -972,9 +995,12 @@ export const restoreRevision = async (
       now,
       MCP_WRITE_SCOPE,
     );
-    result = await runRevisionedMutation(database, userId, createdRevisionId, updatedAt, mutation);
+    result = await runRevisionedMutation(database, userId, createdRevisionId, updatedAt, mutation,
+      receiptStatement(database, userId, clientId, requestKey, fingerprint, 'restore_revision', {
+        updatedAt, summary: { kind: 'restore_revision', restoredFromRevisionId: revisionId }, revisionId: createdRevisionId,
+      }));
   } else {
-    result = await database.prepare(
+    const mutation = database.prepare(
       `INSERT INTO user_data (user_id, payload, updated_at)
        SELECT ?, ?, ?
         WHERE NOT EXISTS (
@@ -1011,7 +1037,10 @@ export const restoreRevision = async (
       clientId,
       now,
       MCP_WRITE_SCOPE,
-    ).run();
+    );
+    [result] = await database.batch([mutation, receiptStatement(database, userId, clientId, requestKey, fingerprint, 'restore_revision', {
+      updatedAt, summary: { kind: 'restore_revision', restoredFromRevisionId: revisionId },
+    })]);
   }
 
   if ((result.meta?.changes ?? 0) !== 1) {
@@ -1040,6 +1069,7 @@ export const writeMcpData = async (
   clientId: string,
   baseUpdatedAt: string | undefined,
   operation: McpWriteOperation,
+  idempotencyKey?: string,
 ): Promise<McpWriteResult> => {
   if (operation.kind === 'preview_change') {
     return previewChange(database, userId, clientId, {
@@ -1061,6 +1091,12 @@ export const writeMcpData = async (
   }
 
   if (!await hasActiveWriteOwnership(database, userId, clientId)) return oauthOwnershipConflictResult();
+  const fingerprint = await requestFingerprint({ baseUpdatedAt, operation });
+  const requestKey = `write:${idempotencyKey ?? globalThis.crypto.randomUUID()}`;
+  if (idempotencyKey) {
+    const replay = await readReceipt(database, userId, clientId, requestKey, fingerprint);
+    if (replay) return replay;
+  }
   const current = await loadMcpUserData(database, userId);
   if (!baseUpdatedAt) return needsVersionResult(current);
   if (!current.data || !current.updatedAt) return conflictResult(current);
@@ -1073,8 +1109,8 @@ export const writeMcpData = async (
   const { next, summary } = applyMutation(current.data, validatedOperation);
   validateMcpAppDataWithHistoricalSessions(next);
 
-  const updatedAt = new Date().toISOString();
-  const result = await database.prepare(
+  const updatedAt = nextVersion(baseUpdatedAt);
+  const mutation = database.prepare(
     `UPDATE user_data
      SET payload = ?, updated_at = ?
      WHERE user_id = ? AND updated_at = ?
@@ -1097,9 +1133,22 @@ export const writeMcpData = async (
     clientId,
     updatedAt,
     MCP_WRITE_SCOPE,
-  ).run();
+  );
+
+  let result: D1ResultLike;
+  try {
+    [result] = await database.batch([mutation, receiptStatement(database, userId, clientId, requestKey, fingerprint, operation.kind, { updatedAt, summary })]);
+  } catch (error) {
+    const replay = await readReceipt(database, userId, clientId, requestKey, fingerprint);
+    if (replay) return replay;
+    throw error;
+  }
 
   if ((result.meta?.changes ?? 0) !== 1) {
+    if (idempotencyKey) {
+      const replay = await readReceipt(database, userId, clientId, requestKey, fingerprint);
+      if (replay) return replay;
+    }
     return conflictResult(await loadMcpUserData(database, userId));
   }
 
