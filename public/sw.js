@@ -1,6 +1,6 @@
 const CACHE_NAME = 'radian-shell-__BUILD_ID__';
 const APP_SHELL = [
-  '/', '/index.html', '/manifest.webmanifest', '/icon.svg',
+  '/', '/manifest.webmanifest', '/icon.svg',
   '/exercises/atlas-push.webp', '/exercises/atlas-pull.webp', '/exercises/atlas-arms.webp',
   '/exercises/atlas-legs.webp', '/exercises/atlas-support.webp',
   '/exercises/individual/incline-press.webp', '/exercises/individual/chest-press.webp',
@@ -15,13 +15,24 @@ const APP_SHELL = [
   '/exercises/individual/shoulder-press.webp',
 ];
 
+const hasRedirectedLegacyShell = async () => {
+  const keys = await caches.keys();
+  for (const key of keys.filter((candidate) => candidate.startsWith('radian-shell-') && candidate !== CACHE_NAME)) {
+    const cache = await caches.open(key);
+    const shell = await cache.match('/index.html');
+    if (shell?.redirected) return true;
+  }
+  return false;
+};
+
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then(async (cache) => {
     await cache.addAll(APP_SHELL);
-    const shell = await cache.match('/index.html');
+    const shell = await cache.match('/');
     const html = await shell.text();
     const assets = [...html.matchAll(/(?:src|href)="(\/assets\/[^\"]+)"/g)].map((match) => match[1]);
     await cache.addAll(assets);
+    if (await hasRedirectedLegacyShell()) self.skipWaiting();
   }));
 });
 
@@ -42,7 +53,7 @@ self.addEventListener('fetch', (event) => {
   if (event.request.mode !== 'navigate' && !isAsset) return;
   event.respondWith(caches.open(CACHE_NAME).then(async (cache) => {
     // The HTML and its hashed assets stay on the same release until the user updates.
-    if (event.request.mode === 'navigate') return (await cache.match('/index.html')) ?? fetch(event.request);
+    if (event.request.mode === 'navigate') return (await cache.match('/')) ?? fetch(event.request);
     const cached = await cache.match(event.request);
     if (cached) return cached;
     const response = await fetch(event.request);
