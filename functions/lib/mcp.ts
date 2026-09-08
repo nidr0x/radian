@@ -1,7 +1,10 @@
 import { currentWeekday, dateKey, scheduledWorkoutDays, weekKey } from '../../src/lib/date';
-import { progressionAction, recommendationFor } from '../../src/lib/recommendations';
+import { compatibleAlternatives, equipmentLabel } from '../../src/lib/exercises';
+import { migrateData } from '../../src/lib/storage';
+import { detectTrainingSignals, progressionAction, recommendationFor } from '../../src/lib/recommendations';
 import { isWorkSet, nextPrescription, type ProgressionPlan } from '../../src/lib/progression';
 import { summarizeSession } from '../../src/lib/sessionSummary';
+import { sessionAdaptation } from '../../src/lib/sessionAdaptation';
 import { buildWeeklySummary, weeklySummaryText } from '../../src/lib/weeklySummary';
 import { readReceipt, receiptStatement, requestFingerprint } from './mcpReceipts';
 import type { AppData, ExerciseSession, ProgressEntry, WorkoutSession } from '../../src/types';
@@ -126,6 +129,37 @@ export const MCP_TOOL_DEFINITIONS = [
     title: 'Preparar próximo entrenamiento',
     description: 'Devuelve la sesión que toca hoy o la siguiente disponible, con la prescripción de cada ejercicio. Solo lectura.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'get_chat_context',
+    title: 'Preparar contexto para ChatGPT',
+    description: 'Devuelve en una sola lectura el perfil, la revisión semanal, el próximo entrenamiento y las recomendaciones actuales para que un asistente pueda ayudarte sin varias llamadas.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'get_equipment_alternatives',
+    title: 'Buscar alternativas por material',
+    description: 'Busca sustituciones del mismo grupo muscular usando únicamente el equipamiento disponible en el perfil.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        exercise: { type: 'string', minLength: 1 },
+        limit: { type: 'integer', minimum: 1, maximum: 8, default: 4 },
+      },
+      required: ['exercise'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'explain_recommendation',
+    title: 'Explicar una recomendación',
+    description: 'Explica la próxima acción de un ejercicio con el histórico reciente, la evidencia disponible y alternativas que sí puedes hacer.',
+    inputSchema: {
+      type: 'object',
+      properties: { exercise: { type: 'string', minLength: 1 } },
+      required: ['exercise'],
+      additionalProperties: false,
+    },
   },
 ];
 
@@ -278,7 +312,7 @@ export const loadMcpUserData = async (database: D1DatabaseLike, userId: string):
   if (!row) return { data: null };
   try {
     const parsed: unknown = JSON.parse(row.payload);
-    return { data: validateMcpAppDataWithHistoricalSessions(parsed), updatedAt: row.updatedAt };
+    return { data: validateMcpAppDataWithHistoricalSessions(migrateData(parsed)), updatedAt: row.updatedAt };
   } catch {
     throw new Error('Los datos de Radian guardados en la nube no se pueden leer.');
   }
@@ -1228,6 +1262,8 @@ const profileResult = (data: AppData) => ({
   currentWeightKg: data.profile.currentWeightKg,
   heightCm: data.profile.heightCm,
   nutritionContext: data.profile.nutritionContext || undefined,
+  availableEquipment: data.profile.availableEquipment,
+  availableEquipmentLabels: data.profile.availableEquipment.map((equipment) => equipmentLabel(equipment)),
 });
 
 const recommendationsResult = (data: AppData) => {
@@ -1270,6 +1306,7 @@ const nextSessionResult = (data: AppData) => {
       focus: day?.focus,
       weekday: day?.weekday,
       readiness: inProgress.readiness,
+      adaptation: sessionAdaptation(inProgress.readiness),
       exercises: inProgress.plannedExercises.map((exercise) => ({
         exerciseId: exercise.exerciseId,
         name: exercise.name,
@@ -1311,6 +1348,74 @@ const nextSessionResult = (data: AppData) => {
   };
 };
 
+const definitionMatches = (definition: AppData['exercises'][number], query: string): boolean => [definition.id, definition.name, definition.muscleGroup, ...(definition.aliases ?? [])]
+  .map(normalizeText)
+  .some((value) => value === query || value.includes(query) || query.includes(value));
+
+const definitionResult = (definition: AppData['exercises'][number]) => ({
+  id: definition.id,
+  name: definition.name,
+  muscleGroup: definition.muscleGroup,
+  equipment: definition.equipment,
+  equipmentLabel: equipmentLabel(definition.equipment),
+});
+
+const matchedDefinition = (data: AppData, rawQuery: unknown): AppData['exercises'][number] | undefined => {
+  const query = typeof rawQuery === 'string' ? normalizeText(rawQuery) : '';
+  if (!query) throw new Error('exercise es obligatorio.');
+  return data.exercises.find((definition) => definitionMatches(definition, query));
+};
+
+const alternativesResult = (data: AppData, definition: AppData['exercises'][number], limit: number) => compatibleAlternatives(data.exercises, definition.id, data.profile.availableEquipment)
+  .slice(0, limit)
+  .map(definitionResult);
+
+const equipmentAlternativesLimit = (args: Record<string, unknown>): number => {
+  const limit = args.limit === undefined ? 4 : args.limit;
+  if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > 8) throw new Error('limit debe ser un entero entre 1 y 8.');
+  return limit;
+};
+
+const chatContextResult = (data: AppData) => {
+  const summary = buildWeeklySummary(data);
+  return {
+    profile: profileResult(data),
+    weeklyReview: { ...summary, text: weeklySummaryText(data) },
+    nextSession: nextSessionResult(data),
+    recommendations: recommendationsResult(data),
+    signals: detectTrainingSignals(data),
+  };
+};
+
+const recommendationExplanation = (data: AppData, definition: AppData['exercises'][number]) => {
+  const planned = data.plan.days.flatMap((day) => day.exercises).find((exercise) => exercise.exerciseId === definition.id);
+  const action = planned ? progressionAction(definition.id, data.sessions, planned) : undefined;
+  const recommendation = recommendationFor(definition.id, data.sessions);
+  const evidence = sortedSessions(data).flatMap((session) => session.plannedExercises
+    .filter((exercise) => exercise.exerciseId === definition.id)
+    .map((exercise) => ({
+      date: session.dateKey,
+      workoutId: session.id,
+      completed: exercise.completed,
+      difficulty: exercise.difficulty,
+      discomfort: exercise.discomfort,
+      discomfortNote: exercise.discomfortNote,
+      volumeKg: Math.round(volumeForExercise(exercise) * 10) / 10,
+      setLogs: completedWorkSets(exercise).map((set) => ({ actualReps: set.actualReps, weightKg: set.weightKg })),
+    })))
+    .slice(0, 5);
+  return {
+    matchedExercise: definitionResult(definition),
+    recommendation: action
+      ? { tone: action.tone, title: action.title, detail: action.detail }
+      : recommendation
+        ? { tone: recommendation.tone, title: recommendation.label, detail: recommendation.message }
+        : null,
+    evidence,
+    alternatives: alternativesResult(data, definition, 4),
+  };
+};
+
 export const handleMcpTool = async (name: string, args: Record<string, unknown>, loaded: AppData | null | McpLoadedUserData): Promise<Record<string, unknown>> => {
   const { data, updatedAt } = normalizeLoadedData(loaded);
   if (!data) return { message: 'Tu cuenta está conectada, pero todavía no hay una copia de Radian subida a D1.' };
@@ -1319,8 +1424,18 @@ export const handleMcpTool = async (name: string, args: Record<string, unknown>,
     const summary = buildWeeklySummary(data);
     return withVersion({ ...summary, text: weeklySummaryText(data) }, updatedAt);
   }
-  if (name === 'get_recommendations') return withVersion({ recommendations: recommendationsResult(data) }, updatedAt);
+  if (name === 'get_recommendations') return withVersion({ recommendations: recommendationsResult(data), signals: detectTrainingSignals(data) }, updatedAt);
   if (name === 'get_next_session') return withVersion(nextSessionResult(data), updatedAt);
+  if (name === 'get_chat_context') return withVersion(chatContextResult(data), updatedAt);
+  if (name === 'get_equipment_alternatives') {
+    const limit = equipmentAlternativesLimit(args);
+    const definition = matchedDefinition(data, args.exercise);
+    return withVersion({ query: args.exercise, matchedExercise: definition ? definitionResult(definition) : null, alternatives: definition ? alternativesResult(data, definition, limit) : [] }, updatedAt);
+  }
+  if (name === 'explain_recommendation') {
+    const definition = matchedDefinition(data, args.exercise);
+    return withVersion(definition ? recommendationExplanation(data, definition) : { matchedExercise: null, recommendation: null, evidence: [], alternatives: [] }, updatedAt);
+  }
   if (name === 'list_workouts') {
     const range = rangeFor(args);
     const limit = args.limit === undefined ? 20 : args.limit;

@@ -70,6 +70,7 @@ UserProfile,
 | 'trainingDays'
 | 'sessionMinutes'
 | 'experienceLevel'
+| 'availableEquipment'
 | 'heightCm'
 | 'currentWeightKg'
 | 'nutritionContext'

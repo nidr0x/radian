@@ -350,6 +350,9 @@ describe('puente MCP remoto de Radian', () => {
       'get_bodyweight',
       'get_recommendations',
       'get_next_session',
+      'get_chat_context',
+      'get_equipment_alternatives',
+      'explain_recommendation',
     ]);
     expect(MCP_TOOL_DEFINITIONS.every((tool) => !tool.name.includes('write') && !tool.name.includes('delete'))).toBe(true);
   });
@@ -815,6 +818,36 @@ describe('puente MCP remoto de Radian', () => {
     });
   });
 
+  it('expone un contexto compacto y alternativas que respetan el equipamiento del perfil', async () => {
+    const data = defaultData();
+    data.profile.availableEquipment = ['cable'];
+
+    await expect(handleMcpTool('get_chat_context', {}, data)).resolves.toMatchObject({
+      profile: { availableEquipment: ['cable'] },
+      nextSession: { status: expect.any(String) },
+      weeklyReview: { text: expect.stringContaining('RADIAN | REVISIÓN SEMANAL') },
+    });
+    await expect(handleMcpTool('get_equipment_alternatives', { exercise: 'press inclinado' }, data)).resolves.toMatchObject({
+      matchedExercise: { id: 'incline-press', equipment: 'machine' },
+      alternatives: [expect.objectContaining({ id: 'cable-fly', equipment: 'cable', equipmentLabel: 'Polea' })],
+    });
+  });
+
+  it('explica una recomendación con histórico y alternativas utilizables', async () => {
+    const data = defaultData();
+    const session = createSession(data.plan.days[0], '2026-08-31', new Date('2026-08-31T10:00:00.000Z'));
+    session.status = 'completed';
+    session.completedAt = '2026-08-31T11:00:00.000Z';
+    session.plannedExercises[0].difficulty = 'easy';
+    data.sessions = [session];
+
+    await expect(handleMcpTool('explain_recommendation', { exercise: 'incline-press' }, data)).resolves.toMatchObject({
+      matchedExercise: { id: 'incline-press', name: 'Press inclinado en máquina' },
+      evidence: [expect.objectContaining({ date: '2026-08-31', difficulty: 'easy' })],
+      alternatives: expect.any(Array),
+    });
+  });
+
   it('devuelve la sesión prevista con la prescripción de cada ejercicio', async () => {
     const data = defaultData();
     const result = await handleMcpTool('get_next_session', {}, {
@@ -859,6 +892,7 @@ describe('puente MCP remoto de Radian', () => {
           prescription: { status: 'hold', reason: 'Mantén la carga actual.', targetReps: 10, nextWeightKg: 40 },
         }),
       ]),
+      adaptation: { mode: 'recovery' },
     });
   });
 
@@ -888,6 +922,19 @@ describe('puente MCP remoto de Radian', () => {
           gym: 'Evanfit Picanya',
         },
       },
+    });
+    database.close();
+  });
+
+  it('normaliza perfiles antiguos de D1 antes de exponerlos al MCP', async () => {
+    const database = openMigratedDatabase();
+    const data = defaultData();
+    const legacyProfile = { ...data.profile, availableEquipment: undefined };
+    run(database, 'INSERT INTO users (id) VALUES (?)', 'user-1');
+    run(database, 'INSERT INTO user_data (user_id, payload, updated_at) VALUES (?, ?, ?)', 'user-1', JSON.stringify({ ...data, profile: legacyProfile }), '2026-08-31T21:00:00.000Z');
+
+    await expect(loadMcpUserData(d1FromSqlite(database), 'user-1')).resolves.toMatchObject({
+      data: { profile: { availableEquipment: ['machine', 'cable', 'dumbbell', 'barbell', 'bodyweight'] } },
     });
     database.close();
   });

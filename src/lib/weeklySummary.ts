@@ -1,5 +1,5 @@
 import { dateKey, formatDate, normalizeTrainingDays, weekKey } from './date';
-import { overallFeedback, progressionAction, recommendationFor } from './recommendations';
+import { detectTrainingSignals, overallFeedback, progressionAction, recommendationFor, type TrainingSignal } from './recommendations';
 import { isWorkSet } from './progression';
 import type { AppData, Difficulty, Energy, WorkoutSession } from '../types';
 
@@ -25,6 +25,7 @@ export interface WeeklySummary {
   focus: string;
   focusTone: 'positive' | 'neutral' | 'caution';
   recommendations: WeeklyRecommendation[];
+  signals: TrainingSignal[];
 }
 
 export interface WeeklyRecommendation {
@@ -144,6 +145,7 @@ export const buildWeeklySummary = (data: AppData, now = new Date()): WeeklySumma
   const feedback = overallFeedback(sessions);
   const remainingSessions = Math.max(targetSessions - sessions.length, 0);
   const recommendations = weeklyRecommendationsFor(data);
+  const signals = detectTrainingSignals(data);
 
   let focus = 'Mantén el registro simple y observa cómo responde tu cuerpo.';
   let focusTone: WeeklySummary['focusTone'] = 'neutral';
@@ -155,6 +157,9 @@ export const buildWeeklySummary = (data: AppData, now = new Date()): WeeklySumma
     focusTone = 'caution';
   } else if (checkin?.energy === 'low') {
     focus = 'Prioriza recuperar bien esta semana y mantén la carga mientras la energía remonta.';
+    focusTone = 'caution';
+  } else if (signals.length > 0) {
+    focus = `Hay ${signals.length === 1 ? 'una señal' : 'varias señales'} de ${signals[0].kind === 'fatigue' ? 'fatiga' : 'estancamiento'}. Ajusta una variable antes de progresar.`;
     focusTone = 'caution';
   } else if (progressingExercises.length > 0) {
     focus = `Hay margen para progresar en ${progressingExercises.slice(0, 2).join(' y ')} si mantienes la técnica.`;
@@ -185,6 +190,7 @@ export const buildWeeklySummary = (data: AppData, now = new Date()): WeeklySumma
     focus,
     focusTone,
     recommendations,
+    signals,
   };
 };
 
@@ -231,6 +237,9 @@ export const weeklySummaryText = (data: AppData, now = new Date()): string => {
   if (details.length) lines.push('', 'DETALLE DE EJERCICIOS', ...details);
   if (summary.recommendations.length) {
     lines.push('', 'RECOMENDACIONES PARA LA PRÓXIMA SEMANA', ...summary.recommendations.map((recommendation) => `${recommendation.name}: ${recommendation.title}. ${recommendation.detail}`));
+  }
+  if (summary.signals.length) {
+    lines.push('', 'SEÑALES A REVISAR', ...summary.signals.map((signal) => `${signal.name}: ${signal.title}. ${signal.detail}`));
   }
   if (summary.progressingExercises.length) lines.push(`Margen de progresión: ${summary.progressingExercises.join(', ')}`);
   if (summary.feeling) lines.push(`Sensación: ${summary.feeling}`);

@@ -1,5 +1,7 @@
 import { defaultData } from '../data/initialPlan';
+import { allExerciseEquipment } from './exercises';
 import { nextPrescription } from './progression';
+import { adaptPlannedExercise, sessionAdaptation } from './sessionAdaptation';
 import type { AppData, BackupPayload, Energy, ExerciseSession, PlannedExercise, ProgressionPolicy, SessionReadiness, SetLog, Soreness, WorkoutDay, WorkoutSession } from '../types';
 
 export const STORAGE_KEY = 'radian-data-v1';
@@ -49,46 +51,48 @@ const latestCompletedExercise = (exerciseId: string, sessions: WorkoutSession[])
   .sort((a, b) => (b.completedAt ?? b.startedAt).localeCompare(a.completedAt ?? a.startedAt))
   .flatMap((session) => session.plannedExercises.filter((exercise) => exercise.exerciseId === exerciseId))[0];
 
-export const createSession = (day: WorkoutDay, date: string, now = new Date(), history: WorkoutSession[] = [], readiness?: SessionReadiness): WorkoutSession => ({
-  id: `session-${date}`,
-  workoutDayId: day.id,
-  dateKey: date,
-  startedAt: now.toISOString(),
-  status: 'in_progress',
-  activeExerciseIndex: 0,
-  ...(readiness ? { readiness } : {}),
-  plannedExercises: day.exercises.filter((exercise) => exercise.active).map((exercise): ExerciseSession => ({
-    ...(() => {
+export const createSession = (day: WorkoutDay, date: string, now = new Date(), history: WorkoutSession[] = [], readiness?: SessionReadiness): WorkoutSession => {
+  const adaptation = sessionAdaptation(readiness);
+  return {
+    id: `session-${date}`,
+    workoutDayId: day.id,
+    dateKey: date,
+    startedAt: now.toISOString(),
+    status: 'in_progress',
+    activeExerciseIndex: 0,
+    ...(readiness ? { readiness } : {}),
+    plannedExercises: day.exercises.filter((exercise) => exercise.active).map((exercise): ExerciseSession => {
       const plan = nextPrescription(exercise, history);
-      const warmupSets = clampWarmupSets(exercise.warmupSets);
+      const adapted = adaptPlannedExercise(exercise, adaptation);
+      const warmupSets = clampWarmupSets(adapted.warmupSets);
       const previous = latestCompletedExercise(exercise.exerciseId, history);
       return {
+        plannedExerciseId: exercise.id,
+        exerciseId: exercise.exerciseId,
+        name: exercise.name,
+        sets: adapted.sets,
+        repMin: adapted.repMin,
+        repMax: adapted.repMax,
+        restSeconds: adapted.restSeconds,
+        imageUrl: exercise.imageUrl,
+        imagePosition: exercise.imagePosition,
+        completed: false,
+        discomfort: false,
         warmupSets,
-        progressionPolicy: validPolicy(exercise.progressionPolicy),
-        progressionIncrementKg: validIncrement(exercise.progressionIncrementKg),
-        progressionStatus: plan.status,
-        progressionReason: plan.reason,
-        setLogs: createSetLogs(exercise.sets, exercise.repMin, undefined, undefined, {
+        progressionPolicy: validPolicy(adapted.progressionPolicy),
+        progressionIncrementKg: validIncrement(adapted.progressionIncrementKg),
+        progressionStatus: adaptation.mode === 'normal' ? plan.status : 'hold',
+        progressionReason: adaptation.mode === 'normal' ? plan.reason : `${adaptation.detail} ${plan.reason}`,
+        setLogs: createSetLogs(adapted.sets, adapted.repMin, undefined, undefined, {
           warmupSets,
-          targetReps: plan.targetReps,
+          targetReps: adaptation.useLowerRepTarget ? adapted.repMin : plan.targetReps,
           defaultWeightKg: plan.nextWeightKg,
           defaultActualReps: previous?.setLogs.map((set) => set.actualReps),
         }),
       };
-    })(),
-    plannedExerciseId: exercise.id,
-    exerciseId: exercise.exerciseId,
-    name: exercise.name,
-    sets: exercise.sets,
-    repMin: exercise.repMin,
-    repMax: exercise.repMax,
-    restSeconds: exercise.restSeconds,
-    imageUrl: exercise.imageUrl,
-    imagePosition: exercise.imagePosition,
-    completed: false,
-    discomfort: false,
-  })),
-});
+    }),
+  };
+};
 
 export const migrateData = (value: unknown): AppData => {
   const fallback = defaultData();
@@ -105,6 +109,12 @@ export const migrateData = (value: unknown): AppData => {
     nutritionContext: typeof candidate.profile.nutritionContext === 'string' ? candidate.profile.nutritionContext : fallback.profile.nutritionContext,
     trainingDays: Array.isArray(candidate.profile.trainingDays) ? candidate.profile.trainingDays : fallback.profile.trainingDays,
     experienceLevel: candidate.profile.experienceLevel ?? fallback.profile.experienceLevel,
+    availableEquipment: (() => {
+      const equipment = Array.isArray(candidate.profile.availableEquipment)
+        ? candidate.profile.availableEquipment.filter((item): item is typeof allExerciseEquipment[number] => allExerciseEquipment.includes(item as typeof allExerciseEquipment[number]))
+        : [];
+      return equipment.length ? equipment : fallback.profile.availableEquipment;
+    })(),
     largeText: candidate.profile.largeText === true,
   };
 

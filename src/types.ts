@@ -16,6 +16,7 @@ export interface UserProfile {
   trainingDays: number[];
   sessionMinutes: number;
   experienceLevel: ExperienceLevel;
+  availableEquipment: ExerciseEquipment[];
   largeText: boolean;
   nutritionContext: string;
   theme: Theme;

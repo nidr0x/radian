@@ -22,7 +22,7 @@ import type {
 
 const MAX_PAYLOAD_BYTES = 900_000;
 const APP_DATA_KEYS = ['schemaVersion', 'onboardingComplete', 'profile', 'exercises', 'plan', 'sessions', 'progress', 'checkins'] as const;
-const PROFILE_KEYS = ['goal', 'gym', 'trainingDays', 'sessionMinutes', 'experienceLevel', 'heightCm', 'currentWeightKg', 'nutritionContext', 'largeText', 'theme'] as const;
+const PROFILE_KEYS = ['goal', 'gym', 'trainingDays', 'sessionMinutes', 'experienceLevel', 'availableEquipment', 'heightCm', 'currentWeightKg', 'nutritionContext', 'largeText', 'theme'] as const;
 const EXERCISE_KEYS = ['id', 'name', 'muscleGroup', 'equipment', 'aliases', 'imageUrl', 'imagePosition'] as const;
 const PLAN_KEYS = ['id', 'version', 'days'] as const;
 const DAY_KEYS = ['id', 'weekday', 'shortLabel', 'name', 'focus', 'exercises'] as const;
@@ -196,6 +196,9 @@ const validateProfile = (profile: Record<string, unknown>): void => {
   });
   assertInteger(profile.sessionMinutes, 'profile.sessionMinutes', 15, 240);
   assertEnum(profile.experienceLevel, EXPERIENCE_LEVELS, 'profile.experienceLevel');
+  if (!Array.isArray(profile.availableEquipment)) throw new Error('profile.availableEquipment debe ser una lista.');
+  if (profile.availableEquipment.length < 1 || profile.availableEquipment.length > EQUIPMENT.size) throw new Error('profile.availableEquipment debe incluir entre 1 y 5 materiales.');
+  profile.availableEquipment.forEach((equipment, index) => assertEnum(equipment, EQUIPMENT, `profile.availableEquipment[${index}]`));
   assertOptionalFiniteNumber(profile.heightCm, 'profile.heightCm', 80, 250);
   assertOptionalFiniteNumber(profile.currentWeightKg, 'profile.currentWeightKg', 20, 400);
   assertString(profile.nutritionContext, 'profile.nutritionContext');
@@ -450,6 +453,11 @@ const validateProfilePatch = (value: unknown): McpProfilePatch => {
   }
   if ('sessionMinutes' in profile) assertInteger(profile.sessionMinutes, 'operation.profile.sessionMinutes', 15, 240);
   if ('experienceLevel' in profile) assertEnum(profile.experienceLevel, EXPERIENCE_LEVELS, 'operation.profile.experienceLevel');
+  if ('availableEquipment' in profile) {
+    if (!Array.isArray(profile.availableEquipment)) throw new Error('operation.profile.availableEquipment debe ser una lista.');
+    if (profile.availableEquipment.length < 1 || profile.availableEquipment.length > EQUIPMENT.size) throw new Error('operation.profile.availableEquipment debe incluir entre 1 y 5 materiales.');
+    profile.availableEquipment.forEach((equipment, index) => assertEnum(equipment, EQUIPMENT, `operation.profile.availableEquipment[${index}]`));
+  }
   if ('heightCm' in profile) assertOptionalFiniteNumber(profile.heightCm, 'operation.profile.heightCm', 80, 250);
   if ('currentWeightKg' in profile) assertOptionalFiniteNumber(profile.currentWeightKg, 'operation.profile.currentWeightKg', 20, 400);
   if ('nutritionContext' in profile) assertString(profile.nutritionContext, 'operation.profile.nutritionContext');

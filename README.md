@@ -122,7 +122,7 @@ The remote server exposes two scopes:
 - `radian:read` for read-only access to the authenticated copy in D1.
 - `radian:write` for write access, which requires a separate consent step from read access.
 
-Read tools stay limited to profile, weekly coaching, workouts, exercise history, bodyweight, progression recommendations, the next session with per-exercise prescriptions, and revision history. Write tools are separate and only available after `radian:write` consent. `get_next_session` is read-only and includes the current in-progress session when one exists.
+Read tools include profile and its available equipment, weekly coaching, workouts, exercise history, bodyweight, progression recommendations, the next session with per-exercise prescriptions, and revision history. The ChatGPT-oriented `get_chat_context` bundles the most useful current context in one call; `get_equipment_alternatives` and `explain_recommendation` add explainable, equipment-aware guidance. Write tools are separate and only available after `radian:write` consent. `get_next_session` is read-only and includes the current in-progress session when one exists.
 
 To connect it from a compatible MCP client:
 
@@ -144,8 +144,10 @@ The authentication Functions use `AUTH_RATE_LIMITER` when the environment provid
 - Sessions store a snapshot of the current program when they start. Editing the routine does not change historical records.
 - The recommendation engine in `src/lib/recommendations.ts` is deterministic and testable without the UI.
 - New sessions calculate an explainable prescription for each exercise: double progression, linear progression, maintenance, a deload after three stalled sessions, and blocked progression when discomfort is reported. The routine lets you choose the rule, load increment, and up to three warm-up sets.
+- The optional readiness check-in adapts a new session when energy or soreness are low: it reduces volume, widens rest, lowers the rep target when needed, and pauses progression without changing the base routine. Progress also surfaces a signal after three stable exposures or repeated fatigue/discomfort.
 - Warm-up sets are identified in the history and do not count toward progression, volume, records, or summaries. While a session is active, the PWA requests a screen lock when the browser allows it.
 - `Hoy` and `Rutina` show the latest recorded signal and a concrete action for the next session. If discomfort appears, you can try variants for the same muscle group without changing the original routine.
+- The first configuration and Profile let you select the equipment available to you. The routine library, discomfort substitutions, and MCP alternatives filter out exercises that require material you do not have.
 - The backup exports the entire state as JSON. Importing requires confirmation before replacing local data.
 - The service worker and manifest allow the app to be installed as a PWA and opened offline. Without D1, data stays on the device.
 - Each exercise card includes its own local image, the same visual style, and numbered steps for setup, execution, and alternatives if discomfort appears. These cards work offline with the rest of the PWA shell.

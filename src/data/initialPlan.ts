@@ -95,7 +95,7 @@ export const defaultData = (): AppData => ({
   onboardingComplete: false,
   profile: {
     heightCm: undefined, currentWeightKg: undefined, goal: '', gym: '',
-    trainingDays: [1, 2, 3, 5], sessionMinutes: 60, experienceLevel: 'intermediate', largeText: false, theme: 'system',
+    trainingDays: [1, 2, 3, 5], sessionMinutes: 60, experienceLevel: 'intermediate', availableEquipment: ['machine', 'cable', 'dumbbell', 'barbell', 'bodyweight'], largeText: false, theme: 'system',
     nutritionContext: '',
   },
   exercises: exerciseDefinitions,

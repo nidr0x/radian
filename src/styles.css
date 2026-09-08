@@ -1138,6 +1138,12 @@ h3 { font-weight: 650; letter-spacing: -.02em; }
 .weekly-trends-table { overflow-x: auto; margin-block: 16px; }
 .weekly-trends-table table { width: 100%; border-collapse: collapse; text-align: left; }
 .weekly-trends-table th, .weekly-trends-table td { padding: 10px 8px; white-space: nowrap; border-bottom: 1px solid currentColor; }
+.equipment-picker { display: flex; flex-wrap: wrap; gap: 6px; }
+.equipment-option { display: inline-flex; gap: 6px; align-items: center; min-height: 34px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); background: var(--surface-soft); cursor: pointer; font-size: 10px; font-weight: 700; }
+.equipment-option input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; }
+.equipment-option.selected { color: var(--accent-deep); border-color: var(--accent); background: var(--accent-pale); }
+.profile-equipment-field { display: grid; grid-column: 1 / -1; gap: 6px; }
+
 /* Active training keeps the next action close: identity and targets share one
    compact overview so the set log reaches the viewport sooner. */
 .active-exercise-overview { display: grid; grid-template-columns: minmax(0, .82fr) minmax(230px, 1fr); gap: 20px; align-items: stretch; }
@@ -1180,3 +1186,16 @@ h3 { font-weight: 650; letter-spacing: -.02em; }
   .active-exercise-overview .exercise-thumb.large { min-height: 112px; }
   .active-exercise-summary h2 { font-size: 21px; }
 }
+.profile-equipment-field > span, .equipment-field > span { color: var(--muted); font-size: 9px; font-weight: 400; }
+.session-adaptation-notice { display: flex; gap: 10px; align-items: flex-start; margin: 0 0 14px; padding: 12px 13px; border: 1px solid var(--line); border-radius: 14px; color: var(--ink); background: var(--surface-soft); }
+.session-adaptation-notice svg { flex: 0 0 auto; color: var(--accent-deep); }
+.session-adaptation-notice div { display: grid; gap: 3px; }
+.session-adaptation-notice strong { font-size: 11px; }
+.session-adaptation-notice span { color: var(--muted); font-size: 10px; line-height: 1.4; }
+.session-adaptation-notice.recovery { border-color: color-mix(in srgb, var(--warning) 32%, var(--line)); background: color-mix(in srgb, var(--warning) 8%, var(--surface)); }
+.signal-list { display: grid; gap: 8px; }
+.signal-row { display: grid; gap: 4px; padding: 11px 0; border-top: 1px solid var(--line); }
+.signal-row > div { display: flex; justify-content: space-between; gap: 10px; }
+.signal-row strong { font-size: 11px; }
+.signal-row span, .signal-row small { color: var(--muted); font-size: 9px; }
+.signal-row p { margin: 0; color: var(--ink); font-size: 10px; line-height: 1.45; }

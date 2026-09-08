@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { defaultData } from '../src/data/initialPlan';
-import { compatibleAlternatives, exerciseMatches } from '../src/lib/exercises';
-import { progressionAction, progressionCue, recommendationFor } from '../src/lib/recommendations';
+import { adaptPlanToEquipment, allExerciseEquipment, compatibleAlternatives, exerciseMatches } from '../src/lib/exercises';
+import { detectTrainingSignals, progressionAction, progressionCue, recommendationFor } from '../src/lib/recommendations';
 import { isWorkSet, nextPrescription } from '../src/lib/progression';
 import { bestRecordForExercise, detectPersonalRecord } from '../src/lib/records';
 import { summarizeSession } from '../src/lib/sessionSummary';
@@ -9,6 +9,7 @@ import { createSession, createSetLogs, migrateData, parseBackup, serializeBackup
 import { exerciseTrend } from '../src/lib/exerciseHistory';
 import { buildWeeklySummary, weeklySummaryText } from '../src/lib/weeklySummary';
 import { syncDecision } from '../src/lib/syncRecovery';
+import { sessionAdaptation } from '../src/lib/sessionAdaptation';
 import { scheduledWorkoutDays } from '../src/lib/date';
 import type { WorkoutSession } from '../src/types';
 
@@ -88,6 +89,39 @@ describe('motor de recomendaciones', () => {
     expect(recommendationFor('incline-press', sessions)?.label).toBe('Ajustar');
   });
 
+  it('detecta un estancamiento solo tras tres exposiciones estables', () => {
+    const data = defaultData();
+    const sessions = [
+      completedSession('a', '2026-08-01', 'good'),
+      completedSession('b', '2026-08-08', 'good'),
+      completedSession('c', '2026-08-15', 'good'),
+    ];
+    sessions.forEach((session) => session.plannedExercises[0].setLogs.filter(isWorkSet).forEach((set) => Object.assign(set, { actualReps: 10, weightKg: 40, completed: true })));
+    data.sessions = sessions;
+
+    expect(detectTrainingSignals(data)).toContainEqual(expect.objectContaining({
+      kind: 'plateau',
+      exerciseId: 'incline-press',
+      evidence: expect.objectContaining({ sessionCount: 3, latestDate: '2026-08-15' }),
+    }));
+  });
+
+  it('distingue fatiga reciente del estancamiento', () => {
+    const data = defaultData();
+    const sessions = [
+      completedSession('a', '2026-08-01', 'hard'),
+      completedSession('b', '2026-08-08', 'incomplete'),
+      completedSession('c', '2026-08-15', 'hard'),
+    ];
+    sessions.forEach((session) => {
+      session.plannedExercises[0].discomfort = session.id !== 'a';
+      session.plannedExercises[0].setLogs.filter(isWorkSet).forEach((set) => Object.assign(set, { actualReps: 7, weightKg: 40, completed: true }));
+    });
+    data.sessions = sessions;
+
+    expect(detectTrainingSignals(data)[0]).toMatchObject({ kind: 'fatigue', exerciseId: 'incline-press' });
+  });
+
   it('resume recomendaciones semanales concretas a partir del historial', () => {
     const data = defaultData();
     const sessions = [
@@ -150,6 +184,24 @@ describe('persistencia y backups', () => {
     expect(data.profile.goal).toBe('');
     expect(data.profile.gym).toBe('');
     expect(data.profile.nutritionContext).toBe('');
+    expect(data.profile.availableEquipment).toEqual(allExerciseEquipment);
+  });
+
+  it('adapta una sesión nueva sin mutar la rutina base', () => {
+    const data = defaultData();
+    const baseExercise = data.plan.days[0].exercises[0];
+    const session = createSession(data.plan.days[0], '2026-08-19', new Date('2026-08-19T10:00:00Z'), [], { energy: 'low', soreness: 'high' });
+
+    expect(sessionAdaptation(session.readiness)).toMatchObject({ mode: 'recovery' });
+    expect(session.plannedExercises[0]).toMatchObject({ sets: 2, repMin: 8, repMax: 8, restSeconds: 180, progressionStatus: 'hold' });
+    expect(session.plannedExercises[0].progressionReason).toContain('recuperación');
+    expect(data.plan.days[0].exercises[0]).toMatchObject({ sets: baseExercise.sets, repMax: baseExercise.repMax, restSeconds: baseExercise.restSeconds });
+  });
+
+  it('migra el equipamiento disponible y conserva todos los materiales en perfiles antiguos', () => {
+    const data = defaultData();
+    expect(migrateData({ ...data, profile: { ...data.profile, availableEquipment: ['machine', 'cable', 'unknown'] } }).profile.availableEquipment).toEqual(['machine', 'cable']);
+    expect(migrateData({ ...data, profile: { ...data.profile, availableEquipment: undefined } }).profile.availableEquipment).toEqual(allExerciseEquipment);
   });
 
   it('conserva las medidas de un perfil antiguo al migrarlo', () => {
@@ -279,6 +331,17 @@ describe('biblioteca y récords', () => {
     expect(exerciseMatches(data.exercises.find((exercise) => exercise.id === 'cable-fly')!, 'crossover', 'Pecho', 'cable')).toBe(true);
     expect(exerciseMatches(data.exercises.find((exercise) => exercise.id === 'cable-fly')!, 'crossover', 'Pecho', 'machine')).toBe(false);
     expect(compatibleAlternatives(data.exercises, 'incline-press')[0].id).toBe('chest-press');
+    expect(compatibleAlternatives(data.exercises, 'incline-press', ['cable']).map((exercise) => exercise.id)).toEqual(['cable-fly']);
+    expect(compatibleAlternatives(data.exercises, 'incline-press', ['machine']).map((exercise) => exercise.id)).toEqual(['chest-press']);
+  });
+
+  it('adapta los bloques iniciales al material disponible', () => {
+    const data = defaultData();
+    const adapted = adaptPlanToEquipment(data.plan, data.exercises, ['machine']);
+    const cableFly = adapted.days[0].exercises.find((exercise) => exercise.id === 'mon-3');
+    const replacement = data.exercises.find((exercise) => exercise.id === cableFly?.exerciseId);
+    expect(cableFly?.exerciseId).not.toBe('cable-fly');
+    expect(replacement?.equipment).toBe('machine');
   });
 
   it('detecta una nueva mejor carga respecto al histórico', () => {
