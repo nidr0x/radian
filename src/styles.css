@@ -1138,3 +1138,45 @@ h3 { font-weight: 650; letter-spacing: -.02em; }
 .weekly-trends-table { overflow-x: auto; margin-block: 16px; }
 .weekly-trends-table table { width: 100%; border-collapse: collapse; text-align: left; }
 .weekly-trends-table th, .weekly-trends-table td { padding: 10px 8px; white-space: nowrap; border-bottom: 1px solid currentColor; }
+/* Active training keeps the next action close: identity and targets share one
+   compact overview so the set log reaches the viewport sooner. */
+.active-exercise-overview { display: grid; grid-template-columns: minmax(0, .82fr) minmax(230px, 1fr); gap: 20px; align-items: stretch; }
+.active-exercise-overview .exercise-thumb.large { height: 100%; min-height: 168px; margin: 0; aspect-ratio: auto; }
+.active-exercise-summary { display: flex; min-width: 0; flex-direction: column; justify-content: space-between; }
+.active-exercise-summary h2 { max-width: 16ch; margin: 3px 0 16px; text-wrap: balance; }
+.active-exercise-summary .target-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; padding: 14px 0 0; border-bottom: 0; }
+.active-exercise-summary .target-row div { min-width: 0; }
+.active-exercise-summary .target-row span { line-height: 1.25; text-wrap: pretty; }
+.active-exercise-card .set-log-card { margin-top: 18px; }
+.session-wrap { padding-bottom: calc(28px + env(safe-area-inset-bottom)); }
+.session-active-view > .page-header { display: none; }
+.session-active-view { padding-top: 8px; }
+.session-active-hero { grid-template-columns: 58px minmax(0, 1fr) auto; min-height: 116px; margin-bottom: 18px; padding: 17px 20px; }
+.session-active-hero .hero-orbit { width: 58px; height: 80px; padding: 10px 5px; }
+.session-active-hero .hero-orbit svg { width: 22px; }
+.session-active-hero .hero-copy h2 { margin-bottom: 5px; font-size: 23px; }
+.session-active-hero .hero-copy p:last-child { font-size: 10px; }
+.session-active-hero .hero-progress strong { font-size: 23px; }
+
+@media (max-width: 560px) {
+  .session-active-hero { grid-template-columns: minmax(0, 1fr) auto; min-height: 104px; padding: 16px 17px; }
+  .session-active-hero .hero-orbit { display: none; }
+  .session-active-hero .hero-copy { padding-bottom: 0; }
+  .session-active-hero .hero-progress { position: relative; right: auto; bottom: auto; align-self: center; }
+  .active-exercise-card { padding-top: 18px; }
+  .active-card-header { margin-bottom: 14px; }
+  .active-status { max-width: 19ch; justify-content: flex-end; text-align: right; }
+  .active-exercise-overview { grid-template-columns: 112px minmax(0, 1fr); gap: 14px; }
+  .active-exercise-overview .exercise-thumb.large { min-height: 126px; border-radius: 16px 16px 16px 6px; }
+  .active-exercise-summary h2 { margin-top: 0; margin-bottom: 11px; font-size: clamp(22px, 7vw, 27px); line-height: .98; }
+  .active-exercise-summary .target-row { gap: 9px 12px; padding-top: 10px; }
+  .active-exercise-summary .target-row strong { font-size: 17px; }
+  .active-exercise-summary .target-row span { font-size: 8px; }
+  .active-exercise-card .set-log-card { margin-top: 16px; }
+}
+
+@media (max-width: 380px) {
+  .active-exercise-overview { grid-template-columns: 92px minmax(0, 1fr); gap: 11px; }
+  .active-exercise-overview .exercise-thumb.large { min-height: 112px; }
+  .active-exercise-summary h2 { font-size: 21px; }
+}
