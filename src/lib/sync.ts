@@ -12,6 +12,26 @@ export interface RemoteSyncData {
   updatedAt?: string;
 }
 
+export interface SyncCopySummary {
+  sessionCount: number;
+  progressCount: number;
+  checkinCount: number;
+  latestSessionDate?: string;
+  latestProgressDate?: string;
+}
+
+export interface SyncCopyComparison {
+  local: SyncCopySummary;
+  remote: SyncCopySummary;
+  changed: {
+    profile: boolean;
+    routine: boolean;
+    sessions: boolean;
+    progress: boolean;
+    checkins: boolean;
+  };
+}
+
 interface EncryptedSyncPayload {
   version: 1;
   algorithm: 'AES-GCM';
@@ -37,6 +57,28 @@ const isAppData = (value: unknown): value is AppData => isRecord(value) && typeo
 const isEncryptedPayload = (value: unknown): value is EncryptedSyncPayload => isRecord(value)
   && value.version === 1 && value.algorithm === 'AES-GCM'
   && typeof value.salt === 'string' && typeof value.iv === 'string' && typeof value.ciphertext === 'string';
+
+const latestDate = (values: string[]): string | undefined => values.sort((a, b) => a.localeCompare(b)).at(-1);
+
+export const syncCopySummary = (data: AppData): SyncCopySummary => ({
+  sessionCount: data.sessions.length,
+  progressCount: data.progress.length,
+  checkinCount: data.checkins.length,
+  latestSessionDate: latestDate(data.sessions.map((session) => session.dateKey)),
+  latestProgressDate: latestDate(data.progress.map((entry) => entry.date)),
+});
+
+export const compareSyncCopies = (local: AppData, remote: AppData): SyncCopyComparison => ({
+  local: syncCopySummary(local),
+  remote: syncCopySummary(remote),
+  changed: {
+    profile: JSON.stringify(local.profile) !== JSON.stringify(remote.profile),
+    routine: JSON.stringify(local.plan) !== JSON.stringify(remote.plan),
+    sessions: JSON.stringify(local.sessions) !== JSON.stringify(remote.sessions),
+    progress: JSON.stringify(local.progress) !== JSON.stringify(remote.progress),
+    checkins: JSON.stringify(local.checkins) !== JSON.stringify(remote.checkins),
+  },
+});
 
 const encodeBase64 = (bytes: Uint8Array): string => {
   let binary = '';

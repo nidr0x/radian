@@ -21,6 +21,8 @@ npx wrangler pages functions build functions
 
 On first launch, Radian shows a short setup flow for choosing a goal, training days, session length, and experience level. Height and weight are optional, stay on the device, and can be skipped. You can repeat the setup from Profile. During a session, you can repeat the previous entry, skip an exercise, undo the last step, or leave while keeping the session in progress.
 
+The mobile interface keeps one dominant action per screen: starting the session from Hoy, recording the current exercise, and reviewing the next recommendation. Routine parameters are behind explicit editing controls, while the active session keeps history, coaching, and discomfort notes available without competing with the set log. Interactive controls target a 44px touch area and support visible keyboard focus.
+
 ## Deploying to Cloudflare Pages
 
 The project includes `wrangler.jsonc`, the SPA fallback, and security/cache headers in `public/`. Use these settings in Cloudflare Pages:
@@ -73,6 +75,10 @@ The app still works without a backend. If you want to share data between a phone
    ```
 
 4. In Radian, open `Perfil → Sincronizar dispositivos`, generate a code, and connect the first device. Enter the same code on the second device, then choose whether to download the remote copy or upload its local data.
+
+If both devices changed after the last sync, Radian shows a compact comparison of the profile, routine, sessions, measurements, and check-ins. Choose explicitly which copy to keep; no version is overwritten before that decision, and the copy that is replaced is kept in the local recovery backup first. The comparison is an indicative summary, not a field-by-field diff.
+
+When a signed-in PWA returns to the foreground, Radian checks D1 for newer account data automatically, with a short throttle to avoid duplicate requests after focus changes.
 
 The code acts as the access key for that copy. The contents are encrypted on the device before upload. You can revoke the code to delete the remote copy and cut off access from other devices. Do not share it. If you run only `npm run dev`, the app stays in local-first mode because Vite does not serve the Pages Functions.
 

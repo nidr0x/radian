@@ -8,6 +8,7 @@ import { summarizeSession } from '../src/lib/sessionSummary';
 import { createSession, createSetLogs, migrateData, parseBackup, serializeBackup, snapshotMatchesPlan } from '../src/lib/storage';
 import { exerciseTrend } from '../src/lib/exerciseHistory';
 import { buildWeeklySummary, weeklySummaryText } from '../src/lib/weeklySummary';
+import { compareSyncCopies, syncCopySummary } from '../src/lib/sync';
 import { syncDecision } from '../src/lib/syncRecovery';
 import { sessionAdaptation } from '../src/lib/sessionAdaptation';
 import { scheduledWorkoutDays } from '../src/lib/date';
@@ -165,6 +166,33 @@ describe('decisiones de sincronización', () => {
     expect(syncDecision(local, remote, 'v1', checkpoint, 'user-1')).toBe('upload');
     remote.profile.gym = 'Remoto';
     expect(syncDecision(local, remote, 'v2', checkpoint, 'user-1')).toBe('conflict');
+  });
+
+  it('resume las dos copias para decidir un conflicto sin exponer sus datos', () => {
+    const local = defaultData();
+    const remote = structuredClone(local);
+    local.sessions = [completedSession('local', '2026-09-08', 'good')];
+    local.progress = [{ id: 'local-progress', date: '2026-09-08', weightKg: 80 }];
+    remote.sessions = [completedSession('remote-1', '2026-09-06', 'good'), completedSession('remote-2', '2026-09-07', 'easy')];
+    remote.progress = [{ id: 'remote-progress', date: '2026-09-07', waistCm: 90 }];
+
+    expect(syncCopySummary(local)).toEqual({ sessionCount: 1, progressCount: 1, checkinCount: 0, latestSessionDate: '2026-09-08', latestProgressDate: '2026-09-08' });
+    expect(syncCopySummary(remote)).toEqual({ sessionCount: 2, progressCount: 1, checkinCount: 0, latestSessionDate: '2026-09-07', latestProgressDate: '2026-09-07' });
+  });
+
+  it('identifica las áreas realmente distintas entre dos copias', () => {
+    const local = defaultData();
+    const remote = structuredClone(local);
+    remote.profile.gym = 'Remoto';
+    remote.plan.days[0].name = 'Rutina remota';
+    remote.sessions = [completedSession('remote', '2026-09-07', 'good')];
+    remote.checkins = [{ id: 'remote-checkin', weekKey: '2026-W36', energy: 'normal', feeling: 'bien', completedWorkouts: 1, note: '', createdAt: '2026-09-07T10:00:00.000Z' }];
+
+    expect(compareSyncCopies(local, remote)).toMatchObject({
+      changed: { profile: true, routine: true, sessions: true, progress: false, checkins: true },
+      local: { sessionCount: 0 },
+      remote: { sessionCount: 1, checkinCount: 1 },
+    });
   });
 });
 
