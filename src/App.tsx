@@ -21,9 +21,10 @@ import { requestScreenWakeLock, type ScreenWakeLock } from './lib/wakeLock';
 import { summarizeSession, type SessionSummary } from './lib/sessionSummary';
 import { sessionAdaptation } from './lib/sessionAdaptation';
 import { completionActionHint, dataStateCopy, todayPrimaryAction } from './lib/uiCopy';
+import { routineEditDraftFrom, routineEditPatch, type RoutineEditDraft } from './lib/routineEditor';
 import { addPasskey, AuthApiError, currentUser, listPasskeys, loginWithPasskey, logout, logoutEverywhere, pullCloudData, pushCloudData, registerPasskey, renamePasskey, revokePasskey, type AuthPasskey, type AuthUser, type CloudData } from './lib/auth';
 import type {
-  AppData, Difficulty, Energy, ExperienceLevel, ExerciseDefinition, ExerciseEquipment, ExerciseGuidance, ExerciseSession, PlannedExercise, ProgressEntry, ProgressionPolicy, SessionReadiness, SetLog, Soreness, Theme, UserProfile, View, WeeklyCheckin, WorkoutDay, WorkoutSession,
+  AppData, Difficulty, Energy, ExperienceLevel, ExerciseDefinition, ExerciseEquipment, ExerciseGuidance, ExerciseSession, PlannedExercise, ProgressEntry, SessionReadiness, SetLog, Soreness, Theme, UserProfile, View, WeeklyCheckin, WorkoutDay, WorkoutSession,
 } from './types';
 
 const navItems: Array<{ id: View; label: string; icon: typeof Activity }> = [
@@ -1074,9 +1075,62 @@ function ExerciseLibrary({ exercises, availableEquipment, plannedExercises, targ
 
 function RoutineExercise({ exercise, index, exerciseOptions, alternatives, guidance, lastSession, progressionAction: action, expanded, onOpenLibrary, onToggle, onChange, onMove, onRemove }: { exercise: PlannedExercise; index: number; exerciseOptions: ExerciseDefinition[]; alternatives: ExerciseDefinition[]; guidance?: ExerciseGuidance; lastSession?: ExerciseSession; progressionAction?: ReturnType<typeof progressionAction>; expanded: boolean; onOpenLibrary: () => void; onToggle: () => void; onChange: (patch: Partial<PlannedExercise>) => void; onMove: (direction: -1 | 1) => void; onRemove: () => void }) {
   const detail = guidance ?? { cues: ['Mantén una postura estable.', 'Mueve la carga sin impulso.', 'Controla el regreso.'] };
-  return <article className={exercise.active ? 'routine-exercise' : 'routine-exercise is-off'}><div className="routine-number">{String(index + 1).padStart(2, '0')}</div><button type="button" className="routine-thumb-button" onClick={onToggle} aria-label={`${expanded ? 'Ocultar' : 'Ver'} imagen grande de ${exercise.name}`} aria-expanded={expanded}><ExerciseThumb src={exercise.imageUrl} position={exercise.imagePosition} alt={`Referencia de ${exercise.name}`} /></button><div className="routine-exercise-content"><div className="routine-exercise-title"><div className="routine-exercise-name"><select className="exercise-select" value={exercise.exerciseId} aria-label={`Cambiar ${exercise.name}`} onChange={(event) => { const replacement = exerciseOptions.find((item) => item.id === event.target.value); if (replacement) onChange({ exerciseId: replacement.id, name: replacement.name, imageUrl: replacement.imageUrl, imagePosition: replacement.imagePosition }); }}><option value={exercise.exerciseId}>{exercise.name}</option>{exerciseOptions.filter((item) => item.id !== exercise.exerciseId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><p>{exercise.active ? 'Activo en la sesión' : 'Pausado'}</p><button type="button" className="routine-library-button" onClick={onOpenLibrary}><Search size={13} /> Buscar en biblioteca</button></div><div className="routine-title-actions"><button type="button" className="routine-image-trigger" onClick={onToggle} aria-expanded={expanded}>{expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}<span>{expanded ? 'Ocultar imagen' : 'Ver imagen'}</span></button><button type="button" className={exercise.active ? 'toggle on' : 'toggle'} aria-label={exercise.active ? `Desactivar ${exercise.name}` : `Activar ${exercise.name}`} aria-pressed={exercise.active} onClick={() => onChange({ active: !exercise.active })}><span /></button></div></div>{expanded && <div className="routine-visual-guide"><ExerciseThumb src={exercise.imageUrl} position={exercise.imagePosition} alt={`Imagen ampliada de ${exercise.name}`} large /><div className="routine-cues"><p className="eyebrow">cómo hacerlo</p><ol>{detail.cues.map((cue, cueIndex) => <li key={cue}><span>{cueIndex + 1}</span>{cue}</li>)}</ol></div></div>}<details className="routine-edit-details"><summary>Editar parámetros del ejercicio</summary><p className="routine-edit-note"><Check size={13} /> Los cambios se guardan automáticamente en este dispositivo.</p><div className="routine-fields"><label>Series<input inputMode="numeric" value={exercise.sets} onChange={(event) => onChange({ sets: clampNumber(event.target.value, 1, 8) })} /></label><label>Reps<input inputMode="numeric" value={`${exercise.repMin}-${exercise.repMax}`} onChange={(event) => { const [min, max] = event.target.value.split(/[–-]/).map(Number); if (Number.isFinite(min) && Number.isFinite(max)) onChange({ repMin: min, repMax: max }); }} /></label><label>Descanso<input inputMode="numeric" value={exercise.restSeconds / 60} onChange={(event) => onChange({ restSeconds: clampNumber(event.target.value, 0.5, 4) * 60 })} /></label></div><div className="routine-progression-fields"><label>Calentamiento<select value={exercise.warmupSets ?? 0} onChange={(event) => onChange({ warmupSets: clampNumber(event.target.value, 0, 3) })}><option value="0">Ninguno</option><option value="1">1 serie</option><option value="2">2 series</option><option value="3">3 series</option></select></label><label>Regla de progresión<select value={exercise.progressionPolicy ?? 'double'} onChange={(event) => onChange({ progressionPolicy: event.target.value as ProgressionPolicy })}><option value="double">Doble progresión</option><option value="linear">Lineal</option><option value="off">Manual</option></select></label><label>Salto de carga<input inputMode="decimal" value={exercise.progressionIncrementKg ?? 2.5} onChange={(event) => onChange({ progressionIncrementKg: clampNumber(event.target.value, 0.5, 10) })} /></label></div>{alternatives.length > 0 && <div className="routine-alternatives"><span>Alternativas compatibles</span><div>{alternatives.slice(0, 3).map((replacement) => <button type="button" key={replacement.id} onClick={() => onChange({ exerciseId: replacement.id, name: replacement.name, imageUrl: replacement.imageUrl, imagePosition: replacement.imagePosition })}>{replacement.name}</button>)}</div></div>}{lastSession && <p className="routine-history"><History size={14} /> Última vez: {formatExerciseSummary(lastSession)}</p>}{action && <div className={`routine-next-action ${action.tone}`}><Gauge size={14} /><div><strong>{action.title}</strong><span>{action.detail}</span></div></div>}<div className="move-actions"><button type="button" onClick={() => onMove(-1)} disabled={index === 0}><ArrowUp size={14} /> Subir</button><button type="button" onClick={() => onMove(1)}><ArrowDown size={14} /> Bajar</button><button type="button" className="routine-remove-button" onClick={onRemove}><Trash2 size={14} /> Quitar</button></div></details></div></article>;
-}
+  const [editOpen, setEditOpen] = useState(false);
+  const [draft, setDraft] = useState<RoutineEditDraft>(() => routineEditDraftFrom(exercise));
 
+  const updateDraft = (patch: Partial<RoutineEditDraft>): void => {
+    setDraft((current) => ({ ...current, ...patch }));
+  };
+  const cancelEdit = (): void => {
+    setDraft(routineEditDraftFrom(exercise));
+    setEditOpen(false);
+  };
+  const saveEdit = (): void => {
+    onChange(routineEditPatch(draft));
+    setEditOpen(false);
+  };
+
+  return <article className={exercise.active ? 'routine-exercise' : 'routine-exercise is-off'}>
+    <div className="routine-number">{String(index + 1).padStart(2, '0')}</div>
+    <button type="button" className="routine-thumb-button" onClick={onToggle} aria-label={`${expanded ? 'Ocultar' : 'Ver'} imagen grande de ${exercise.name}`} aria-expanded={expanded}><ExerciseThumb src={exercise.imageUrl} position={exercise.imagePosition} alt={`Referencia de ${exercise.name}`} /></button>
+    <div className="routine-exercise-content">
+      <div className="routine-exercise-title">
+        <div className="routine-exercise-name">
+          <select className="exercise-select" value={exercise.exerciseId} aria-label={`Cambiar ${exercise.name}`} onChange={(event) => { const replacement = exerciseOptions.find((item) => item.id === event.target.value); if (replacement) onChange({ exerciseId: replacement.id, name: replacement.name, imageUrl: replacement.imageUrl, imagePosition: replacement.imagePosition }); }}>
+            <option value={exercise.exerciseId}>{exercise.name}</option>
+            {exerciseOptions.filter((item) => item.id !== exercise.exerciseId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select>
+          <p>{exercise.active ? 'Activo en la sesión' : 'Pausado'}</p>
+          <button type="button" className="routine-library-button" onClick={onOpenLibrary}><Search size={13} /> Buscar en biblioteca</button>
+        </div>
+        <div className="routine-title-actions">
+          <button type="button" className="routine-image-trigger" onClick={onToggle} aria-expanded={expanded}>{expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}<span>{expanded ? 'Ocultar imagen' : 'Ver imagen'}</span></button>
+          <button type="button" className={exercise.active ? 'toggle on' : 'toggle'} aria-label={exercise.active ? `Desactivar ${exercise.name}` : `Activar ${exercise.name}`} aria-pressed={exercise.active} onClick={() => onChange({ active: !exercise.active })}><span /></button>
+        </div>
+      </div>
+      {expanded && <div className="routine-visual-guide"><ExerciseThumb src={exercise.imageUrl} position={exercise.imagePosition} alt={`Imagen ampliada de ${exercise.name}`} large /><div className="routine-cues"><p className="eyebrow">cómo hacerlo</p><ol>{detail.cues.map((cue, cueIndex) => <li key={cue}><span>{cueIndex + 1}</span>{cue}</li>)}</ol></div></div>}
+      <details className="routine-edit-details" open={editOpen} onToggle={(event) => { const nextOpen = event.currentTarget.open; setEditOpen(nextOpen); if (nextOpen) setDraft(routineEditDraftFrom(exercise)); }}>
+        <summary>Editar parámetros del ejercicio</summary>
+        <p className="routine-edit-note"><Check size={13} /> Edita sin tocar la rutina hasta guardar los cambios.</p>
+        <div className="routine-fields">
+          <label>Series<input inputMode="numeric" value={draft.sets} onChange={(event) => updateDraft({ sets: clampNumber(event.target.value, 1, 8) })} /></label>
+          <label>Reps<input inputMode="numeric" value={`${draft.repMin}-${draft.repMax}`} onChange={(event) => { const [min, max] = event.target.value.split(/[–-]/).map(Number); if (Number.isFinite(min) && Number.isFinite(max)) updateDraft({ repMin: min, repMax: max }); }} /></label>
+          <label>Descanso<input inputMode="numeric" value={draft.restSeconds / 60} onChange={(event) => updateDraft({ restSeconds: clampNumber(event.target.value, 0.5, 4) * 60 })} /></label>
+        </div>
+        <div className="routine-progression-fields">
+          <label>Calentamiento<select value={draft.warmupSets} onChange={(event) => updateDraft({ warmupSets: clampNumber(event.target.value, 0, 3) })}><option value="0">Ninguno</option><option value="1">1 serie</option><option value="2">2 series</option><option value="3">3 series</option></select></label>
+          <label>Regla de progresión<select value={draft.progressionPolicy} onChange={(event) => updateDraft({ progressionPolicy: event.target.value as RoutineEditDraft['progressionPolicy'] })}><option value="double">Doble progresión</option><option value="linear">Lineal</option><option value="off">Manual</option></select></label>
+          <label>Salto de carga<input inputMode="decimal" value={draft.progressionIncrementKg} onChange={(event) => updateDraft({ progressionIncrementKg: clampNumber(event.target.value, 0.5, 10) })} /></label>
+        </div>
+        {alternatives.length > 0 && <div className="routine-alternatives"><span>Alternativas compatibles</span><div>{alternatives.slice(0, 3).map((replacement) => <button type="button" key={replacement.id} onClick={() => updateDraft({ exerciseId: replacement.id, name: replacement.name, imageUrl: replacement.imageUrl, imagePosition: replacement.imagePosition })}>{replacement.name}</button>)}</div></div>}
+        {lastSession && <p className="routine-history"><History size={14} /> Última vez: {formatExerciseSummary(lastSession)}</p>}
+        {action && <div className={`routine-next-action ${action.tone}`}><Gauge size={14} /><div><strong>{action.title}</strong><span>{action.detail}</span></div></div>}
+        <div className="move-actions"><button type="button" onClick={() => { saveEdit(); onMove(-1); }} disabled={index === 0}><ArrowUp size={14} /> Subir</button><button type="button" onClick={() => { saveEdit(); onMove(1); }}><ArrowDown size={14} /> Bajar</button><button type="button" className="routine-remove-button" onClick={onRemove}><Trash2 size={14} /> Quitar</button></div>
+        <div className="routine-edit-actions"><button type="button" className="secondary-button small" onClick={cancelEdit}>Cancelar</button><button type="button" className="primary-button small" onClick={saveEdit}><Save size={15} /> Guardar cambios</button></div>
+      </details>
+    </div>
+  </article>;
+}
 function ProgressView({ data, onAddProgress, onAddCheckin, onInfo }: { data: AppData; onAddProgress: (entry: Omit<ProgressEntry, 'id' | 'date'>) => void; onAddCheckin: (checkin: Omit<WeeklyCheckin, 'id' | 'createdAt' | 'weekKey'>) => void; onInfo: () => void }) {
   const [measureOpen, setMeasureOpen] = useState(false);
   const [checkinOpen, setCheckinOpen] = useState(false);

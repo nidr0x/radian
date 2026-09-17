@@ -1,3 +1,5 @@
+import { isCloudflarePerimeterBlock } from './smoke-policy.mjs';
+
 const baseUrl = (process.env.RADIAN_SMOKE_URL ?? 'https://radian.nidr0x.win').replace(/\/+$/, '');
 
 const fail = (message) => {
@@ -6,6 +8,10 @@ const fail = (message) => {
 
 const response = await fetch(`${baseUrl}/`, { cache: 'no-store', redirect: 'follow' });
 if (!response.ok) {
+  if (isCloudflarePerimeterBlock(response)) {
+    console.warn('Smoke bloqueado por el perímetro de Cloudflare (HTTP 403); la ejecución necesita una ruta de CI permitida.');
+    process.exit(2);
+  }
   fail(`La página principal respondió ${response.status}.`);
 }
 

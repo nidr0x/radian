@@ -423,6 +423,7 @@ h3 { font-size: 15px; }
 .routine-edit-details[open] { padding-bottom: 2px; }
 .routine-edit-note, .progress-details-body { color: var(--muted); font-size: 11px; line-height: 1.45; }
 .routine-edit-note { display: flex; align-items: center; gap: 5px; margin: 0 2px 8px; }
+.routine-edit-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .progress-details { order: 4; margin-top: 10px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .progress-details-body { display: grid; gap: 10px; padding: 0 0 12px; }
 .data-status-section .section-heading { align-items: flex-start; }
