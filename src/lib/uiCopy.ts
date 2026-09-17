@@ -3,7 +3,16 @@ export interface TodayPrimaryAction {
   hint: string;
 }
 
+export interface UpdateActionCopy {
+  label: string;
+  available: boolean;
+}
+
 export const completionActionHint = 'Guarda y pasa al siguiente ejercicio';
+
+export const updateActionCopy = (activeSession: boolean): UpdateActionCopy => activeSession
+  ? { label: 'Actualiza al terminar la sesión', available: false }
+  : { label: 'Actualizar Radian', available: true };
 
 export const todayPrimaryAction = (doneToday: boolean): TodayPrimaryAction => doneToday
   ? { label: 'Registrar otra sesión', hint: 'Ya tienes una sesión guardada hoy; puedes añadir otra si lo necesitas.' }

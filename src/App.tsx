@@ -20,7 +20,7 @@ import { readCheckpoint, saveCheckpoint, syncDecision, readRecovery, preserveRec
 import { requestScreenWakeLock, type ScreenWakeLock } from './lib/wakeLock';
 import { summarizeSession, type SessionSummary } from './lib/sessionSummary';
 import { sessionAdaptation } from './lib/sessionAdaptation';
-import { completionActionHint, dataStateCopy, todayPrimaryAction } from './lib/uiCopy';
+import { completionActionHint, dataStateCopy, todayPrimaryAction, updateActionCopy } from './lib/uiCopy';
 import { textSizeToggleLabel, themeOptionLabel } from './lib/accessibility';
 import { routineEditDraftFrom, routineEditPatch, type RoutineEditDraft } from './lib/routineEditor';
 import { addPasskey, AuthApiError, currentUser, listPasskeys, loginWithPasskey, logout, logoutEverywhere, pullCloudData, pushCloudData, registerPasskey, renamePasskey, revokePasskey, type AuthPasskey, type AuthUser, type CloudData } from './lib/auth';
@@ -815,6 +815,7 @@ function App() {
     } catch { setAuthError('No se pudo restaurar la copia. Comprueba el espacio disponible.'); }
   };
   const pendingChanges = JSON.stringify(data) !== acknowledged;
+  const updateCopy = updateActionCopy(Boolean(activeSession));
 
   return (
     <div className="app-shell">
@@ -825,7 +826,7 @@ function App() {
       </header>
       <main className="app-main" id="main-content">
         {!online && <section className="profile-section" role="status">Sin conexión. Puedes seguir registrando el entrenamiento; los cambios quedan en este dispositivo.</section>}
-        {updateAvailable && <section className="profile-section" role="status"><strong>Hay una actualización disponible</strong><p>{activeSession ? 'Puedes actualizar al terminar el entrenamiento.' : 'Tus datos guardados se conservarán al actualizar.'}</p><button className="secondary-button small" disabled={Boolean(activeSession) || Boolean(storageWarning) || authStatus === 'syncing'} onClick={() => { if (persistData(dataRef.current)) applyAppUpdate(); else setStorageWarning('No se pudo guardar antes de actualizar.'); }}>Actualizar Radian</button></section>}
+        {updateAvailable && <section className="profile-section" role="status"><strong>Hay una actualización disponible</strong><p>{activeSession ? 'Puedes actualizar al terminar el entrenamiento.' : 'Tus datos guardados se conservarán al actualizar.'}</p>{updateCopy.available ? <button className="secondary-button small" disabled={Boolean(storageWarning) || authStatus === 'syncing'} onClick={() => { if (persistData(dataRef.current)) applyAppUpdate(); else setStorageWarning('No se pudo guardar antes de actualizar.'); }}>{updateCopy.label}</button> : <span className="update-locked"><Timer size={15} aria-hidden="true" />{updateCopy.label}</span>}</section>}
         {view === 'profile' && <section className="profile-section data-status-section"><div className="section-heading compact"><div><p className="eyebrow">datos</p><h2>Estado de tus datos</h2></div><span className="data-state-pill">{dataStateCopy({ authenticated: Boolean(authUser), pendingChanges, cloudConflict: Boolean(cloudConflict), codeConnected: Boolean(syncState.key) })}</span></div><p>{authUser ? pendingChanges ? 'Hay cambios locales pendientes de sincronizar.' : 'Tu copia local coincide con la última sincronización.' : 'Los datos están guardados en este dispositivo.'}</p><p>{cloudUpdatedAt ? `Última versión sincronizada: ${new Date(cloudUpdatedAt).toLocaleString('es-ES')}` : 'Todavía no se ha confirmado una sincronización en esta sesión.'}</p><button className="secondary-button small" disabled={!online || authStatus === 'syncing'} onClick={() => void refreshCloud()}>Comprobar sincronización</button>{recovery && <div><p>Copia anterior conservada: {new Date(recovery.savedAt).toLocaleString('es-ES')}</p><button className="secondary-button small" disabled={authStatus === 'syncing'} onClick={restoreLocalRecovery}>Restaurar copia anterior</button><button className="text-button" onClick={() => downloadFile('radian-recovery.json', recovery.backup, 'application/json')}>Exportar copia anterior</button></div>}</section>}
         {view === 'profile' && <AccountPanel user={authUser} passkeys={passkeys} status={authStatus} error={authError} cloudUpdatedAt={cloudUpdatedAt} onRegister={handleRegisterPasskey} onLogin={handleLoginPasskey} onAddPasskey={handleAddPasskey} onRenamePasskey={handleRenamePasskey} onRevokePasskey={handleRevokePasskey} onLogout={handleLogout} onLogoutEverywhere={handleLogoutEverywhere} />}
         {cloudConflict?.data && <SyncConflictCard local={data} remote={cloudConflict} remoteLabel="Copia de la nube" intro="La nube cambió desde la última sincronización. Elige qué copia conservar." onKeepLocal={() => void resolveCloudConflict('local')} onUseRemote={() => void resolveCloudConflict('remote')} />}
@@ -939,8 +940,19 @@ function SessionAdaptationNotice({ readiness }: { readiness?: SessionReadiness }
   return <section className={`session-adaptation-notice ${adaptation.mode}`} role="status"><Gauge size={17} /><div><strong>{adaptation.label}</strong><span>{adaptation.detail}</span></div></section>;
 }
 
-function ExercisePreview({ exercise, index, muscleGroup, progressionAction: action, lastSession, onOpenDetails }: { exercise: PlannedExercise; index: number; muscleGroup?: string; progressionAction?: ReturnType<typeof progressionAction>; lastSession?: ExerciseSession; onOpenDetails: () => void }) {
-  return <article className="exercise-card preview-card"><div className="exercise-index">{String(index + 1).padStart(2, '0')}</div><button className="exercise-image-button" type="button" onClick={onOpenDetails} aria-label={`Ver cómo usar ${exercise.name}`}><ExerciseThumb src={exercise.imageUrl} position={exercise.imagePosition} alt={`Referencia de ${exercise.name}`} /></button><div className="exercise-main"><button className="exercise-name-button" type="button" onClick={onOpenDetails}><h3>{exercise.name}</h3></button><div className="exercise-meta"><span>{muscleGroup ?? 'Ejercicio'}</span><span>{exercise.sets} series</span><span>{exercise.repMin}-{exercise.repMax} reps</span><span><Timer size={14} /> {formatDuration(exercise.restSeconds)}</span></div>{action && <div className={`next-action ${action.tone}`}><Gauge size={14} /><div><strong>{action.title}</strong><span>{action.detail}</span></div></div>}</div>{lastSession && <div className="last-feedback"><span>última vez</span><strong>{formatExerciseSummary(lastSession)}</strong></div>}</article>;
+export function ExercisePreview({ exercise, index, muscleGroup, progressionAction: action, lastSession, onOpenDetails }: { exercise: PlannedExercise; index: number; muscleGroup?: string; progressionAction?: ReturnType<typeof progressionAction>; lastSession?: ExerciseSession; onOpenDetails: () => void }) {
+  return <article className="exercise-card preview-card">
+    <div className="exercise-index">{String(index + 1).padStart(2, '0')}</div>
+    <button className="exercise-image-button" type="button" onClick={onOpenDetails} aria-label={`Ver cómo usar ${exercise.name}`}><ExerciseThumb src={exercise.imageUrl} position={exercise.imagePosition} alt={`Referencia de ${exercise.name}`} /></button>
+    <div className="exercise-main">
+      <div className="exercise-preview-heading">
+        <button className="exercise-name-button" type="button" onClick={onOpenDetails}><h3>{exercise.name}</h3></button>
+        {lastSession && <div className="last-feedback"><span>última vez</span><strong>{formatExerciseSummary(lastSession)}</strong></div>}
+      </div>
+      <div className="exercise-meta" aria-label="Detalles del ejercicio"><span>{muscleGroup ?? 'Ejercicio'}</span><span>{exercise.sets} series</span><span>{exercise.repMin}-{exercise.repMax} reps</span><span><Timer size={14} aria-hidden="true" /> {formatDuration(exercise.restSeconds)}</span></div>
+      {action && <div className={`next-action ${action.tone}`}><Gauge size={16} aria-hidden="true" /><div><span className="next-action-label">Siguiente paso</span><strong>{action.title}</strong><span>{action.detail}</span></div></div>}
+    </div>
+  </article>;
 }
 
 function CompletedSessionSummary({ summary, onViewProgress }: { summary: SessionSummary; onViewProgress: () => void }) {

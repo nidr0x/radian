@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { completionActionHint, dataStateCopy, todayPrimaryAction } from '../src/lib/uiCopy';
+import { completionActionHint, dataStateCopy, todayPrimaryAction, updateActionCopy } from '../src/lib/uiCopy';
 
 describe('copy de acciones de interfaz', () => {
   it('prioriza empezar una sesión y explica qué ocurre después', () => {
@@ -18,6 +18,11 @@ describe('copy de acciones de interfaz', () => {
 
   it('hace explícito que valorar el ejercicio guarda y avanza', () => {
     expect(completionActionHint).toBe('Guarda y pasa al siguiente ejercicio');
+  });
+
+  it('no presenta como pulsable la actualización durante una sesión', () => {
+    expect(updateActionCopy(true)).toEqual({ label: 'Actualiza al terminar la sesión', available: false });
+    expect(updateActionCopy(false)).toEqual({ label: 'Actualizar Radian', available: true });
   });
 
   it('resume dónde viven los datos y si requieren atención', () => {

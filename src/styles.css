@@ -827,10 +827,34 @@ h3 { font-weight: 650; letter-spacing: -.02em; }
 .detail-action span { color: inherit; opacity: .85; }
 .detail-action.caution { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 25%, var(--line)); background: color-mix(in srgb, var(--warning) 10%, var(--surface)); }
 
+.preview-card { display: grid; grid-template-columns: 24px 76px minmax(0, 1fr); align-items: start; gap: 12px; min-height: 0; padding: 14px; }
+.preview-card .exercise-index { padding-top: 4px; }
+.preview-card .exercise-image-button { width: 76px; }
+.preview-card .exercise-main { min-width: 0; }
+.exercise-preview-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; min-width: 0; }
+.exercise-preview-heading .exercise-name-button { min-width: 0; flex: 1; }
+.exercise-preview-heading .exercise-name-button h3 { margin-bottom: 0; font-size: 17px; line-height: 1.1; text-wrap: balance; }
+.preview-card .last-feedback { flex: 0 0 auto; max-width: 112px; gap: 3px; padding-top: 1px; }
+.preview-card .last-feedback span { font-size: 9px; white-space: nowrap; }
+.preview-card .last-feedback strong { font-size: 11px; line-height: 1.25; }
+.preview-card .exercise-meta { gap: 6px; margin-top: 11px; }
+.preview-card .exercise-meta span { min-height: 24px; padding: 4px 7px; border: 1px solid color-mix(in srgb, var(--line) 72%, transparent); border-radius: 8px; background: var(--surface-soft); }
+.preview-card .next-action { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 8px; margin-top: 12px; padding: 10px 11px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); border-radius: 12px 12px 12px 4px; background: color-mix(in srgb, var(--accent-pale) 72%, var(--surface)); }
+.preview-card .next-action > svg { grid-row: 1 / span 3; margin-top: 2px; }
+.preview-card .next-action > div { display: grid; gap: 2px; min-width: 0; }
+.preview-card .next-action-label { color: inherit; font-family: 'DM Mono', monospace; font-size: 9px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+.preview-card .next-action strong { color: inherit; font-size: 11px; line-height: 1.25; }
+.preview-card .next-action span:last-child { color: var(--muted); font-size: 10px; line-height: 1.35; }
+.preview-card .next-action.caution { border-color: color-mix(in srgb, var(--warning) 35%, var(--line)); background: color-mix(in srgb, var(--warning) 10%, var(--surface)); }
+
 @media (max-width: 560px) {
   .resume-banner { align-items: flex-start; gap: 10px; }
   .resume-banner .primary-button { padding-inline: 10px; }
-  .last-feedback { max-width: 78px; }
+  .preview-card { grid-template-columns: 20px 68px minmax(0, 1fr); gap: 9px; padding: 12px; }
+  .preview-card .exercise-image-button, .preview-card .exercise-thumb { width: 68px; }
+  .preview-card .exercise-thumb { flex-basis: 68px; height: 62px; }
+  .preview-card .last-feedback { max-width: 88px; }
+  .preview-card .last-feedback strong { font-size: 10px; }
 }
 
 /* Progression controls and warm-up rows stay visually distinct from work sets. */
@@ -1273,3 +1297,4 @@ h3 { font-weight: 650; letter-spacing: -.02em; }
   .routine-equipment-review li { align-items: flex-start; flex-direction: column; }
   .routine-equipment-review li button { width: 100%; }
 }
+.update-locked { display: inline-flex; align-items: center; gap: 7px; min-height: 44px; padding: 9px 12px; border: 1px dashed var(--line); border-radius: 11px; color: var(--muted); background: var(--surface-soft); font-size: 11px; font-weight: 700; }
