@@ -39,30 +39,42 @@ export interface PlanEquipmentGap {
   replacement?: ExerciseDefinition;
 }
 
-export const planEquipmentGaps = (plan: WorkoutPlan, exercises: ExerciseDefinition[], availableEquipment: ExerciseEquipment[]): PlanEquipmentGap[] => plan.days.flatMap((day) => day.exercises.flatMap((planned) => {
-  const current = exercises.find((exercise) => exercise.id === planned.exerciseId);
-  if (!current || availableEquipment.includes(current.equipment)) return [];
-  return [{
-    dayId: day.id,
-    dayName: day.name,
-    exerciseId: current.id,
-    exerciseName: current.name,
-    equipment: current.equipment,
-    replacement: compatibleAlternatives(exercises, current.id, availableEquipment)[0],
-  }];
-}));
+const replacementFor = (exercises: ExerciseDefinition[], exerciseId: string, availableEquipment: ExerciseEquipment[], usedExerciseIds: Set<string>): ExerciseDefinition | undefined => compatibleAlternatives(exercises, exerciseId, availableEquipment).find((exercise) => !usedExerciseIds.has(exercise.id));
+
+export const planEquipmentGaps = (plan: WorkoutPlan, exercises: ExerciseDefinition[], availableEquipment: ExerciseEquipment[]): PlanEquipmentGap[] => plan.days.flatMap((day) => {
+  const usedExerciseIds = new Set(day.exercises.filter((planned) => planned.active).map((planned) => planned.exerciseId));
+  return day.exercises.flatMap((planned) => {
+    const current = exercises.find((exercise) => exercise.id === planned.exerciseId);
+    if (!current || availableEquipment.includes(current.equipment)) return [];
+    usedExerciseIds.delete(planned.exerciseId);
+    const replacement = replacementFor(exercises, current.id, availableEquipment, usedExerciseIds);
+    if (replacement) usedExerciseIds.add(replacement.id);
+    return [{
+      dayId: day.id,
+      dayName: day.name,
+      exerciseId: current.id,
+      exerciseName: current.name,
+      equipment: current.equipment,
+      replacement,
+    }];
+  });
+});
 
 export const adaptPlanToEquipment = (plan: WorkoutPlan, exercises: ExerciseDefinition[], availableEquipment: ExerciseEquipment[]): WorkoutPlan => ({
   ...plan,
-  days: plan.days.map((day) => ({
-    ...day,
-    exercises: day.exercises.map((planned) => {
-      const current = exercises.find((exercise) => exercise.id === planned.exerciseId);
-      if (!current || availableEquipment.includes(current.equipment)) return planned;
-      const replacement = compatibleAlternatives(exercises, current.id, availableEquipment)[0];
-      return replacement
-        ? { ...planned, exerciseId: replacement.id, name: replacement.name, imageUrl: replacement.imageUrl, imagePosition: replacement.imagePosition }
-        : planned;
-    }),
-  })),
+  days: plan.days.map((day) => {
+    const usedExerciseIds = new Set(day.exercises.filter((planned) => planned.active).map((planned) => planned.exerciseId));
+    return {
+      ...day,
+      exercises: day.exercises.map((planned) => {
+        const current = exercises.find((exercise) => exercise.id === planned.exerciseId);
+        if (!current || availableEquipment.includes(current.equipment)) return planned;
+        usedExerciseIds.delete(planned.exerciseId);
+        const replacement = replacementFor(exercises, current.id, availableEquipment, usedExerciseIds);
+        if (!replacement) return planned;
+        usedExerciseIds.add(replacement.id);
+        return { ...planned, exerciseId: replacement.id, name: replacement.name, imageUrl: replacement.imageUrl, imagePosition: replacement.imagePosition };
+      }),
+    };
+  }),
 });

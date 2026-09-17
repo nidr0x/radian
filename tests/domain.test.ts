@@ -368,8 +368,8 @@ describe('biblioteca y récords', () => {
     const adapted = adaptPlanToEquipment(data.plan, data.exercises, ['machine']);
     const cableFly = adapted.days[0].exercises.find((exercise) => exercise.id === 'mon-3');
     const replacement = data.exercises.find((exercise) => exercise.id === cableFly?.exerciseId);
-    expect(cableFly?.exerciseId).not.toBe('cable-fly');
-    expect(replacement?.equipment).toBe('machine');
+    expect(cableFly?.exerciseId).toBe('cable-fly');
+    expect(replacement?.equipment).toBe('cable');
   });
 
   it('explica qué ejercicios de la rutina ya no encajan antes de adaptar el plan', () => {
@@ -379,13 +379,23 @@ describe('biblioteca y récords', () => {
     expect(gaps.find((gap) => gap.exerciseId === 'cable-fly')).toMatchObject({
       dayName: 'Pecho, hombros, tríceps',
       exerciseName: 'Aperturas en polea',
-      replacement: { id: 'chest-press', name: 'Press de pecho' },
+      replacement: undefined,
     });
     expect(gaps.find((gap) => gap.exerciseId === 'triceps-pushdown')).toMatchObject({
       dayName: 'Pecho, hombros, tríceps',
       exerciseName: 'Extensión de tríceps en polea',
       replacement: undefined,
     });
+  });
+
+  it('evita duplicar ejercicios al adaptar una rutina al material disponible', () => {
+    const data = defaultData();
+    const adapted = adaptPlanToEquipment(data.plan, data.exercises, ['machine']);
+    const monday = adapted.days.find((day) => day.id === 'monday');
+    const activeIds = monday?.exercises.filter((exercise) => exercise.active).map((exercise) => exercise.exerciseId) ?? [];
+
+    expect(new Set(activeIds).size).toBe(activeIds.length);
+    expect(monday?.exercises.find((exercise) => exercise.id === 'mon-3')).toMatchObject({ exerciseId: 'cable-fly', name: 'Aperturas en polea' });
   });
 
   it('detecta una nueva mejor carga respecto al histórico', () => {
