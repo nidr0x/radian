@@ -30,6 +30,28 @@ export const compatibleAlternatives = (exercises: ExerciseDefinition[], exercise
     .slice(0, 4);
 };
 
+export interface PlanEquipmentGap {
+  dayId: string;
+  dayName: string;
+  exerciseId: string;
+  exerciseName: string;
+  equipment: ExerciseEquipment;
+  replacement?: ExerciseDefinition;
+}
+
+export const planEquipmentGaps = (plan: WorkoutPlan, exercises: ExerciseDefinition[], availableEquipment: ExerciseEquipment[]): PlanEquipmentGap[] => plan.days.flatMap((day) => day.exercises.flatMap((planned) => {
+  const current = exercises.find((exercise) => exercise.id === planned.exerciseId);
+  if (!current || availableEquipment.includes(current.equipment)) return [];
+  return [{
+    dayId: day.id,
+    dayName: day.name,
+    exerciseId: current.id,
+    exerciseName: current.name,
+    equipment: current.equipment,
+    replacement: compatibleAlternatives(exercises, current.id, availableEquipment)[0],
+  }];
+}));
+
 export const adaptPlanToEquipment = (plan: WorkoutPlan, exercises: ExerciseDefinition[], availableEquipment: ExerciseEquipment[]): WorkoutPlan => ({
   ...plan,
   days: plan.days.map((day) => ({

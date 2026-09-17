@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { defaultData } from '../src/data/initialPlan';
-import { adaptPlanToEquipment, allExerciseEquipment, compatibleAlternatives, exerciseMatches } from '../src/lib/exercises';
+import { adaptPlanToEquipment, allExerciseEquipment, compatibleAlternatives, exerciseMatches, planEquipmentGaps } from '../src/lib/exercises';
 import { detectTrainingSignals, progressionAction, progressionCue, recommendationFor } from '../src/lib/recommendations';
 import { isWorkSet, nextPrescription } from '../src/lib/progression';
 import { bestRecordForExercise, detectPersonalRecord } from '../src/lib/records';
@@ -370,6 +370,22 @@ describe('biblioteca y récords', () => {
     const replacement = data.exercises.find((exercise) => exercise.id === cableFly?.exerciseId);
     expect(cableFly?.exerciseId).not.toBe('cable-fly');
     expect(replacement?.equipment).toBe('machine');
+  });
+
+  it('explica qué ejercicios de la rutina ya no encajan antes de adaptar el plan', () => {
+    const data = defaultData();
+    const gaps = planEquipmentGaps(data.plan, data.exercises, ['machine']);
+
+    expect(gaps.find((gap) => gap.exerciseId === 'cable-fly')).toMatchObject({
+      dayName: 'Pecho, hombros, tríceps',
+      exerciseName: 'Aperturas en polea',
+      replacement: { id: 'chest-press', name: 'Press de pecho' },
+    });
+    expect(gaps.find((gap) => gap.exerciseId === 'triceps-pushdown')).toMatchObject({
+      dayName: 'Pecho, hombros, tríceps',
+      exerciseName: 'Extensión de tríceps en polea',
+      replacement: undefined,
+    });
   });
 
   it('detecta una nueva mejor carga respecto al histórico', () => {
