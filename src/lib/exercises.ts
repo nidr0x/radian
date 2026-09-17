@@ -60,6 +60,8 @@ export const planEquipmentGaps = (plan: WorkoutPlan, exercises: ExerciseDefiniti
   });
 });
 
+export const unresolvedPlanEquipmentGaps = (plan: WorkoutPlan, exercises: ExerciseDefinition[], availableEquipment: ExerciseEquipment[]): PlanEquipmentGap[] => planEquipmentGaps(plan, exercises, availableEquipment).filter((gap) => !gap.replacement);
+
 export const adaptPlanToEquipment = (plan: WorkoutPlan, exercises: ExerciseDefinition[], availableEquipment: ExerciseEquipment[]): WorkoutPlan => ({
   ...plan,
   days: plan.days.map((day) => {

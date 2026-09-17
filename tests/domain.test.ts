@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { defaultData } from '../src/data/initialPlan';
-import { adaptPlanToEquipment, allExerciseEquipment, compatibleAlternatives, exerciseMatches, planEquipmentGaps } from '../src/lib/exercises';
+import { adaptPlanToEquipment, allExerciseEquipment, compatibleAlternatives, exerciseMatches, planEquipmentGaps, unresolvedPlanEquipmentGaps } from '../src/lib/exercises';
 import { detectTrainingSignals, progressionAction, progressionCue, recommendationFor } from '../src/lib/recommendations';
 import { isWorkSet, nextPrescription } from '../src/lib/progression';
 import { bestRecordForExercise, detectPersonalRecord } from '../src/lib/records';
@@ -396,6 +396,12 @@ describe('biblioteca y récords', () => {
 
     expect(new Set(activeIds).size).toBe(activeIds.length);
     expect(monday?.exercises.find((exercise) => exercise.id === 'mon-3')).toMatchObject({ exerciseId: 'cable-fly', name: 'Aperturas en polea' });
+  });
+
+  it('devuelve sólo los ejercicios que requieren revisión manual', () => {
+    const data = defaultData();
+
+    expect(unresolvedPlanEquipmentGaps(data.plan, data.exercises, ['machine']).filter((gap) => gap.dayId === 'monday').map((gap) => gap.exerciseId)).toEqual(['cable-fly', 'triceps-pushdown', 'overhead-triceps']);
   });
 
   it('detecta una nueva mejor carga respecto al histórico', () => {

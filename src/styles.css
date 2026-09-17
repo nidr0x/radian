@@ -1256,3 +1256,20 @@ h3 { font-weight: 650; letter-spacing: -.02em; }
 .signal-row strong { font-size: 11px; }
 .signal-row span, .signal-row small { color: var(--muted); font-size: 9px; }
 .signal-row p { margin: 0; color: var(--ink); font-size: 10px; line-height: 1.45; }
+.routine-equipment-review { display: grid; gap: 11px; margin: 0 1px 17px; padding: 15px; border: 1px solid color-mix(in srgb, var(--warning) 38%, var(--line)); border-radius: 18px 18px 18px var(--cut-corner); background: color-mix(in srgb, var(--warning) 10%, var(--surface)); }
+.routine-equipment-review-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.routine-equipment-review-heading .eyebrow { margin-bottom: 5px; color: var(--warning); }
+.routine-equipment-review-heading h3 { margin: 0; font-size: 16px; }
+.routine-equipment-review-heading > span { display: grid; place-items: center; flex: 0 0 auto; width: 27px; height: 27px; border-radius: 9px; color: var(--warning); background: color-mix(in srgb, var(--warning) 18%, var(--surface)); font-family: 'DM Mono', monospace; font-size: 11px; font-weight: 700; }
+.routine-equipment-review > p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.routine-equipment-review ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.routine-equipment-review li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 8px; border-top: 1px solid color-mix(in srgb, var(--warning) 20%, var(--line)); }
+.routine-equipment-review li > div { display: grid; min-width: 0; gap: 3px; }
+.routine-equipment-review li strong { overflow: hidden; color: var(--ink); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.routine-equipment-review li span { color: var(--muted); font-size: 9px; }
+.routine-equipment-review li button { flex: 0 0 auto; min-height: 38px; padding-inline: 10px; color: var(--ink); font-size: 10px; }
+
+@media (max-width: 480px) {
+  .routine-equipment-review li { align-items: flex-start; flex-direction: column; }
+  .routine-equipment-review li button { width: 100%; }
+}
