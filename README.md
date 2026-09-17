@@ -137,6 +137,17 @@ To connect it from a compatible MCP client:
 3. Approve the `radian:read` consent first. If you later need writing, approve `radian:write` separately so the client can call the write tools.
 4. Ask questions such as `resume mis entrenamientos de esta semana`, `cómo va mi press banca`, or `qué me recomiendas para la próxima sesión`.
 
+### Validación manual del cliente MCP
+
+Después de autorizar el endpoint, comprueba una lectura y una escritura pequeña desde cada cliente que vayas a usar:
+
+- La lectura debe devolver tu perfil y la última versión (`updatedAt`) sin exponer datos de otra cuenta.
+- Para escribir, el cliente debe pedir `radian:write` por separado y mostrar el resumen antes de aplicar un cambio.
+- Un cambio destructivo debe seguir `preview_change` → `apply_change` con confirmación explícita; nunca debe borrarse nada con una sola llamada.
+- Si aparece `conflict` o `needs_version`, vuelve a leer la versión actual y no fuerces la operación.
+
+Radian no necesita una app personalizada de ChatGPT ni el antiguo modo Developer: la conexión se hace mediante el endpoint MCP remoto y el OAuth del propio cliente.
+
 Write operations use a guarded flow: first `preview_change`, then `apply_change` with `confirm=true` for destructive actions. If the server returns `needs_version`, refresh the tool input with the current revision before retrying. If it returns `conflict`, use the existing conflict UI in Radian to inspect the remote copy, compare revisions, and sync the local copy safely before trying again.
 
 The revision tools are `list_revisions` and `restore_revision`. Radian keeps recoverable remote revisions for 30 days, so a reverted or mistaken change can usually be restored within that window. The remote tools are scoped to the account that authorized the connection, and the server rejects requests without a valid access token.
