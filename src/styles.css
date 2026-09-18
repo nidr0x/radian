@@ -144,7 +144,7 @@ h3 { color: var(--ink); font-size: 15px; font-weight: 700; letter-spacing: -.025
 
 .session-wrap { padding-bottom: 12px; }
 .session-topline { display: grid; grid-template-columns: 1fr 95px 40px; gap: 12px; align-items: center; margin: 1px 0 15px; }
-.session-topline p { margin-bottom: 4px; }.session-topline strong { font-size: 13px; }
+.session-topline p { margin-bottom: 4px; }.session-topline strong { display: block; font-size: 13px; }.session-completed-count { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; }
 .session-progress { height: 5px; overflow: hidden; border-radius: 5px; background: var(--surface-strong); }.session-progress span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .35s ease; }
 .rest-inline { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; padding: 11px 13px; border: 1px solid var(--accent-pale); border-radius: 13px; color: var(--accent-deep); background: var(--accent-pale); font-size: 11px; }.rest-inline button { margin-left: auto; padding: 0; border: 0; color: inherit; background: transparent; font-size: 10px; font-weight: 800; }
 .active-exercise-card { padding: 21px 17px 17px; border-radius: 23px 23px 23px 6px; background: var(--surface); box-shadow: var(--shadow); }
