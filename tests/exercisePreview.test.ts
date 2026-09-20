@@ -25,29 +25,15 @@ describe('tarjeta previa de ejercicio', () => {
       exercise,
       index: 0,
       muscleGroup: 'Pecho',
-      progressionAction: {
-        tone: 'positive',
-        title: 'Próxima vez: prueba 42,5 kg',
-        detail: 'Has alcanzado el máximo de repeticiones.',
-      },
-      lastSession: {
-        ...exercise,
-        plannedExerciseId: 'history-1',
-        progressionPolicy: 'double',
-        progressionIncrementKg: 2.5,
-        completed: true,
-        difficulty: 'good',
-        actualWeightKg: 40,
-        actualReps: 12,
-        discomfort: false,
-        setLogs: [],
-      },
       onOpenDetails: () => undefined,
     }));
 
     expect(html).toContain('exercise-preview-heading');
     expect(html).toContain('exercise-meta');
-    expect(html).toContain('next-action');
-    expect(html.indexOf('exercise-preview-heading')).toBeLessThan(html.indexOf('next-action'));
+    expect(html).toContain('exercise-card-chevron');
+    expect(html).toContain('role="button"');
+    expect(html).toContain('tabindex="0"');
+    expect(html).not.toContain('last-feedback');
+    expect(html).not.toContain('next-action');
   });
 });
