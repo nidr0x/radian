@@ -109,9 +109,9 @@ describe('service worker', () => {
     await expect(response?.text()).resolves.toContain('/assets/app.js');
   });
 
-  it('activa automáticamente la corrección cuando detecta un shell redirigido anterior', async () => {
+  it('activa automáticamente la corrección cuando detecta un shell anterior en la raíz', async () => {
     const legacyCache = new FakeCache();
-    legacyCache.set('/index.html', responseFor('/index.html'));
+    legacyCache.set('/', responseFor('/'));
     const { handlers, skipWaitingCalls } = loadWorker(legacyCache);
     let installPromise: Promise<unknown> | undefined;
     handlers.get('install')?.({ waitUntil: (promise) => { installPromise = promise; } });

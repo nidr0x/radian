@@ -15,12 +15,12 @@ const APP_SHELL = [
   '/exercises/individual/shoulder-press.webp',
 ];
 
-const hasRedirectedLegacyShell = async () => {
+const hasLegacyShell = async () => {
   const keys = await caches.keys();
   for (const key of keys.filter((candidate) => candidate.startsWith('radian-shell-') && candidate !== CACHE_NAME)) {
     const cache = await caches.open(key);
-    const shell = await cache.match('/index.html');
-    if (shell?.redirected) return true;
+    const shell = (await cache.match('/')) ?? (await cache.match('/index.html'));
+    if (shell) return true;
   }
   return false;
 };
@@ -32,7 +32,7 @@ self.addEventListener('install', (event) => {
     const html = await shell.text();
     const assets = [...html.matchAll(/(?:src|href)="(\/assets\/[^\"]+)"/g)].map((match) => match[1]);
     await cache.addAll(assets);
-    if (await hasRedirectedLegacyShell()) self.skipWaiting();
+    if (await hasLegacyShell()) self.skipWaiting();
   }));
 });
 
