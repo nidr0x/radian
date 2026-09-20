@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Activity, ArrowDown, ArrowUp, BarChart3, CalendarDays, Check, ChevronRight, CircleHelp, Clipboard, CloudOff,
+  Activity, ArrowDown, ArrowUp, BarChart3, CalendarDays, Check, ChevronRight, Clipboard, CloudOff,
   Dumbbell, Download, FileJson, Fingerprint, Gauge, History, Info, KeyRound, Layers3, LockKeyhole, LogIn, LogOut, Minus, Moon, MoreHorizontal, Pause, Pencil, Play,
   Plus, RotateCcw, Save, Search, Settings2, ShieldCheck, SkipForward, Sparkles, Sun, Timer, Trash2, Trophy, Upload, UserPlus, UserRound, X,
   Maximize2, Minimize2,
@@ -822,11 +822,14 @@ function App() {
       <a className="skip-link" href="#main-content">Ir al contenido</a>
       <header className="topbar">
         <div className="brand-lockup"><span className="brand-mark">R</span><span>radian</span></div>
-        <div className="connection-state" role="status"><span className="status-dot" /> {!online ? 'sin conexión' : cloudConflict ? 'conflicto' : authStatus === 'syncing' ? 'sincronizando' : authUser ? pendingChanges ? 'cambios pendientes' : 'sincronizado' : 'guardado local'}</div>
+        <div className="topbar-actions">
+          <div className="connection-state" role="status"><span className="status-dot" /> <span>{!online ? 'sin conexión' : cloudConflict ? 'conflicto' : authStatus === 'syncing' ? 'sincronizando' : authUser ? pendingChanges ? 'cambios pendientes' : 'sincronizado' : 'guardado local'}</span></div>
+          <button className="icon-button topbar-settings" type="button" aria-label="Abrir perfil y ajustes" onClick={() => setView('profile')}><Settings2 size={19} /></button>
+        </div>
       </header>
       <main className="app-main" id="main-content">
         {!online && <section className="profile-section" role="status">Sin conexión. Puedes seguir registrando el entrenamiento; los cambios quedan en este dispositivo.</section>}
-        {updateAvailable && <section className="profile-section" role="status"><strong>Hay una actualización disponible</strong><p>{activeSession ? 'Puedes actualizar al terminar el entrenamiento.' : 'Tus datos guardados se conservarán al actualizar.'}</p>{updateCopy.available ? <button className="secondary-button small" disabled={Boolean(storageWarning) || authStatus === 'syncing'} onClick={() => { if (persistData(dataRef.current)) applyAppUpdate(); else setStorageWarning('No se pudo guardar antes de actualizar.'); }}>{updateCopy.label}</button> : <span className="update-locked"><Timer size={15} aria-hidden="true" />{updateCopy.label}</span>}</section>}
+        {updateAvailable && <section className="update-banner" role="status"><div className="update-mark"><RotateCcw size={22} aria-hidden="true" /></div><div className="update-copy"><strong>Hay una actualización disponible</strong><p>{activeSession ? 'Puedes actualizar al terminar el entrenamiento.' : 'Tus datos guardados se conservarán al actualizar.'}</p></div>{updateCopy.available ? <button className="primary-button update-button" disabled={Boolean(storageWarning) || authStatus === 'syncing'} onClick={() => { if (persistData(dataRef.current)) applyAppUpdate(); else setStorageWarning('No se pudo guardar antes de actualizar.'); }}>{updateCopy.label}<ChevronRight size={19} /></button> : <span className="update-locked"><Timer size={15} aria-hidden="true" />{updateCopy.label}</span>}</section>}
         {view === 'profile' && <section className="profile-section data-status-section"><div className="section-heading compact"><div><p className="eyebrow">datos</p><h2>Estado de tus datos</h2></div><span className="data-state-pill">{dataStateCopy({ authenticated: Boolean(authUser), pendingChanges, cloudConflict: Boolean(cloudConflict), codeConnected: Boolean(syncState.key) })}</span></div><p>{authUser ? pendingChanges ? 'Hay cambios locales pendientes de sincronizar.' : 'Tu copia local coincide con la última sincronización.' : 'Los datos están guardados en este dispositivo.'}</p><p>{cloudUpdatedAt ? `Última versión sincronizada: ${new Date(cloudUpdatedAt).toLocaleString('es-ES')}` : 'Todavía no se ha confirmado una sincronización en esta sesión.'}</p><button className="secondary-button small" disabled={!online || authStatus === 'syncing'} onClick={() => void refreshCloud()}>Comprobar sincronización</button>{recovery && <div><p>Copia anterior conservada: {new Date(recovery.savedAt).toLocaleString('es-ES')}</p><button className="secondary-button small" disabled={authStatus === 'syncing'} onClick={restoreLocalRecovery}>Restaurar copia anterior</button><button className="text-button" onClick={() => downloadFile('radian-recovery.json', recovery.backup, 'application/json')}>Exportar copia anterior</button></div>}</section>}
         {view === 'profile' && <AccountPanel user={authUser} passkeys={passkeys} status={authStatus} error={authError} cloudUpdatedAt={cloudUpdatedAt} onRegister={handleRegisterPasskey} onLogin={handleLoginPasskey} onAddPasskey={handleAddPasskey} onRenamePasskey={handleRenamePasskey} onRevokePasskey={handleRevokePasskey} onLogout={handleLogout} onLogoutEverywhere={handleLogoutEverywhere} />}
         {cloudConflict?.data && <SyncConflictCard local={data} remote={cloudConflict} remoteLabel="Copia de la nube" intro="La nube cambió desde la última sincronización. Elige qué copia conservar." onKeepLocal={() => void resolveCloudConflict('local')} onUseRemote={() => void resolveCloudConflict('remote')} />}
@@ -852,7 +855,7 @@ function BottomNav({ view, onChange }: { view: View; onChange: (view: View) => v
   return <nav className="bottom-nav" aria-label="Navegación principal">{navItems.map(({ id, label, icon: Icon }) => <button key={id} className={view === id ? 'nav-item is-active' : 'nav-item'} aria-current={view === id ? 'page' : undefined} onClick={() => onChange(id)}><Icon size={20} strokeWidth={view === id ? 2.6 : 1.8} /><span>{label}</span></button>)}</nav>;
 }
 
-function PageHeader({ eyebrow, title, action }: { eyebrow: string; title: string; action?: React.ReactNode }) {
+function PageHeader({ eyebrow, title, action }: { eyebrow: string; title: React.ReactNode; action?: React.ReactNode }) {
   return <div className="page-header"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1></div>{action}</div>;
 }
 
@@ -907,20 +910,37 @@ function TodayView({ data, todayDay, activeSession, restRemaining, screenWakeLoc
   const currentAlternatives = activeSession ? alternativeExercises(data, activeSession.plannedExercises[activeSession.activeExerciseIndex]?.exerciseId ?? '') : [];
 
   return <><section className={activeSession ? 'view-section today-view session-active-view' : 'view-section today-view'}>
-    <PageHeader eyebrow={formatDate(new Date(), { weekday: 'long', day: 'numeric', month: 'long' })} title={activeSession ? 'Sigue a tu ritmo.' : 'Lo que toca hoy.'} action={<button className="icon-button subtle" type="button" aria-label="Ayuda" onClick={onHelp}><CircleHelp size={19} /></button>} />
+    <PageHeader eyebrow={formatDate(new Date(), { weekday: 'long', day: 'numeric', month: 'long' })} title={activeSession ? 'Sigue a tu ritmo.' : <><span>Lo que toca </span><em>hoy.</em></>} />
+    {!activeSession && <TodayStats data={data} />}
     <section className={activeSession ? 'today-hero session-active-hero' : 'today-hero'}>
+      <div className="hero-art" aria-hidden="true"><img src={workoutDay.exercises[0]?.imageUrl ?? '/exercises/atlas-push.webp'} alt="" /></div>
       <div className="hero-orbit"><span>{data.profile.gym || 'TU GIMNASIO'}</span><Dumbbell size={29} /></div>
       <div className="hero-copy"><p className="eyebrow light">{activeSession ? 'sesión en curso' : doneToday ? 'hecho por hoy' : workoutDay.weekday === currentWeekday() ? 'entrenamiento de hoy' : 'siguiente sesión'}</p><h2>{displayWorkoutName(workoutDay.name)}</h2><p>{workoutDay.focus} · {workoutDay.exercises.filter((exercise) => exercise.active).length} ejercicios / ~{data.profile.sessionMinutes} min</p></div>
       <div className="hero-progress"><strong>{activeSession ? `${activeExerciseNumber}/${activeSession.plannedExercises.length}` : doneToday ? '✓' : String(workoutDay.exercises.filter((exercise) => exercise.active).length)}</strong><span>{activeSession ? 'ejercicio actual' : doneToday ? 'sesión guardada' : 'bloques'}</span></div>
+      <div className="hero-actions">{!activeSession && <button className="primary-button start-button" type="button" onClick={() => setReadinessOpen(true)}><Play size={18} fill="currentColor" /> {primaryAction.label}</button>}<button className="hero-icon-button" type="button" aria-label="Ver rutina" onClick={() => onNavigate('routine')}><Clipboard size={19} /></button><button className="hero-icon-button" type="button" aria-label="Ayuda" onClick={onHelp}><MoreHorizontal size={21} /></button></div>
     </section>
     {activeSession ? <><SessionAdaptationNotice readiness={activeSession.readiness} /><ActiveSession session={activeSession} restRemaining={restRemaining} screenWakeLockActive={screenWakeLockActive} previousExercise={previousExercise} bestRecord={bestRecordForExercise(data.sessions, activeSession.plannedExercises[activeSession.activeExerciseIndex]?.exerciseId ?? '')} recommendation={currentRecommendation} progression={currentProgressionCue} progressionAction={currentProgressionAction} alternatives={currentAlternatives} onComplete={onComplete} onDraft={onDraft} onSwap={(replacement) => onSwapExercise(activeSession.id, activeSession.plannedExercises[activeSession.activeExerciseIndex].plannedExerciseId, replacement)} onRest={onRest} onUndo={onUndo} canUndo={canUndo} onExit={onExit} /> </> : <>
       {completedSummary && <CompletedSessionSummary summary={completedSummary} onViewProgress={() => onNavigate('progress')} />}
       <div className="section-heading"><div><p className="eyebrow">el plan</p><h2>{workoutDay.weekday === currentWeekday() ? 'Tu sesión' : 'Próximo entrenamiento'}</h2></div><button className="text-button" onClick={() => onNavigate('routine')}>Editar rutina <ChevronRight size={16} /></button></div>
-      <div className="today-start-block"><button className="primary-button start-button" type="button" onClick={() => setReadinessOpen(true)}><Play size={18} fill="currentColor" /> {primaryAction.label}</button><p>{primaryAction.hint}</p></div>
+      <p className="today-start-hint">{primaryAction.hint}</p>
       {readinessOpen && <ReadinessPrompt value={readiness} onChange={setReadiness} onSkip={() => { setReadinessOpen(false); onStart(workoutDay); }} onStart={() => { setReadinessOpen(false); onStart(workoutDay, readiness); }} />}
       <div className="exercise-list">{workoutDay.exercises.filter((exercise) => exercise.active).map((exercise, index) => <ExercisePreview key={exercise.id} exercise={exercise} index={index} muscleGroup={data.exercises.find((item) => item.id === exercise.exerciseId)?.muscleGroup} progressionAction={progressionAction(exercise.exerciseId, data.sessions, exercise)} lastSession={latestExercise(data.sessions, exercise.exerciseId)} onOpenDetails={() => setDetailExercise(exercise)} />)}</div>
     </>}
   </section>{detailExercise && <ExerciseDetailSheet exercise={detailExercise} muscleGroup={data.exercises.find((item) => item.id === detailExercise.exerciseId)?.muscleGroup} guidance={exerciseGuidance[detailExercise.exerciseId]} recommendation={recommendationFor(detailExercise.exerciseId, data.sessions)} progressionAction={progressionAction(detailExercise.exerciseId, data.sessions, detailExercise)} lastSession={latestExercise(data.sessions, detailExercise.exerciseId)} onClose={() => setDetailExercise(undefined)} />}</>;
+}
+
+function TodayStats({ data }: { data: AppData }) {
+  const completedSessions = data.sessions.filter((session) => session.status === 'completed');
+  const monthKey = dateKey(new Date()).slice(0, 7);
+  const monthSessions = completedSessions.filter((session) => session.dateKey.startsWith(monthKey));
+  const totalMinutes = completedSessions.reduce((total, session) => {
+    if (!session.completedAt) return total;
+    const startedAt = Date.parse(session.startedAt);
+    const completedAt = Date.parse(session.completedAt);
+    return Number.isFinite(startedAt) && Number.isFinite(completedAt) ? total + Math.max(0, Math.round((completedAt - startedAt) / 60000)) : total;
+  }, 0);
+  const streak = latestWorkoutStreak(completedSessions);
+  return <section className="dashboard-stats" aria-label="Resumen de actividad"><div className="stat-card"><span className="stat-icon"><Activity size={19} /></span><strong>{streak}</strong><span>racha de días</span></div><div className="stat-card"><span className="stat-icon"><BarChart3 size={19} /></span><strong>{monthSessions.length}</strong><span>entrenamientos este mes</span></div><div className="stat-card"><span className="stat-icon"><Timer size={19} /></span><strong>{formatSessionDuration(totalMinutes * 60)}</strong><span>tiempo total</span></div></section>;
 }
 
 function ReadinessPrompt({ value, onChange, onSkip, onStart }: { value: SessionReadiness; onChange: (value: SessionReadiness) => void; onSkip: () => void; onStart: () => void }) {
@@ -1491,6 +1511,18 @@ function SyncPanel({ syncState, syncStatus, syncError, onConnect, onUpload, onDo
 
 function Fact({ label, value }: { label: string; value: string }) { return <div className="fact"><span>{label}</span><strong>{value}</strong></div>; }
 function displayWorkoutName(name: string): string { return name.replace(/\s*[·•]\s*/g, ', '); }
+function latestWorkoutStreak(sessions: WorkoutSession[]): number {
+  const completedDays = new Set(sessions.map((session) => session.dateKey));
+  const latestDay = [...completedDays].sort().at(-1);
+  if (!latestDay) return 0;
+  const cursor = new Date(`${latestDay}T12:00:00`);
+  let streak = 0;
+  while (completedDays.has(dateKey(cursor))) {
+    streak += 1;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return streak;
+}
 function numberOrUndefined(value: string): number | undefined { if (!value.trim()) return undefined; const number = Number(value); return Number.isFinite(number) ? number : undefined; }
 function formatExerciseSummary(session: ExerciseSession): string { const completedSets = session.setLogs?.filter((set) => isWorkSet(set) && set.completed) ?? []; const lastSet = completedSets[completedSets.length - 1]; if (lastSet?.weightKg !== undefined && lastSet.actualReps !== undefined) return `${lastSet.weightKg.toLocaleString('es-ES', { maximumFractionDigits: 1 })} kg · ${lastSet.actualReps} reps`; if (session.actualWeightKg !== undefined && session.actualReps !== undefined) return `${session.actualWeightKg.toLocaleString('es-ES', { maximumFractionDigits: 1 })} kg · ${session.actualReps} reps`; return difficultyLabel(session.difficulty ?? 'good'); }
 function NumberField({ label, unit, value, onChange }: { label: string; unit: string; value: string; onChange: (value: string) => void }) { return <label>{label}<span>{unit}</span><input inputMode="decimal" value={value} onChange={(event) => onChange(event.target.value)} placeholder="-" /></label>; }
