@@ -1422,6 +1422,7 @@ h3 { font-weight: 650; letter-spacing: -.02em; }
 .bottom-nav { right: auto; left: 50%; width: min(calc(100% - 64px), 1040px); padding: 12px 22px calc(12px + env(safe-area-inset-bottom)); border: 1px solid color-mix(in srgb, var(--line) 92%, var(--accent)); border-radius: 28px; background: color-mix(in srgb, var(--surface) 85%, transparent); box-shadow: 0 22px 60px rgba(0, 0, 0, .36); transform: translateX(-50%); }
 .nav-item { min-height: 56px; border-radius: 17px; color: var(--muted); font-size: 12px; }
 .nav-item.is-active { color: var(--action-ink); background: var(--accent); box-shadow: 0 10px 22px color-mix(in srgb, var(--accent) 20%, transparent); }
+.app-shell .bottom-nav .nav-item.is-active { color: var(--action-ink); }
 
 @media (min-width: 900px) {
   .today-view:not(.session-active-view) { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(360px, .92fr); column-gap: 22px; }
