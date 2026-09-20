@@ -24,12 +24,13 @@ type WorkerEvent = {
 type WorkerHandler = (event: WorkerEvent) => void;
 
 const html = '<script type="module" src="/assets/app.js"></script>';
+const currentHtml = `${html}<meta name="radian-pwa-version" content="2" />`;
 
-const responseFor = (path: string): WorkerResponse => ({
+const responseFor = (path: string, body = html): WorkerResponse => ({
   ok: true,
   redirected: path === '/index.html',
   type: 'basic',
-  text: async () => html,
+  text: async () => body,
 });
 
 class FakeCache {
@@ -118,5 +119,16 @@ describe('service worker', () => {
     await installPromise;
 
     expect(skipWaitingCalls()).toBe(1);
+  });
+
+  it('mantiene el aviso de actualización para un shell que ya conoce la PWA', async () => {
+    const legacyCache = new FakeCache();
+    legacyCache.set('/', responseFor('/', currentHtml));
+    const { handlers, skipWaitingCalls } = loadWorker(legacyCache);
+    let installPromise: Promise<unknown> | undefined;
+    handlers.get('install')?.({ waitUntil: (promise) => { installPromise = promise; } });
+    await installPromise;
+
+    expect(skipWaitingCalls()).toBe(0);
   });
 });

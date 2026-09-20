@@ -14,13 +14,14 @@ const APP_SHELL = [
   '/exercises/individual/leg-extension.webp', '/exercises/individual/calf-raise.webp',
   '/exercises/individual/shoulder-press.webp',
 ];
+const CURRENT_SHELL_MARKER = 'name="radian-pwa-version" content="2"';
 
 const hasLegacyShell = async () => {
   const keys = await caches.keys();
   for (const key of keys.filter((candidate) => candidate.startsWith('radian-shell-') && candidate !== CACHE_NAME)) {
     const cache = await caches.open(key);
     const shell = (await cache.match('/')) ?? (await cache.match('/index.html'));
-    if (shell) return true;
+    if (shell && !(await shell.text()).includes(CURRENT_SHELL_MARKER)) return true;
   }
   return false;
 };
