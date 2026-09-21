@@ -1429,6 +1429,7 @@ h3 { font-weight: 650; letter-spacing: -.02em; }
   .today-view:not(.session-active-view) > .page-header { grid-column: 1; grid-row: 1; align-self: end; margin-bottom: 22px; }
   .today-view:not(.session-active-view) > .dashboard-stats { grid-column: 2; grid-row: 1; align-self: end; margin-bottom: 22px; }
   .today-view:not(.session-active-view) > .today-hero, .today-view:not(.session-active-view) > .completed-summary, .today-view:not(.session-active-view) > .section-heading, .today-view:not(.session-active-view) > .today-start-hint, .today-view:not(.session-active-view) > .exercise-list { grid-column: 1 / -1; }
+  .today-view:not(.session-active-view) > .training-plan { grid-column: 1 / -1; }
   .dashboard-stats { margin-bottom: 0; }
   .today-hero { grid-template-columns: 80px minmax(0, 1fr); }
   .hero-copy { grid-column: 2; }
