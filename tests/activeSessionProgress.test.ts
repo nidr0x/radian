@@ -1,9 +1,14 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import App from '../src/App';
+import * as AppModule from '../src/App';
+import type { ExerciseSession, WorkoutSession } from '../src/types';
 import { defaultData } from '../src/data/initialPlan';
 import { createSession, STORAGE_KEY } from '../src/lib/storage';
+
+const appProgress = AppModule as typeof AppModule & {
+  getNextSessionProgress?: (session: WorkoutSession, updatedExercise: ExerciseSession) => Pick<WorkoutSession, 'activeExerciseIndex' | 'status' | 'completedAt'>;
+};
 
 describe('progreso visible de la sesión activa', () => {
   it('mantiene alineada la posición actual con el ejercicio mostrado aunque haya ejercicios incompletos', () => {
@@ -25,11 +30,71 @@ describe('progreso visible de la sesión activa', () => {
     });
     vi.stubGlobal('navigator', { onLine: true });
 
-    const html = renderToStaticMarkup(React.createElement(App));
+    const html = renderToStaticMarkup(React.createElement(AppModule.default));
 
     expect(html).toContain('Ejercicio 7 de 7');
     expect(html).toContain('4 completados');
     expect(html).toContain('ejercicio 7 / 7');
+    expect(html).toContain('Ejercicios de la sesión');
     expect(html).not.toContain('4 de 7 ejercicios');
+  });
+
+  it('continúa en el siguiente pendiente para que se pueda volver al ejercicio aplazado', () => {
+    const data = defaultData();
+    const session = createSession(data.plan.days[0], '2026-09-23', new Date('2026-09-23T10:00:00.000Z'));
+    session.plannedExercises = session.plannedExercises.slice(0, 4);
+    session.activeExerciseIndex = 1;
+    const updatedExercise = {
+      ...session.plannedExercises[1],
+      completed: true,
+      difficulty: 'good' as const,
+      completedAt: '2026-09-23T10:10:00.000Z',
+    };
+
+    expect(appProgress.getNextSessionProgress?.(session, updatedExercise)).toEqual({
+      activeExerciseIndex: 2,
+      status: 'in_progress',
+      completedAt: undefined,
+    });
+  });
+
+  it('vuelve al ejercicio pendiente al terminar los posteriores y cierra solo cuando todos tienen resultado', () => {
+    const data = defaultData();
+    const session = createSession(data.plan.days[0], '2026-09-23', new Date('2026-09-23T10:00:00.000Z'));
+    session.plannedExercises = session.plannedExercises.slice(0, 4);
+    session.activeExerciseIndex = 3;
+    session.plannedExercises.slice(1, 3).forEach((exercise) => {
+      exercise.completed = true;
+      exercise.completedAt = '2026-09-23T10:05:00.000Z';
+    });
+    const updatedExercise = {
+      ...session.plannedExercises[3],
+      completed: true,
+      difficulty: 'good' as const,
+      completedAt: '2026-09-23T10:15:00.000Z',
+    };
+
+    expect(appProgress.getNextSessionProgress?.(session, updatedExercise)).toEqual({
+      activeExerciseIndex: 0,
+      status: 'in_progress',
+      completedAt: undefined,
+    });
+
+    session.plannedExercises[3] = updatedExercise;
+    session.plannedExercises[0].completed = true;
+    session.plannedExercises[0].completedAt = '2026-09-23T10:20:00.000Z';
+    session.activeExerciseIndex = 0;
+    const finalSkippedExercise = {
+      ...session.plannedExercises[0],
+      completed: false,
+      difficulty: 'incomplete' as const,
+      completedAt: '2026-09-23T10:25:00.000Z',
+    };
+
+    expect(appProgress.getNextSessionProgress?.(session, finalSkippedExercise)).toEqual({
+      activeExerciseIndex: 0,
+      status: 'completed',
+      completedAt: '2026-09-23T10:25:00.000Z',
+    });
   });
 });
