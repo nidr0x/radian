@@ -102,6 +102,7 @@ export interface ExerciseSession {
   actualReps?: number;
   discomfort: boolean;
   discomfortNote?: string;
+  deferredAt?: string;
   completedAt?: string;
 }
 

@@ -147,7 +147,7 @@ h3 { color: var(--ink); font-size: 15px; font-weight: 700; letter-spacing: -.025
 .session-topline p { margin-bottom: 4px; }.session-topline strong { display: block; font-size: 13px; }.session-completed-count { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; }
 .session-exercise-navigator { margin-bottom: 13px; }
 .session-exercise-navigator-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 0 2px 7px; }
-.session-exercise-navigator-heading strong { font-size: 11px; }.session-exercise-navigator-heading span { color: var(--muted); font-size: 9px; }
+.session-exercise-navigator-heading strong { font-size: 12px; }.session-exercise-navigator-heading span { color: var(--muted); font-size: 10px; }
 .session-exercise-steps { display: flex; gap: 7px; overflow-x: auto; margin: 0; padding: 1px 2px 7px; list-style: none; scrollbar-width: thin; }
 .session-exercise-steps li { flex: 0 0 auto; }
 .session-exercise-step { display: flex; width: clamp(146px, 38vw, 174px); min-height: 58px; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 13px 13px 13px 5px; color: var(--ink); background: var(--surface); text-align: left; transition: border-color .18s, background .18s, transform .18s; }
@@ -156,10 +156,12 @@ h3 { color: var(--ink); font-size: 15px; font-weight: 700; letter-spacing: -.025
 .session-exercise-step.is-active { border-color: var(--accent); background: var(--accent-pale); }
 .session-exercise-step.is-complete .session-exercise-step-index { color: var(--action-ink); background: var(--action); }
 .session-exercise-step.is-skipped .session-exercise-step-index { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, var(--surface)); }
+.session-exercise-step.is-deferred .session-exercise-step-index { color: var(--warning); background: color-mix(in srgb, var(--warning) 14%, var(--surface)); }
+.session-exercise-step.is-deferred .session-exercise-step-copy small { color: var(--warning); font-weight: 700; }
 .session-exercise-step-index { display: grid; width: 25px; height: 25px; flex: 0 0 25px; place-items: center; border-radius: 50%; color: var(--muted); background: var(--surface-soft); font-family: 'DM Mono', monospace; font-size: 10px; font-weight: 700; }
 .session-exercise-step-copy { display: grid; min-width: 0; gap: 3px; }
-.session-exercise-step-name { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 10px; font-weight: 750; line-height: 1.2; }
-.session-exercise-step-copy small { color: var(--muted); font-size: 8px; }
+.session-exercise-step-name { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 12px; font-weight: 750; line-height: 1.2; }
+.session-exercise-step-copy small { color: var(--muted); font-size: 10px; }
 .session-exercise-step.is-active .session-exercise-step-copy small { color: var(--accent-deep); font-weight: 800; }
 .session-exercise-step.is-skipped .session-exercise-step-copy small { color: var(--danger); font-weight: 700; }
 .session-progress { height: 5px; overflow: hidden; border-radius: 5px; background: var(--surface-strong); }.session-progress span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .35s ease; }
@@ -536,6 +538,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .onboarding-dialog .primary-button { width: 100%; }
 .sync-security { display: flex; gap: 6px; align-items: flex-start; }
 :root[data-text-size='large'] .exercise-meta, :root[data-text-size='large'] .section-description, :root[data-text-size='large'] .session-note, :root[data-text-size='large'] .sync-status, :root[data-text-size='large'] .sync-security, :root[data-text-size='large'] .profile-section p { font-size: 12px; }
+:root[data-text-size='large'] .session-exercise-navigator-heading strong, :root[data-text-size='large'] .session-exercise-step-name { font-size: 14px; }
+:root[data-text-size='large'] .session-exercise-navigator-heading span, :root[data-text-size='large'] .session-exercise-step-copy small, :root[data-text-size='large'] .session-completed-count { font-size: 12px; }
 
 @media (max-width: 560px) {
   .history-columns { grid-template-columns: 1fr; gap: 19px; }
@@ -1248,6 +1252,7 @@ h3 { font-weight: 650; letter-spacing: -.02em; }
 .active-exercise-overview .exercise-thumb.large { height: 100%; min-height: 168px; margin: 0; aspect-ratio: auto; }
 .active-exercise-summary { display: flex; min-width: 0; flex-direction: column; justify-content: space-between; }
 .active-exercise-summary h2 { max-width: 16ch; margin: 3px 0 16px; text-wrap: balance; }
+.active-exercise-summary h2:focus { outline: 2px solid color-mix(in srgb, var(--accent) 62%, transparent); outline-offset: 5px; border-radius: 3px; }
 .active-exercise-summary .target-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; padding: 14px 0 0; border-bottom: 0; }
 .active-exercise-summary .target-row div { min-width: 0; }
 .active-exercise-summary .target-row span { line-height: 1.25; text-wrap: pretty; }
