@@ -146,7 +146,10 @@ h3 { color: var(--ink); font-size: 15px; font-weight: 700; letter-spacing: -.025
 .session-topline { display: grid; grid-template-columns: 1fr 95px 40px; gap: 12px; align-items: center; margin: 1px 0 15px; }
 .session-topline p { margin-bottom: 4px; }.session-topline strong { display: block; font-size: 13px; }.session-completed-count { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; }
 .session-exercise-navigator { margin-bottom: 13px; }
-.session-exercise-navigator-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 0 2px 7px; }
+.session-exercise-navigator-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 0 2px 7px; }
+.session-exercise-navigator-heading > div { display: grid; min-width: 0; gap: 2px; }
+.session-deferred-return { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; gap: 5px; min-height: 44px; padding: 5px 10px; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); border-radius: 999px; color: var(--accent-deep); background: var(--accent-pale); font-size: 10px; font-weight: 750; white-space: nowrap; }
+.session-deferred-return:hover { border-color: var(--accent); }
 .session-exercise-navigator-heading strong { font-size: 12px; }.session-exercise-navigator-heading span { color: var(--muted); font-size: 10px; }
 .session-exercise-steps { display: flex; gap: 7px; overflow-x: auto; margin: 0; padding: 1px 2px 7px; list-style: none; scrollbar-width: thin; }
 .session-exercise-steps li { flex: 0 0 auto; }
@@ -167,6 +170,11 @@ h3 { color: var(--ink); font-size: 15px; font-weight: 700; letter-spacing: -.025
 .session-progress { height: 5px; overflow: hidden; border-radius: 5px; background: var(--surface-strong); }.session-progress span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .35s ease; }
 .rest-inline { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; padding: 11px 13px; border: 1px solid var(--accent-pale); border-radius: 13px; color: var(--accent-deep); background: var(--accent-pale); font-size: 11px; }.rest-inline button { margin-left: auto; padding: 0; border: 0; color: inherit; background: transparent; font-size: 10px; font-weight: 800; }
 .active-exercise-card { padding: 21px 17px 17px; border-radius: 23px 23px 23px 6px; background: var(--surface); box-shadow: var(--shadow); }
+.session-equipment-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.session-equipment-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; }
+.session-equipment-alternative-panel { display: grid; gap: 6px; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-soft); }
+.session-equipment-alternative-panel > strong { font-size: 12px; }
+.session-equipment-alternative-panel > p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .active-card-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 20px; }.exercise-kicker, .active-status { color: var(--muted); font-family: 'DM Mono', monospace; font-size: 9px; letter-spacing: .04em; text-transform: uppercase; }.active-status { display: inline-flex; align-items: center; gap: 7px; letter-spacing: 0; text-transform: none; }.active-status .status-dot { width: 5px; height: 5px; box-shadow: none; }
 .active-exercise-card h2 { max-width: 13ch; margin-bottom: 20px; font-size: 29px; }
 .target-row { display: flex; flex-wrap: wrap; gap: 17px 26px; padding: 15px 0 18px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }.target-row div { display: flex; min-width: 58px; flex-direction: column; gap: 2px; }.target-row strong { font-family: 'DM Mono', monospace; font-size: 20px; letter-spacing: -.07em; }.target-row span { color: var(--muted); font-size: 9px; }
@@ -540,6 +548,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 :root[data-text-size='large'] .exercise-meta, :root[data-text-size='large'] .section-description, :root[data-text-size='large'] .session-note, :root[data-text-size='large'] .sync-status, :root[data-text-size='large'] .sync-security, :root[data-text-size='large'] .profile-section p { font-size: 12px; }
 :root[data-text-size='large'] .session-exercise-navigator-heading strong, :root[data-text-size='large'] .session-exercise-step-name { font-size: 14px; }
 :root[data-text-size='large'] .session-exercise-navigator-heading span, :root[data-text-size='large'] .session-exercise-step-copy small, :root[data-text-size='large'] .session-completed-count { font-size: 12px; }
+:root[data-text-size='large'] .session-deferred-return { font-size: 12px; }
 
 @media (max-width: 560px) {
   .history-columns { grid-template-columns: 1fr; gap: 19px; }
@@ -1559,3 +1568,10 @@ h3 { font-weight: 650; letter-spacing: -.02em; }
   .training-plan .preview-card .exercise-meta .exercise-muscle-pill { gap: 6px; padding: 4px 8px; }
   .exercise-muscle-dot { width: 6px; height: 6px; }
 }
+
+@media (max-width: 560px) {
+  .session-exercise-navigator-heading { flex-wrap: wrap; }
+  .session-deferred-return { margin-left: auto; }
+}
+
+.session-equipment-alternative-panel[hidden] { display: none; }
