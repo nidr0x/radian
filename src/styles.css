@@ -1266,6 +1266,10 @@ h3 { font-weight: 650; letter-spacing: -.02em; }
 .weight-chart-footer { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0 0 35px; color: var(--muted); font-size: 9px; }
 .weight-chart-footer span:nth-child(2) { color: var(--accent-deep); font-weight: 700; }
 .weight-chart-note { margin: 9px 0 0 35px; color: var(--muted); font-size: 10px; }
+.exercise-progress-select-label { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; color: var(--ink); font-size: 11px; font-weight: 700; }
+.exercise-progress-select-label select { padding: 9px 10px; border: 1px solid var(--line); border-radius: 12px; color: var(--ink); background: var(--surface-soft); font-size: 13px; outline: 0; }
+.exercise-progress-select-label select:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-pale); }
+.exercise-progress-area { fill: url(#exercise-progress-fill); }
 .exercise-trend-card { display: grid; gap: 2px; }
 .exercise-trend-select { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: center; margin: 1px 0 9px; color: var(--muted); font-size: 10px; font-weight: 700; }
 .exercise-trend-select select { min-width: 0; width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 11px; color: var(--ink); background: var(--surface-soft); font-size: 12px; outline: 0; }

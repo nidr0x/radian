@@ -14,6 +14,7 @@ import { isWorkSet } from './lib/progression';
 import { bestRecordForExercise, detectPersonalRecord, type ExerciseRecord } from './lib/records';
 import { createSession, createSetLogs, loadData, migrateData, parseBackup, persistData, serializeBackup } from './lib/storage';
 import { exerciseTrend } from './lib/exerciseHistory';
+import { buildSvgChart } from './lib/progressChart';
 import { compareSyncCopies, deleteSyncData, generateSyncKey, loadSyncState, normalizeSyncKey, persistSyncState, pullSyncData, pushSyncData, SyncApiError, type RemoteSyncData, type SyncState } from './lib/sync';
 import { buildWeeklySummary } from './lib/weeklySummary';
 import { applyAppUpdate, hasAppUpdate } from './lib/pwa';
@@ -1545,6 +1546,7 @@ function RoutineExercise({ exercise, index, canMoveDown, exerciseOptions, altern
 function ProgressView({ data, onAddProgress, onAddCheckin, onInfo }: { data: AppData; onAddProgress: (entry: Omit<ProgressEntry, 'id' | 'date'>) => void; onAddCheckin: (checkin: Omit<WeeklyCheckin, 'id' | 'createdAt' | 'weekKey'>) => void; onInfo: () => void }) {
   const [measureOpen, setMeasureOpen] = useState(false);
   const [checkinOpen, setCheckinOpen] = useState(false);
+  const [selectedExerciseId, setSelectedExerciseId] = useState('');
   const [form, setForm] = useState({ weightKg: '', waistCm: '', chestCm: '', armCm: '', hipCm: '' });
   const currentCheckin = data.checkins.find((item) => item.weekKey === weekKey());
   const weeklySummary = buildWeeklySummary(data);
@@ -1553,6 +1555,7 @@ function ProgressView({ data, onAddProgress, onAddCheckin, onInfo }: { data: App
   const completedThisWeek = weekDays.filter((day) => day.completed).length;
   const weeklyTarget = Math.max(scheduledTrainingDays.length, 1);
   const performance = useMemo(() => performanceRows(data.sessions), [data.sessions]);
+  const availableExercises = useMemo(() => exerciseTrendOptions(data), [data.sessions]);
   const sortedProgress = useMemo(() => [...data.progress].sort((a, b) => a.date.localeCompare(b.date)), [data.progress]);
   const weightEntries = useMemo(() => sortedProgress.filter((entry) => entry.weightKg !== undefined), [sortedProgress]);
   const waistEntries = useMemo(() => sortedProgress.filter((entry) => entry.waistCm !== undefined), [sortedProgress]);
@@ -1562,7 +1565,7 @@ function ProgressView({ data, onAddProgress, onAddCheckin, onInfo }: { data: App
   const previousWaist = waistEntries.at(-2);
   const saveMeasure = (event: React.FormEvent): void => { event.preventDefault(); onAddProgress(Object.fromEntries(Object.entries(form).filter(([, value]) => value !== '').map(([key, value]) => [key, Number(value)])) as Omit<ProgressEntry, 'id' | 'date'>); setForm({ weightKg: '', waistCm: '', chestCm: '', armCm: '', hipCm: '' }); setMeasureOpen(false); };
   return <section className="view-section"><PageHeader eyebrow="señales, no ruido" title="Tu progreso" action={<button className="icon-button subtle" type="button" aria-label="Información sobre las métricas" onClick={onInfo}><Info size={19} /></button>} /><div className="metric-grid"><MetricCard label="Peso actual" value={lastWeight?.weightKg !== undefined ? formatWeight(lastWeight.weightKg) : formatWeight(data.profile.currentWeightKg)} change={changeLabel(lastWeight?.weightKg, previousWeight?.weightKg)} icon={<Activity size={17} />} /><MetricCard label="Cintura" value={lastWaist?.waistCm !== undefined ? `${lastWaist.waistCm.toLocaleString('es-ES', { maximumFractionDigits: 1 })} cm` : 'Sin registro'} change={changeLabel(lastWaist?.waistCm, previousWaist?.waistCm, ' cm')} icon={<Gauge size={17} />} /><MetricCard label="Adherencia" value={`${Math.min(completedThisWeek, weeklyTarget)}/${weeklyTarget}`} change="esta semana" icon={<Check size={17} />} /></div><section className="progress-card weekly-adherence-card"><div className="section-heading compact"><div><p className="eyebrow">esta semana</p><h2>Tu constancia</h2></div><strong className="weekly-score">{completedThisWeek}/{weeklyTarget}</strong></div><div className="week-strip" aria-label="Entrenamientos de la semana">{weekDays.map((day) => <div className={day.completed ? 'week-day completed' : day.planned ? 'week-day planned' : 'week-day'} key={day.key}><span>{day.label}</span><i aria-hidden="true">{day.completed ? '✓' : day.planned ? '·' : ''}</i></div>)}</div><p className="history-caption">{completedThisWeek === 0 ? 'Todavía no hay entrenamientos guardados esta semana.' : `${completedThisWeek} de ${weeklyTarget} sesiones previstas ya están guardadas.`}</p></section><section className="progress-card"><div className="section-heading compact"><div><p className="eyebrow">evolución corporal</p><h2>Medidas en el tiempo</h2></div><button className="text-button" onClick={() => setMeasureOpen((value) => !value)}><Plus size={16} /> Añadir</button></div>{measureOpen && <form className="measurement-form" onSubmit={saveMeasure}><NumberField label="Peso" unit="kg" value={form.weightKg} onChange={(value) => setForm((current) => ({ ...current, weightKg: value }))} /><NumberField label="Cintura" unit="cm" value={form.waistCm} onChange={(value) => setForm((current) => ({ ...current, waistCm: value }))} /><NumberField label="Pecho" unit="cm" value={form.chestCm} onChange={(value) => setForm((current) => ({ ...current, chestCm: value }))} /><NumberField label="Brazo" unit="cm" value={form.armCm} onChange={(value) => setForm((current) => ({ ...current, armCm: value }))} /><NumberField label="Cadera" unit="cm · opcional" value={form.hipCm} onChange={(value) => setForm((current) => ({ ...current, hipCm: value }))} /><button className="primary-button small" type="submit">Guardar medidas</button></form>}<WeightChart entries={sortedProgress} /><div className="trend-list"><TrendRow label="Cintura" values={sortedProgress.map((item) => item.waistCm)} unit="cm" /></div>{data.progress.length === 0 && <div className="empty-state"><span className="empty-icon"><Activity size={19} /></span><strong>Aún no hay medidas</strong><p>Registra solo lo que te apetezca comparar. No hace falta hacerlo cada día.</p></div>}</section>{performance.length > 0 && <section className="progress-card performance-card"><div className="section-heading compact"><div><p className="eyebrow">señal de entrenamiento</p><h2>Rendimiento reciente</h2></div><Gauge size={19} /></div><div className="performance-list">{performance.map((item) => <div className="performance-row" key={item.exerciseId}><div><strong>{item.name}</strong><span>{item.load !== undefined ? `${formatWeight(item.load)} · ${item.reps ?? '-'} reps` : 'Sin carga registrada'}</span></div><b>{formatVolume(item.volume)}</b></div>)}</div></section>}<section className="checkin-card"><div className="checkin-mark"><Sun size={21} /></div><div className="checkin-copy"><p className="eyebrow">cierre semanal</p><h2>{currentCheckin ? 'Check-in guardado' : '¿Cómo ha ido la semana?'}</h2><p>{currentCheckin ? 'Puedes editarlo cuando quieras.' : 'Dos minutos para poner contexto a tus datos.'}</p></div><button className="text-button" onClick={() => setCheckinOpen((value) => !value)}>{currentCheckin ? 'Editar' : 'Hacer check-in'} <ChevronRight size={16} /></button></section>{checkinOpen && <CheckinForm existing={currentCheckin} onSave={(value) => { onAddCheckin(value); setCheckinOpen(false); }} />}
-    <details className="progress-details"><summary>Ver histórico detallado</summary><div className="progress-details-body"><ExerciseTrendCard data={data} /><HistoryPanel data={data} /><WeeklyTrends summary={weeklySummary} /><TrainingSignalsCard signals={weeklySummary.signals} /></div></details><WeeklyReviewCard summary={weeklySummary} /></section>;
+    <details className="progress-details"><summary>Ver histórico detallado</summary><div className="progress-details-body"><ExerciseTrendCard data={data} /><HistoryPanel data={data} /><WeeklyTrends summary={weeklySummary} /><TrainingSignalsCard signals={weeklySummary.signals} /></div></details><WeeklyReviewCard summary={weeklySummary} /><section className="progress-card"><div className="section-heading compact"><div><p className="eyebrow">por ejercicio</p><h2>Progresión de carga</h2></div></div><label className="exercise-progress-select-label">Ejercicio<select value={selectedExerciseId} onChange={(event) => setSelectedExerciseId(event.target.value)}><option value="">Elige un ejercicio…</option>{availableExercises.map((exercise) => <option key={exercise.id} value={exercise.id}>{exercise.name}</option>)}</select></label>{selectedExerciseId && <ExerciseProgressChart exerciseId={selectedExerciseId} sessions={data.sessions} />}</section></section>;
 }
 
 interface ExerciseTrendOption { id: string; name: string }
@@ -1752,19 +1755,10 @@ function WeightChart({ entries }: { entries: ProgressEntry[] }) {
   const selected = weightEntries[activeIndex]!;
   const previous = weightEntries[activeIndex - 1]?.weightKg;
   const delta = previous === undefined ? undefined : selected.weightKg! - previous;
-  const values = weightEntries.map((entry) => entry.weightKg!);
-  const minimum = Math.min(...values);
-  const maximum = Math.max(...values);
-  const rangeSize = Math.max(maximum - minimum, 1);
   const width = 320;
   const plotTop = 14;
   const plotBottom = 122;
-  const points = weightEntries.map((entry, index) => ({
-    x: weightEntries.length === 1 ? width / 2 : 12 + (index / (weightEntries.length - 1)) * (width - 24),
-    y: plotBottom - ((entry.weightKg! - minimum) / rangeSize) * (plotBottom - plotTop),
-  }));
-  const linePath = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(' ');
-  const areaPath = `${linePath} L ${points.at(-1)!.x.toFixed(2)} ${plotBottom} L ${points[0].x.toFixed(2)} ${plotBottom} Z`;
+  const { points, linePath, areaPath, minimum, maximum, rangeSize } = buildSvgChart(weightEntries.map((entry) => ({ date: entry.date, value: entry.weightKg! })), width, plotTop, plotBottom);
   const scaleValues = [maximum, minimum + rangeSize / 2, minimum];
   const numberFormat = { maximumFractionDigits: 1 } as const;
   return <section className="weight-chart" aria-labelledby="weight-chart-title">
@@ -1795,6 +1789,27 @@ function WeightChart({ entries }: { entries: ProgressEntry[] }) {
     <div className="weight-chart-footer"><span>{formatDate(weightEntries[0].date, { month: 'short', year: 'numeric' })}</span><span>{weightEntries.length} {weightEntries.length === 1 ? 'registro' : 'registros'}</span><span>{formatDate(latest.date, { month: 'short', year: 'numeric' })}</span></div>
     {weightEntries.length === 1 ? <p className="weight-chart-note">Añade otra medición para ver la tendencia.</p> : <p className="weight-chart-note">Selecciona un punto para consultar esa medición.</p>}
   </section>;
+}
+
+function ExerciseProgressChart({ exerciseId, sessions }: { exerciseId: string; sessions: WorkoutSession[] }) {
+  const entries = sessions.flatMap((session) => {
+    if (session.status !== 'completed') return [];
+    const weights = session.plannedExercises.filter((exercise) => exercise.exerciseId === exerciseId).flatMap((exercise) => exercise.setLogs.filter((set) => isWorkSet(set) && set.completed && set.weightKg !== undefined && Number.isFinite(set.weightKg)).map((set) => set.weightKg!));
+    return weights.length ? [{ date: session.dateKey, value: Math.max(...weights) }] : [];
+  }).sort((a, b) => a.date.localeCompare(b.date));
+  if (!entries.length) return <p className="weight-chart-empty">Aún no hay series de trabajo con peso para este ejercicio.</p>;
+
+  const name = sessions.find((session) => session.plannedExercises.some((exercise) => exercise.exerciseId === exerciseId))?.plannedExercises.find((exercise) => exercise.exerciseId === exerciseId)?.name ?? exerciseId;
+  const latest = entries.at(-1)!;
+  const { points, linePath, areaPath, minimum, maximum, rangeSize } = buildSvgChart(entries);
+  const scaleValues = [maximum, minimum + rangeSize / 2, minimum];
+  const numberFormat = { maximumFractionDigits: 1 } as const;
+  return <div className="weight-chart exercise-progress-chart" aria-labelledby="exercise-progress-title">
+    <div className="weight-chart-heading"><div><p className="eyebrow">carga máxima</p><div className="weight-chart-reading"><strong>{latest.value.toLocaleString('es-ES', numberFormat)}<small> kg</small></strong></div></div><time dateTime={latest.date}>{formatDate(latest.date, { day: 'numeric', month: 'short', year: 'numeric' })}</time></div>
+    <div className="weight-chart-body"><div className="weight-chart-scale" aria-hidden="true">{scaleValues.map((value, index) => <span key={`${value}-${index}`}>{value.toLocaleString('es-ES', numberFormat)}</span>)}</div><svg className="weight-chart-svg" viewBox="0 0 320 140" role="img" aria-labelledby="exercise-progress-title exercise-progress-description" preserveAspectRatio="none"><title id="exercise-progress-title">Progresión de carga de {name}</title><desc id="exercise-progress-description">Carga máxima en series de trabajo registradas entre {formatDate(entries[0].date, { day: 'numeric', month: 'long', year: 'numeric' })} y {formatDate(latest.date, { day: 'numeric', month: 'long', year: 'numeric' })}.</desc><defs><linearGradient id="exercise-progress-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="var(--accent)" stopOpacity=".32" /><stop offset="100%" stopColor="var(--accent)" stopOpacity="0" /></linearGradient></defs>{[14, 68, 122].map((y) => <line className="weight-chart-gridline" key={y} x1="0" x2="320" y1={y} y2={y} />)}{entries.length > 1 && <path className="weight-chart-area exercise-progress-area" d={areaPath} />}<path className="weight-chart-line" d={linePath} />{points.map((point, index) => <circle className={`weight-chart-point${index === points.length - 1 ? ' is-latest' : ''}`} key={`${point.date}-${index}`} cx={point.x} cy={point.y} r={index === points.length - 1 ? 4.5 : 3} />)}</svg></div>
+    <table className="sr-only" aria-label={`Datos de carga de ${name}`}><thead><tr><th>Fecha</th><th>Peso (kg)</th></tr></thead><tbody>{entries.map((entry, index) => <tr key={`${entry.date}-${index}`}><td>{formatDate(entry.date, { day: 'numeric', month: 'long', year: 'numeric' })}</td><td>{entry.value.toLocaleString('es-ES', numberFormat)}</td></tr>)}</tbody></table>
+    <div className="weight-chart-footer"><span>{formatDate(entries[0].date, { month: 'short', year: 'numeric' })}</span><span>{entries.length} {entries.length === 1 ? 'registro' : 'registros'}</span><span>{formatDate(latest.date, { month: 'short', year: 'numeric' })}</span></div>
+  </div>;
 }
 
 function TrendRow({ label, values, unit }: { label: string; values: Array<number | undefined>; unit: string }) { const defined = values.filter((value): value is number => value !== undefined); const max = Math.max(...defined, 1); const min = Math.min(...defined, 0); return <div className="trend-row"><div><strong>{label}</strong><span>{defined.length ? `${defined[defined.length - 1].toLocaleString('es-ES')} ${unit}` : 'Sin datos'}</span></div><div className="trend-bars" aria-label={`Tendencia de ${label}`}>{defined.slice(-8).map((value, index) => { const height = defined.length > 1 ? Math.max(14, ((value - min) / Math.max(max - min, 1)) * 58 + 12) : 24; return <span key={`${value}-${index}`} style={{ height: `${height}px` }} />; })}</div></div>; }
