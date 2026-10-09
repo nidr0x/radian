@@ -338,6 +338,13 @@ h3 { font-size: 15px; }
 .set-log-target { display: flex; flex-direction: column; gap: 3px; color: var(--muted); font-size: 8px; text-transform: uppercase; }
 .set-log-target strong { color: var(--ink); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; letter-spacing: -.04em; }
 .set-log-row label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 8px; font-weight: 700; text-transform: uppercase; }
+.set-weight-input-group { display: grid; grid-template-columns: minmax(0, 1fr) 25px; gap: 3px; align-items: end; min-width: 0; }
+.set-weight-input-group label { min-width: 0; }
+.set-weight-stepper { display: grid; gap: 3px; }
+.set-weight-stepper button { display: grid; place-items: center; width: 25px; min-height: 24px; padding: 0; border: 1px solid var(--line); border-radius: 7px; color: var(--ink); background: var(--surface); font-size: 14px; font-weight: 800; line-height: 1; }
+.set-weight-stepper button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-deep); }
+.set-weight-stepper button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.set-weight-stepper button:disabled { opacity: .45; }
 .set-log-row input { width: 100%; min-width: 0; padding: 8px 7px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink); background: var(--surface); font-size: 12px; outline: 0; }
 .set-log-row input::placeholder { color: var(--muted); opacity: .8; }
 .set-log-row input:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-pale); }
