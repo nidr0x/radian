@@ -14,9 +14,36 @@ export const equipmentLabel = (equipment: ExerciseEquipment): string => equipmen
 
 const normalized = (value: string): string => value.toLocaleLowerCase('es-ES').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
+const oneEditApart = (left: string, right: string): boolean => {
+  if (Math.abs(left.length - right.length) > 1) return false;
+  let leftIndex = 0;
+  let rightIndex = 0;
+  let edits = 0;
+  while (leftIndex < left.length && rightIndex < right.length) {
+    if (left[leftIndex] === right[rightIndex]) {
+      leftIndex += 1;
+      rightIndex += 1;
+      continue;
+    }
+    if (++edits > 1) return false;
+    if (left.length > right.length) leftIndex += 1;
+    else if (right.length > left.length) rightIndex += 1;
+    else if (left[leftIndex + 1] === right[rightIndex] && left[leftIndex] === right[rightIndex + 1]) {
+      leftIndex += 2;
+      rightIndex += 2;
+    }
+    else {
+      leftIndex += 1;
+      rightIndex += 1;
+    }
+  }
+  return edits + left.length - leftIndex + right.length - rightIndex <= 1;
+};
+
 export const exerciseMatches = (exercise: ExerciseDefinition, query: string, muscleGroup: string, equipment: string): boolean => {
-  const searchable = normalized([exercise.name, exercise.muscleGroup, equipmentLabel(exercise.equipment), ...(exercise.aliases ?? [])].join(' '));
-  return (!query || searchable.includes(normalized(query)))
+  const searchableTerms = normalized([exercise.name, exercise.muscleGroup, equipmentLabel(exercise.equipment), ...(exercise.aliases ?? [])].join(' ')).split(/\s+/);
+  const queryTerms = normalized(query).trim().split(/\s+/).filter(Boolean);
+  return (!queryTerms.length || queryTerms.every((term) => searchableTerms.some((candidate) => candidate.includes(term) || (term.length >= 4 && candidate.length >= 4 && oneEditApart(term, candidate)))))
     && (!muscleGroup || exercise.muscleGroup === muscleGroup)
     && (!equipment || exercise.equipment === equipment);
 };

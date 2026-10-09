@@ -10,6 +10,7 @@ export interface SessionSummaryRecord {
 
 export interface SessionSummary {
   completedExercises: number;
+  skippedExercises: Array<{ exerciseId: string; name: string }>;
   totalExercises: number;
   completedWorkSets: number;
   volumeKg: number;
@@ -27,6 +28,7 @@ const elapsedSeconds = (session: WorkoutSession): number => {
 
 export const summarizeSession = (session: WorkoutSession, history: WorkoutSession[] = []): SessionSummary => {
   const completedExercises = session.plannedExercises.filter((exercise) => exercise.completed);
+  const skippedExercises = session.plannedExercises.filter((exercise) => !exercise.completed && Boolean(exercise.completedAt)).map(({ exerciseId, name }) => ({ exerciseId, name }));
   const completedWorkSets = session.plannedExercises.flatMap((exercise) => exercise.setLogs.filter((set) => isWorkSet(set) && set.completed));
   const volumeKg = completedWorkSets.reduce((total, set) => total + (set.weightKg ?? 0) * (set.actualReps ?? 0), 0);
   const previousSessions = history.filter((item) => item.id !== session.id);
@@ -37,6 +39,7 @@ export const summarizeSession = (session: WorkoutSession, history: WorkoutSessio
 
   return {
     completedExercises: completedExercises.length,
+    skippedExercises,
     totalExercises: session.plannedExercises.length,
     completedWorkSets: completedWorkSets.length,
     volumeKg: Math.round(volumeKg * 10) / 10,

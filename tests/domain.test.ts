@@ -358,6 +358,8 @@ describe('biblioteca y récords', () => {
     const data = defaultData();
     expect(exerciseMatches(data.exercises.find((exercise) => exercise.id === 'cable-fly')!, 'crossover', 'Pecho', 'cable')).toBe(true);
     expect(exerciseMatches(data.exercises.find((exercise) => exercise.id === 'cable-fly')!, 'crossover', 'Pecho', 'machine')).toBe(false);
+    expect(exerciseMatches(data.exercises.find((exercise) => exercise.id === 'incline-press')!, 'inclinadp press', 'Pecho', 'machine')).toBe(true);
+    expect(exerciseMatches(data.exercises.find((exercise) => exercise.id === 'incline-press')!, 'press inclinaod', 'Pecho', 'machine')).toBe(true);
     expect(compatibleAlternatives(data.exercises, 'incline-press')[0].id).toBe('chest-press');
     expect(compatibleAlternatives(data.exercises, 'incline-press', ['cable']).map((exercise) => exercise.id)).toEqual(['cable-fly']);
     expect(compatibleAlternatives(data.exercises, 'incline-press', ['machine']).map((exercise) => exercise.id)).toEqual(['chest-press']);
