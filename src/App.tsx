@@ -1136,10 +1136,15 @@ function TodayView({ data, todayDay, activeSession, onSelectExercise, onDeferExe
   const [detailExercise, setDetailExercise] = useState<PlannedExercise>();
   const [readinessOpen, setReadinessOpen] = useState(false);
   const [readiness, setReadiness] = useState<SessionReadiness>({ energy: 'normal', soreness: 'none' });
-  const day = activeSession ? data.plan.days.find((item) => item.id === activeSession.workoutDayId) : todayDay;
+  const [selectedWorkoutDayId, setSelectedWorkoutDayId] = useState<string>();
   const activeExerciseNumber = activeSession ? Math.min(activeSession.activeExerciseIndex + 1, activeSession.plannedExercises.length) : 0;
   const scheduledDays = scheduledWorkoutDays(data.plan.days, data.profile.trainingDays);
-  const workoutDay = day ?? scheduledDays.find((item) => item.weekday > currentWeekday()) ?? scheduledDays[0];
+  const defaultWorkoutDay = todayDay ?? scheduledDays.find((item) => item.weekday > currentWeekday()) ?? scheduledDays[0];
+  const selectedWorkoutDay = scheduledDays.find((item) => item.id === selectedWorkoutDayId);
+  const workoutDay = activeSession
+    ? data.plan.days.find((item) => item.id === activeSession.workoutDayId) ?? defaultWorkoutDay
+    : selectedWorkoutDay ?? defaultWorkoutDay;
+  const isAlternativeWorkout = !activeSession && workoutDay.id !== defaultWorkoutDay.id;
   const plannedExercises = workoutDay.exercises.filter((exercise) => exercise.active);
   const plannedSets = plannedExercises.reduce((total, exercise) => total + exercise.sets, 0);
   const displayedExerciseCount = activeSession?.plannedExercises.length ?? plannedExercises.length;
@@ -1166,7 +1171,12 @@ function TodayView({ data, todayDay, activeSession, onSelectExercise, onDeferExe
     <section className={activeSession ? 'today-hero session-active-hero' : 'today-hero'}>
       <div className="hero-art" aria-hidden="true"><img src={workoutDay.exercises[0]?.imageUrl ?? '/exercises/atlas-push.webp'} alt="" /></div>
       <div className="hero-orbit"><span>{data.profile.gym || 'TU GIMNASIO'}</span><Dumbbell size={29} /></div>
-      <div className="hero-copy"><p className="eyebrow light">{activeSession ? 'sesión en curso' : doneToday ? 'hecho por hoy' : workoutDay.weekday === currentWeekday() ? 'entrenamiento de hoy' : 'siguiente sesión'}</p><h2>{displayWorkoutName(workoutDay.name)}</h2><p>{workoutDay.focus} · {displayedExerciseCount} ejercicios / ~{data.profile.sessionMinutes} min</p></div>
+      <div className="hero-copy">
+        <p className="eyebrow light">{activeSession ? 'sesión en curso' : isAlternativeWorkout ? 'sesión elegida para hoy' : doneToday ? 'hecho por hoy' : workoutDay.weekday === currentWeekday() ? 'entrenamiento de hoy' : 'siguiente sesión'}</p>
+        <h2>{displayWorkoutName(workoutDay.name)}</h2>
+        {!activeSession && <label className="today-workout-picker"><span>Entrenamiento para hoy</span><select value={workoutDay.id} onChange={(event) => setSelectedWorkoutDayId(event.currentTarget.value)}>{scheduledDays.map((dayOption) => <option key={dayOption.id} value={dayOption.id}>{displayWorkoutName(dayOption.name)}</option>)}</select></label>}
+        <p>{workoutDay.focus} · {displayedExerciseCount} ejercicios / ~{data.profile.sessionMinutes} min</p>
+      </div>
       <div className="hero-progress"><strong>{activeSession ? `${activeExerciseNumber}/${activeSession.plannedExercises.length}` : doneToday ? '✓' : String(plannedExercises.length)}</strong><span>{activeSession ? 'ejercicio actual' : doneToday ? 'sesión guardada' : 'bloques'}</span></div>
       <div className="hero-actions">{!activeSession && <button className="primary-button start-button" type="button" onClick={() => setReadinessOpen(true)}><Play size={18} fill="currentColor" /> {primaryAction.label}</button>}<button className="hero-icon-button" type="button" aria-label="Ver rutina" onClick={() => onNavigate('routine')}><Clipboard size={19} /></button><button className="hero-icon-button" type="button" aria-label="Ayuda" onClick={onHelp}><MoreHorizontal size={21} /></button></div>
     </section>
@@ -1174,7 +1184,7 @@ function TodayView({ data, todayDay, activeSession, onSelectExercise, onDeferExe
       {completedSummary && latestCompletedToday && <CompletedSessionSummary session={latestCompletedToday} summary={completedSummary} comparisons={completedExerciseComparisons} onQueueRecovery={onQueueRecovery} onViewProgress={() => onNavigate('progress')} />}
       {pendingRecoveryItems.length > 0 && <RecoveryQueueCard items={pendingRecoveryItems} onRemove={onRemoveRecoveryExercise} />}
       <section className="training-plan" aria-labelledby="training-plan-title">
-        <div className="section-heading plan-heading"><div><p className="eyebrow">el plan</p><h2 id="training-plan-title">{workoutDay.weekday === currentWeekday() ? 'Tu sesión' : 'Próximo entrenamiento'}</h2><div className="plan-summary" aria-label="Resumen del entrenamiento"><span><Dumbbell size={16} aria-hidden="true" /> {plannedExercises.length} ejercicios</span><span className="plan-summary-separator" aria-hidden="true">·</span><span><Layers3 size={16} aria-hidden="true" /> {plannedSets} series</span><span className="plan-summary-separator" aria-hidden="true">·</span><span><Timer size={16} aria-hidden="true" /> ~{data.profile.sessionMinutes} min</span></div></div><button className="text-button plan-edit-button" type="button" onClick={() => onNavigate('routine')}><Pencil size={17} aria-hidden="true" /> Editar rutina <ChevronRight size={16} aria-hidden="true" /></button></div>
+        <div className="section-heading plan-heading"><div><p className="eyebrow">el plan</p><h2 id="training-plan-title">{isAlternativeWorkout ? 'Sesión elegida para hoy' : workoutDay.weekday === currentWeekday() ? 'Tu sesión' : 'Próximo entrenamiento'}</h2><div className="plan-summary" aria-label="Resumen del entrenamiento"><span><Dumbbell size={16} aria-hidden="true" /> {plannedExercises.length} ejercicios</span><span className="plan-summary-separator" aria-hidden="true">·</span><span><Layers3 size={16} aria-hidden="true" /> {plannedSets} series</span><span className="plan-summary-separator" aria-hidden="true">·</span><span><Timer size={16} aria-hidden="true" /> ~{data.profile.sessionMinutes} min</span></div></div><button className="text-button plan-edit-button" type="button" onClick={() => onNavigate('routine')}><Pencil size={17} aria-hidden="true" /> Editar rutina <ChevronRight size={16} aria-hidden="true" /></button></div>
         <p className="today-start-hint plan-info"><Info size={17} aria-hidden="true" /><span>{primaryAction.hint}</span></p>
         {readinessOpen && <ReadinessPrompt value={readiness} onChange={setReadiness} onSkip={() => { setReadinessOpen(false); onDismissRestEnded(); onStart(workoutDay); }} onStart={() => { setReadinessOpen(false); onDismissRestEnded(); onStart(workoutDay, readiness); }} />}
         <div className="exercise-list plan-exercise-list">{plannedExercises.map((exercise, index) => <ExercisePreview key={exercise.id} exercise={exercise} index={index} muscleGroup={data.exercises.find((item) => item.id === exercise.exerciseId)?.muscleGroup} onOpenDetails={() => setDetailExercise(exercise)} />)}</div>
