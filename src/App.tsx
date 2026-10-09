@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Activity, ArrowDown, ArrowUp, BarChart3, CalendarDays, Check, ChevronRight, Clipboard, CloudOff,
@@ -1015,13 +1015,13 @@ function App() {
   );
 }
 
-function BottomNav({ view, onChange }: { view: View; onChange: (view: View) => void }) {
+const BottomNav = memo(function BottomNav({ view, onChange }: { view: View; onChange: (view: View) => void }) {
   return <nav className="bottom-nav" aria-label="Navegación principal">{navItems.map(({ id, label, icon: Icon }) => <button key={id} className={view === id ? 'nav-item is-active' : 'nav-item'} aria-current={view === id ? 'page' : undefined} onClick={() => onChange(id)}><Icon size={20} strokeWidth={view === id ? 2.6 : 1.8} /><span>{label}</span></button>)}</nav>;
-}
+});
 
-function PageHeader({ eyebrow, title, action }: { eyebrow: string; title: React.ReactNode; action?: React.ReactNode }) {
+const PageHeader = memo(function PageHeader({ eyebrow, title, action }: { eyebrow: string; title: React.ReactNode; action?: React.ReactNode }) {
   return <div className="page-header"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1></div>{action}</div>;
-}
+});
 
 function ResumeSessionBanner({ session, onResume }: { session: WorkoutSession; onResume: () => void }) {
   const exercise = session.plannedExercises[session.activeExerciseIndex];
@@ -1130,7 +1130,7 @@ function TodayView({ data, todayDay, activeSession, onSelectExercise, onDeferExe
 
   return <><section className={activeSession ? 'view-section today-view session-active-view' : 'view-section today-view'}>
     <PageHeader eyebrow={formatDate(new Date(), { weekday: 'long', day: 'numeric', month: 'long' })} title={activeSession ? 'Sigue a tu ritmo.' : <><span>Lo que toca </span><em>hoy.</em></>} />
-    {!activeSession && <TodayStats data={data} />}
+    {!activeSession && <TodayStats sessions={data.sessions} plan={data.plan} profile={data.profile} />}
     <section className={activeSession ? 'today-hero session-active-hero' : 'today-hero'}>
       <div className="hero-art" aria-hidden="true"><img src={workoutDay.exercises[0]?.imageUrl ?? '/exercises/atlas-push.webp'} alt="" /></div>
       <div className="hero-orbit"><span>{data.profile.gym || 'TU GIMNASIO'}</span><Dumbbell size={29} /></div>
@@ -1151,8 +1151,8 @@ function TodayView({ data, todayDay, activeSession, onSelectExercise, onDeferExe
   </section>{detailExercise && <ExerciseDetailSheet exercise={detailExercise} muscleGroup={data.exercises.find((item) => item.id === detailExercise.exerciseId)?.muscleGroup} guidance={exerciseGuidance[detailExercise.exerciseId]} recommendation={recommendationFor(detailExercise.exerciseId, data.sessions)} progressionAction={progressionAction(detailExercise.exerciseId, data.sessions, detailExercise)} lastSession={latestExercise(data.sessions, detailExercise.exerciseId)} onClose={() => setDetailExercise(undefined)} />}</>;
 }
 
-function TodayStats({ data }: { data: AppData }) {
-  const completedSessions = data.sessions.filter((session) => session.status === 'completed');
+function TodayStats({ sessions, plan, profile }: { sessions: WorkoutSession[]; plan: AppData['plan']; profile: AppData['profile'] }) {
+  const completedSessions = sessions.filter((session) => session.status === 'completed');
   const monthKey = dateKey(new Date()).slice(0, 7);
   const monthSessions = completedSessions.filter((session) => session.dateKey.startsWith(monthKey));
   const totalMinutes = completedSessions.reduce((total, session) => {
@@ -1161,7 +1161,7 @@ function TodayStats({ data }: { data: AppData }) {
     const completedAt = Date.parse(session.completedAt);
     return Number.isFinite(startedAt) && Number.isFinite(completedAt) ? total + Math.max(0, Math.round((completedAt - startedAt) / 60000)) : total;
   }, 0);
-  const plannedDays = scheduledWorkoutDays(data.plan.days, data.profile.trainingDays).map((day) => day.weekday);
+  const plannedDays = scheduledWorkoutDays(plan.days, profile.trainingDays).map((day) => day.weekday);
   const streak = getLatestWorkoutStreak(plannedDays, completedSessions);
   return <section className="dashboard-stats" aria-label="Resumen de actividad"><div className="stat-card" aria-label={`Racha actual: ${streak} sesiones seguidas`}><span className="stat-icon"><Activity size={19} /></span><strong>{streak}</strong><span className="sr-only">{streak} sesiones seguidas</span><span title="Los días de descanso previstos no rompen la racha.">sesiones seguidas</span></div><div className="stat-card"><span className="stat-icon"><BarChart3 size={19} /></span><strong>{monthSessions.length}</strong><span>entrenamientos este mes</span></div><div className="stat-card"><span className="stat-icon"><Timer size={19} /></span><strong>{formatSessionDuration(totalMinutes * 60)}</strong><span>tiempo total</span></div></section>;
 }
@@ -1406,12 +1406,12 @@ function alternativeExercises(data: AppData, exerciseId: string, differentEquipm
   return compatibleAlternatives(data.exercises, exerciseId, availableEquipment).slice(0, 3);
 }
 
-function ExerciseThumb({ src, position, alt, large = false }: { src?: string; position?: string; alt: string; large?: boolean }) {
+const ExerciseThumb = memo(function ExerciseThumb({ src, position, alt, large = false }: { src?: string; position?: string; alt: string; large?: boolean }) {
   const [failed, setFailed] = useState(false);
   const usesAtlas = Boolean(src?.includes('/atlas-') && position);
   const atlasStyle = usesAtlas ? { backgroundImage: `url(${src})`, backgroundPosition: position } : undefined;
   return <div className={large ? 'exercise-thumb large' : 'exercise-thumb'}>{src && !failed ? usesAtlas ? <div className="exercise-thumb-image" style={atlasStyle} role="img" aria-label={alt} /> : <img src={src} alt={alt} loading="lazy" onError={() => setFailed(true)} /> : <div className="exercise-thumb-fallback" aria-label={alt}><Dumbbell size={large ? 30 : 20} /></div>}</div>;
-}
+});
 
 function RoutineView({ data, days, activeDay, onDayChange, onUpdateDay, onAddExercise, onRemoveExercise }: { data: AppData; days: WorkoutDay[]; activeDay: WorkoutDay; onDayChange: (id: string) => void; onUpdateDay: (dayId: string, updater: (day: WorkoutDay) => WorkoutDay) => void; onAddExercise: (dayId: string, exercise: ExerciseDefinition) => void; onRemoveExercise: (dayId: string, exerciseId: string) => void }) {
   const [editingName, setEditingName] = useState(false);
@@ -1695,7 +1695,7 @@ function historySummary(sessions: WorkoutSession[]): HistorySummary {
   };
 }
 
-function MetricCard({ label, value, change, icon }: { label: string; value: string; change: string; icon: React.ReactNode }) { return <article className="metric-card"><div className="metric-label">{icon}<span>{label}</span></div><strong>{value}</strong><small>{change}</small></article>; }
+const MetricCard = memo(function MetricCard({ label, value, change, icon }: { label: string; value: string; change: string; icon: React.ReactNode }) { return <article className="metric-card"><div className="metric-label">{icon}<span>{label}</span></div><strong>{value}</strong><small>{change}</small></article>; });
 
 const weightChartRanges = [{ value: '3m', label: '3 meses' }, { value: '12m', label: '12 meses' }, { value: 'all', label: 'Todo' }] as const;
 
