@@ -1713,6 +1713,7 @@ function WeightChart({ entries }: { entries: ProgressEntry[] }) {
         </g>)}
       </svg>
     </div>
+    <table className="sr-only" aria-label="Datos del gráfico de peso"><thead><tr><th>Fecha</th><th>Peso (kg)</th></tr></thead><tbody>{weightEntries.map((entry) => <tr key={entry.id}><td>{formatDate(entry.date, { day: 'numeric', month: 'long', year: 'numeric' })}</td><td>{entry.weightKg!.toLocaleString('es-ES', numberFormat)}</td></tr>)}</tbody></table>
     <div className="weight-chart-footer"><span>{formatDate(weightEntries[0].date, { month: 'short', year: 'numeric' })}</span><span>{weightEntries.length} {weightEntries.length === 1 ? 'registro' : 'registros'}</span><span>{formatDate(latest.date, { month: 'short', year: 'numeric' })}</span></div>
     {weightEntries.length === 1 ? <p className="weight-chart-note">Añade otra medición para ver la tendencia.</p> : <p className="weight-chart-note">Selecciona un punto para consultar esa medición.</p>}
   </section>;
