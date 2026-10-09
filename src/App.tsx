@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Activity, ArrowDown, ArrowUp, BarChart3, CalendarDays, Check, ChevronRight, Clipboard, CloudOff,
   Dumbbell, Download, FileJson, Fingerprint, Gauge, History, Info, KeyRound, Layers3, LockKeyhole, LogIn, LogOut, Minus, Moon, MoreHorizontal, Pause, Pencil, Play,
@@ -86,6 +87,7 @@ function App() {
   const [toast, setToast] = useState<string>();
   const [storageWarning, setStorageWarning] = useState<string>();
   const [exitDialogOpen, setExitDialogOpen] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState<{ title: string; message: string; confirmLabel: string; danger: boolean; onConfirm: () => void; onCancel: () => void } | null>(null);
   const [restRemaining, setRestRemaining] = useState(0);
   const [restUntil, setRestUntil] = useState<number | null>(null);
   const [restContext, setRestContext] = useState<{ exerciseName: string; seconds: number }>();
@@ -107,6 +109,11 @@ function App() {
   const [recovery, setRecovery] = useState(readRecovery);
   const [acknowledged, setAcknowledged] = useState(() => readCheckpoint()?.snapshot);
   const [syncAttempt, setSyncAttempt] = useState(0);
+  const showConfirm = (opts: { title: string; message: string; confirmLabel: string; danger: boolean }): Promise<boolean> => new Promise((resolve) => setConfirmDialog({
+    ...opts,
+    onConfirm: () => { resolve(true); setConfirmDialog(null); },
+    onCancel: () => { resolve(false); setConfirmDialog(null); },
+  }));
   const dataRef = useRef(data);
   dataRef.current = data;
   const cloudBusyRef = useRef(false);
@@ -673,7 +680,7 @@ function App() {
   };
 
   const revokeSync = async (): Promise<void> => {
-    if (!syncStateRef.current.key || !window.confirm('Se borrará la copia remota y este código dejará de funcionar. ¿Continuar?')) return;
+    if (!syncStateRef.current.key || !await showConfirm({ title: '¿Revocar código de sincronización?', message: 'Se borrará la copia remota y este código dejará de funcionar.', confirmLabel: 'Revocar', danger: true })) return;
     try {
       await deleteSyncData(syncStateRef.current.key);
       disconnectSync();
@@ -982,6 +989,7 @@ function App() {
       </main>
       <BottomNav view={view} onChange={setView} />
       {exitDialogOpen && <SessionExitDialog onCancel={() => setExitDialogOpen(false)} onConfirm={confirmLeaveSession} />}
+      {confirmDialog && <ConfirmDialog {...confirmDialog} />}
       {(restRemaining > 0 || toast || storageWarning) && <div className="floating-feedback" aria-live="polite">
         {toast && <div className="toast" role="status"><Check size={16} />{toast}</div>}
         {storageWarning && <div className="storage-warning" role="alert"><CloudOff size={16} />{storageWarning}</div>}
