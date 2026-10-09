@@ -1270,6 +1270,25 @@ h3 { font-weight: 650; letter-spacing: -.02em; }
 .exercise-progress-select-label select { padding: 9px 10px; border: 1px solid var(--line); border-radius: 12px; color: var(--ink); background: var(--surface-soft); font-size: 13px; outline: 0; }
 .exercise-progress-select-label select:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-pale); }
 .exercise-progress-area { fill: url(#exercise-progress-fill); }
+.session-calendar { display: grid; gap: 14px; }
+.calendar-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.calendar-header h3 { margin: 0; font-size: 15px; font-weight: 800; text-transform: capitalize; letter-spacing: -.04em; }
+.calendar-nav { display: flex; gap: 6px; }
+.calendar-nav button { display: grid; place-items: center; width: 32px; height: 32px; min-height: 32px; padding: 0; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: var(--surface-soft); }
+.calendar-nav button:disabled { opacity: .4; }
+.calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
+.calendar-weekday { padding: 4px 0; color: var(--muted); font-size: 8px; font-weight: 700; letter-spacing: .08em; text-align: center; text-transform: uppercase; }
+.calendar-day { display: flex; align-items: center; justify-content: center; aspect-ratio: 1; min-width: 0; padding: 0; border: 0; border-radius: 7px; color: var(--muted); background: transparent; font-size: 10px; cursor: default; }
+.calendar-day--planned { color: var(--ink); background: var(--surface-soft); }
+.calendar-day--completed { border-radius: 9px; color: var(--action-ink); background: var(--action); font-weight: 700; cursor: pointer; }
+.calendar-day--completed:hover { filter: brightness(1.1); }
+.calendar-day--completed:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.calendar-day--today { outline: 2px solid var(--accent); outline-offset: 1px; }
+.calendar-day--other-month { opacity: .25; }
+.calendar-detail { margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); font-size: 11px; }
+.calendar-detail strong { display: block; margin-bottom: 3px; font-size: 13px; }
+.calendar-detail > span { color: var(--muted); }
+.calendar-detail ul { display: grid; gap: 4px; margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
 .exercise-trend-card { display: grid; gap: 2px; }
 .exercise-trend-select { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: center; margin: 1px 0 9px; color: var(--muted); font-size: 10px; font-weight: 700; }
 .exercise-trend-select select { min-width: 0; width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 11px; color: var(--ink); background: var(--surface-soft); font-size: 12px; outline: 0; }
