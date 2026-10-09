@@ -27,7 +27,7 @@ const EXERCISE_KEYS = ['id', 'name', 'muscleGroup', 'equipment', 'aliases', 'ima
 const PLAN_KEYS = ['id', 'version', 'days'] as const;
 const DAY_KEYS = ['id', 'weekday', 'shortLabel', 'name', 'focus', 'exercises'] as const;
 const PLANNED_EXERCISE_KEYS = ['id', 'exerciseId', 'name', 'sets', 'repMin', 'repMax', 'restSeconds', 'active', 'warmupSets', 'progressionPolicy', 'progressionIncrementKg', 'imageUrl', 'imagePosition'] as const;
-const SESSION_KEYS = ['id', 'workoutDayId', 'dateKey', 'startedAt', 'completedAt', 'status', 'plannedExercises', 'activeExerciseIndex', 'readiness'] as const;
+const SESSION_KEYS = ['id', 'workoutDayId', 'dateKey', 'startedAt', 'completedAt', 'status', 'plannedExercises', 'recoveryExercises', 'activeExerciseIndex', 'readiness'] as const;
 const REQUIRED_SESSION_KEYS = ['id', 'workoutDayId', 'dateKey', 'startedAt', 'completedAt', 'status', 'plannedExercises', 'activeExerciseIndex'] as const;
 const EXERCISE_SESSION_KEYS = ['plannedExerciseId', 'exerciseId', 'name', 'sets', 'repMin', 'repMax', 'restSeconds', 'warmupSets', 'progressionPolicy', 'progressionIncrementKg', 'progressionStatus', 'progressionReason', 'imageUrl', 'imagePosition', 'completed', 'setLogs', 'difficulty', 'actualWeightKg', 'actualReps', 'discomfort', 'discomfortNote', 'completedAt'] as const;
 const SET_LOG_KEYS = ['setNumber', 'phase', 'targetReps', 'actualReps', 'weightKg', 'completed'] as const;
@@ -231,12 +231,12 @@ const validateSetLog = (setLog: Record<string, unknown>, label: string): void =>
   assertBoolean(setLog.completed, `${label}.completed`);
 };
 
-const validatePlannedExercise = (exercise: Record<string, unknown>, label: string, knownExerciseIds: Set<string>): void => {
+const validatePlannedExercise = (exercise: Record<string, unknown>, label: string, knownExerciseIds?: Set<string>): void => {
   assertAllowedKeys(exercise, PLANNED_EXERCISE_KEYS, label);
   assertRequiredKeys(exercise, ['id', 'exerciseId', 'name', 'sets', 'repMin', 'repMax', 'restSeconds', 'active'], label);
   assertId(exercise.id, `${label}.id`);
   const exerciseId = assertId(exercise.exerciseId, `${label}.exerciseId`);
-  if (!knownExerciseIds.has(exerciseId)) throw new Error(`${label}.exerciseId no existe en el catálogo.`);
+  if (knownExerciseIds && !knownExerciseIds.has(exerciseId)) throw new Error(`${label}.exerciseId no existe en el catálogo.`);
   assertString(exercise.name, `${label}.name`, { allowEmpty: false, maxLength: 160 });
   assertInteger(exercise.sets, `${label}.sets`, 1, 12);
   const repMin = assertInteger(exercise.repMin, `${label}.repMin`, 1, 100);
@@ -324,6 +324,13 @@ const validateWorkoutSession = (session: Record<string, unknown>, index: number,
   session.plannedExercises.forEach((exercise, exerciseIndex) => {
     validateExerciseSession(assertRecord(exercise, `sessions[${index}].plannedExercises[${exerciseIndex}]`), `sessions[${index}].plannedExercises[${exerciseIndex}]`, knownExerciseIds);
   });
+  if (session.recoveryExercises !== undefined) {
+    if (session.status !== 'completed') throw new Error(`sessions[${index}].recoveryExercises solo puede guardarse en una sesión completada.`);
+    if (!Array.isArray(session.recoveryExercises)) throw new Error(`sessions[${index}].recoveryExercises debe ser una lista.`);
+    session.recoveryExercises.forEach((exercise, exerciseIndex) => {
+      validatePlannedExercise(assertRecord(exercise, `sessions[${index}].recoveryExercises[${exerciseIndex}]`), `sessions[${index}].recoveryExercises[${exerciseIndex}]`, knownExerciseIds);
+    });
+  }
   assertInteger(session.activeExerciseIndex, `sessions[${index}].activeExerciseIndex`, 0, Math.max(0, (session.plannedExercises as unknown[]).length));
   if (session.readiness !== undefined) {
     const readiness = assertRecord(session.readiness, `sessions[${index}].readiness`);

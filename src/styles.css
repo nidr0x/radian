@@ -126,10 +126,22 @@ h3 { color: var(--ink); font-size: 15px; font-weight: 700; letter-spacing: -.025
 .summary-exercise-next span span { color: var(--muted); font-size: 9px; line-height: 1.35; }
 .completed-summary-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; padding-top: 13px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; line-height: 1.4; }
 .completed-summary-footer .text-button { flex: 0 0 auto; }
+.summary-recovery-action { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-top: 13px; padding-top: 12px; border-top: 1px solid var(--line); }
+.summary-recovery-action p { margin: 0; color: var(--muted); font-size: 11px; }
+.recovery-queue { display: grid; gap: 10px; margin: 0 0 18px; padding: 15px; border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--line)); border-radius: 17px 17px 17px 5px; background: var(--surface); box-shadow: var(--shadow); }
+.recovery-queue-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.recovery-queue-heading h2 { margin: 0; font-size: 16px; }
+.recovery-queue-heading .eyebrow { margin: 0 0 3px; }
+.recovery-queue-heading > span { display: grid; place-items: center; min-width: 30px; height: 30px; padding: 0 7px; border-radius: 10px; color: var(--action-ink); background: var(--action); font-size: 12px; font-weight: 750; }
+.recovery-queue > p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.4; }
+.recovery-queue ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.recovery-queue li { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 40px; padding: 5px 0; border-top: 1px solid var(--line); color: var(--ink); font-size: 12px; }
+.recovery-queue li .text-button { flex: 0 0 auto; }
 
 @media (max-width: 480px) {
   .session-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .completed-summary-footer { align-items: flex-start; flex-direction: column; }
+  .summary-recovery-action { align-items: flex-start; flex-direction: column; }
 }
 
 .today-hero { position: relative; display: grid; grid-template-columns: 76px 1fr auto; gap: 16px; align-items: center; overflow: hidden; min-height: 166px; padding: 24px 20px; border-radius: 25px 25px 25px 7px; color: #eef5ef; background: #23352b; box-shadow: var(--shadow); }

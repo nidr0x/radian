@@ -114,6 +114,7 @@ export interface WorkoutSession {
   completedAt?: string;
   status: 'in_progress' | 'completed';
   plannedExercises: ExerciseSession[];
+  recoveryExercises?: PlannedExercise[];
   activeExerciseIndex: number;
   readiness?: SessionReadiness;
 }

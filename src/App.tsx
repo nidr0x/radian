@@ -346,10 +346,31 @@ function App() {
   const startSession = (day: WorkoutDay, readiness?: SessionReadiness): void => {
     const existing = data.sessions.find((session) => session.status === 'in_progress');
     if (existing) { setView('today'); setToast('Tienes una sesión pendiente'); return; }
-    const session = createSession(day, dateKey(), new Date(), data.sessions, readiness);
-    updateData((current) => ({ ...current, sessions: [...current.sessions, session] }));
+    const recoverySources = data.sessions
+      .filter((session) => (session.recoveryExercises?.length ?? 0) > 0)
+      .sort((a, b) => (b.completedAt ?? b.startedAt).localeCompare(a.completedAt ?? a.startedAt));
+    const routineExerciseIds = new Set(day.exercises.filter((exercise) => exercise.active).map((exercise) => exercise.exerciseId));
+    const queuedByExercise = new Map<string, PlannedExercise>();
+    recoverySources.forEach((source) => source.recoveryExercises?.forEach((exercise) => {
+      if (!queuedByExercise.has(exercise.exerciseId)) queuedByExercise.set(exercise.exerciseId, exercise);
+    }));
+    const queuedRecoveryCount = queuedByExercise.size;
+    const recoveryExercises = Array.from(queuedByExercise.values()).filter((exercise) => !routineExerciseIds.has(exercise.exerciseId));
+    const sessionDay = recoveryExercises.length ? { ...day, exercises: [...day.exercises, ...recoveryExercises] } : day;
+    const createdSession = createSession(sessionDay, dateKey(), new Date(), data.sessions, readiness);
+    const session = data.sessions.some((item) => item.id === createdSession.id)
+      ? { ...createdSession, id: `${createdSession.id}-${Date.now()}` }
+      : createdSession;
+    const recoverySourceIds = new Set(recoverySources.map((source) => source.id));
+    updateData((current) => ({
+      ...current,
+      sessions: [
+        ...current.sessions.map((item) => recoverySourceIds.has(item.id) ? { ...item, recoveryExercises: undefined } : item),
+        session,
+      ],
+    }));
     setView('today');
-    setToast('Sesión preparada');
+    setToast(queuedRecoveryCount ? `Sesión preparada con ${queuedRecoveryCount} ejercicio${queuedRecoveryCount === 1 ? '' : 's'} pendiente${queuedRecoveryCount === 1 ? '' : 's'}` : 'Sesión preparada');
   };
 
   const updateSession = (sessionId: string, updater: (session: WorkoutSession) => WorkoutSession): void => {
@@ -361,6 +382,36 @@ function App() {
       ...current,
       plannedExercises: current.plannedExercises.map((exercise) => exercise.plannedExerciseId === plannedExerciseId ? { ...exercise, ...patch } : exercise),
     }));
+  };
+
+  const queueSkippedExercises = (sessionId: string): void => {
+    updateSession(sessionId, (current) => ({
+      ...current,
+      recoveryExercises: current.plannedExercises
+        .filter((exercise) => !exercise.completed && Boolean(exercise.completedAt))
+        .map((exercise, index) => ({
+          id: `recovery-${current.dateKey}-${Date.now()}-${index}`,
+          exerciseId: exercise.exerciseId,
+          name: exercise.name,
+          sets: exercise.sets,
+          repMin: exercise.repMin,
+          repMax: exercise.repMax,
+          restSeconds: exercise.restSeconds,
+          active: true,
+          warmupSets: exercise.warmupSets,
+          progressionPolicy: exercise.progressionPolicy,
+          progressionIncrementKg: exercise.progressionIncrementKg,
+          imageUrl: exercise.imageUrl,
+          imagePosition: exercise.imagePosition,
+        })),
+    }));
+  };
+
+  const removeQueuedRecoveryExercise = (sessionId: string, recoveryExerciseId: string): void => {
+    updateSession(sessionId, (current) => {
+      const recoveryExercises = current.recoveryExercises?.filter((exercise) => exercise.id !== recoveryExerciseId);
+      return { ...current, recoveryExercises: recoveryExercises?.length ? recoveryExercises : undefined };
+    });
   };
 
   const selectSessionExercise = (sessionId: string, index: number): void => {
@@ -902,7 +953,29 @@ function App() {
         {view === 'profile' && <AccountPanel user={authUser} passkeys={passkeys} status={authStatus} error={authError} cloudUpdatedAt={cloudUpdatedAt} onRegister={handleRegisterPasskey} onLogin={handleLoginPasskey} onAddPasskey={handleAddPasskey} onRenamePasskey={handleRenamePasskey} onRevokePasskey={handleRevokePasskey} onLogout={handleLogout} onLogoutEverywhere={handleLogoutEverywhere} />}
         {cloudConflict?.data && <SyncConflictCard local={data} remote={cloudConflict} remoteLabel="Copia de la nube" intro="La nube cambió desde la última sincronización. Elige qué copia conservar." onKeepLocal={() => void resolveCloudConflict('local')} onUseRemote={() => void resolveCloudConflict('remote')} />}
         {activeSession && view !== 'today' && <ResumeSessionBanner session={activeSession} onResume={() => setView('today')} />}
-        {view === 'today' && <TodayView data={data} todayDay={todayDay} activeSession={activeSession} onSelectExercise={selectSessionExercise} onDeferExercise={deferSessionExercise} restRemaining={restRemaining} restExerciseName={restContext?.exerciseName} onRestartRest={restartRest} screenWakeLockActive={screenWakeLockActive} onStart={startSession} onComplete={completeExercise} onDraft={updateExerciseDraft} onSwapExercise={swapSessionExercise} onRest={() => { const exercise = activeSession?.plannedExercises[activeSession.activeExerciseIndex]; startRest(exercise?.restSeconds ?? 90, exercise?.name ?? 'Ejercicio'); }} onNavigate={setView} onUndo={undoLastSessionChange} canUndo={Boolean(lastSessionChange)} onExit={leaveSession} onHelp={() => setToast('Marca las series y cómo te ha ido; el resto queda guardado automáticamente.')} />}
+        {view === 'today' && <TodayView
+          data={data}
+          todayDay={todayDay}
+          activeSession={activeSession}
+          onSelectExercise={selectSessionExercise}
+          onDeferExercise={deferSessionExercise}
+          restRemaining={restRemaining}
+          restExerciseName={restContext?.exerciseName}
+          onRestartRest={restartRest}
+          screenWakeLockActive={screenWakeLockActive}
+          onStart={startSession}
+          onComplete={completeExercise}
+          onDraft={updateExerciseDraft}
+          onSwapExercise={swapSessionExercise}
+          onQueueRecovery={queueSkippedExercises}
+          onRemoveRecoveryExercise={removeQueuedRecoveryExercise}
+          onRest={() => { const exercise = activeSession?.plannedExercises[activeSession.activeExerciseIndex]; startRest(exercise?.restSeconds ?? 90, exercise?.name ?? 'Ejercicio'); }}
+          onNavigate={setView}
+          onUndo={undoLastSessionChange}
+          canUndo={Boolean(lastSessionChange)}
+          onExit={leaveSession}
+          onHelp={() => setToast('Marca las series y cómo te ha ido; el resto queda guardado automáticamente.')}
+        />}
         {view === 'routine' && <RoutineView data={data} days={scheduledDays} activeDay={activeDay} onDayChange={setActiveDayId} onUpdateDay={updateRoutineDay} onAddExercise={addRoutineExercise} onRemoveExercise={removeRoutineExercise} />}
         {view === 'progress' && <ProgressView data={data} onAddProgress={addProgress} onAddCheckin={addCheckin} onInfo={() => setToast('Las métricas se calculan solo con sesiones y medidas guardadas en Radian.')} />}
         {view === 'profile' && <ProfileView data={data} theme={theme} onThemeChange={changeTheme} onUpdateProfile={updateProfile} onRepeatOnboarding={repeatOnboarding} onImport={(next) => { setData(next); setToast('Copia restaurada'); }} syncState={syncState} syncStatus={syncStatus} syncError={syncError} syncConflict={syncConflict} onKeepLocalSync={keepLocalSync} onUseRemoteSync={useRemoteSync} onConnectSync={connectSync} onUploadSync={uploadSync} onDownloadSync={downloadSync} onDisconnectSync={disconnectSync} onRevokeSync={revokeSync} onInstall={installPrompt ? installApp : undefined} isInstalled={isInstalled} />}
@@ -957,7 +1030,29 @@ function SessionExitDialog({ onCancel, onConfirm }: { onCancel: () => void; onCo
   return <div className="session-exit-backdrop" role="presentation" onMouseDown={onCancel}><section className="session-exit-dialog" role="dialog" aria-modal="true" aria-labelledby="session-exit-title" onMouseDown={(event) => event.stopPropagation()}><div className="session-exit-heading"><p className="eyebrow">salir de la sesión</p><button className="icon-button subtle" type="button" aria-label="Cerrar aviso" onClick={onCancel}><X size={18} /></button></div><h2 id="session-exit-title">¿Pausar aquí?</h2><p>Tu progreso se ha guardado en este dispositivo. Podrás continuar desde Hoy cuando quieras.</p><div className="session-exit-actions"><button className="secondary-button" type="button" onClick={onCancel}>Seguir entrenando</button><button className="primary-button" type="button" onClick={onConfirm}>Pausar y salir</button></div></section></div>;
 }
 
-function TodayView({ data, todayDay, activeSession, onSelectExercise, onDeferExercise, restRemaining, restExerciseName, onRestartRest, screenWakeLockActive, onStart, onComplete, onDraft, onSwapExercise, onRest, onNavigate, onUndo, canUndo, onExit, onHelp }: { data: AppData; todayDay?: WorkoutDay; activeSession?: WorkoutSession; onSelectExercise: (sessionId: string, index: number) => void; onDeferExercise: (session: WorkoutSession) => void; restRemaining: number; restExerciseName?: string; onRestartRest: () => void; screenWakeLockActive: boolean; onStart: (day: WorkoutDay, readiness?: SessionReadiness) => void; onComplete: (session: WorkoutSession, exercise: ExerciseSession, patch: Partial<ExerciseSession>, startRest: boolean) => void; onDraft: (sessionId: string, plannedExerciseId: string, patch: Partial<ExerciseSession>) => void; onSwapExercise: (sessionId: string, plannedExerciseId: string, replacement: ExerciseDefinition, reason: 'discomfort' | 'equipment') => void; onRest: () => void; onNavigate: (view: View) => void; onUndo: () => void; canUndo: boolean; onExit: () => void; onHelp: () => void }) {
+function TodayView({ data, todayDay, activeSession, onSelectExercise, onDeferExercise, restRemaining, restExerciseName, onRestartRest, screenWakeLockActive, onStart, onComplete, onDraft, onSwapExercise, onQueueRecovery, onRemoveRecoveryExercise, onRest, onNavigate, onUndo, canUndo, onExit, onHelp }: {
+  data: AppData;
+  todayDay?: WorkoutDay;
+  activeSession?: WorkoutSession;
+  onSelectExercise: (sessionId: string, index: number) => void;
+  onDeferExercise: (session: WorkoutSession) => void;
+  restRemaining: number;
+  restExerciseName?: string;
+  onRestartRest: () => void;
+  screenWakeLockActive: boolean;
+  onStart: (day: WorkoutDay, readiness?: SessionReadiness) => void;
+  onComplete: (session: WorkoutSession, exercise: ExerciseSession, patch: Partial<ExerciseSession>, startRest: boolean) => void;
+  onDraft: (sessionId: string, plannedExerciseId: string, patch: Partial<ExerciseSession>) => void;
+  onSwapExercise: (sessionId: string, plannedExerciseId: string, replacement: ExerciseDefinition, reason: 'discomfort' | 'equipment') => void;
+  onQueueRecovery: (sessionId: string) => void;
+  onRemoveRecoveryExercise: (sessionId: string, recoveryExerciseId: string) => void;
+  onRest: () => void;
+  onNavigate: (view: View) => void;
+  onUndo: () => void;
+  canUndo: boolean;
+  onExit: () => void;
+  onHelp: () => void;
+}) {
   const [detailExercise, setDetailExercise] = useState<PlannedExercise>();
   const [readinessOpen, setReadinessOpen] = useState(false);
   const [readiness, setReadiness] = useState<SessionReadiness>({ energy: 'normal', soreness: 'none' });
@@ -967,10 +1062,12 @@ function TodayView({ data, todayDay, activeSession, onSelectExercise, onDeferExe
   const workoutDay = day ?? scheduledDays.find((item) => item.weekday > currentWeekday()) ?? scheduledDays[0];
   const plannedExercises = workoutDay.exercises.filter((exercise) => exercise.active);
   const plannedSets = plannedExercises.reduce((total, exercise) => total + exercise.sets, 0);
+  const displayedExerciseCount = activeSession?.plannedExercises.length ?? plannedExercises.length;
   const doneToday = data.sessions.some((session) => session.dateKey === dateKey() && session.status === 'completed');
   const latestCompletedToday = data.sessions.filter((session) => session.dateKey === dateKey() && session.status === 'completed').sort((a, b) => (b.completedAt ?? '').localeCompare(a.completedAt ?? ''))[0];
   const completedSummary = latestCompletedToday ? summarizeSession(latestCompletedToday, data.sessions) : undefined;
   const completedExerciseComparisons = latestCompletedToday ? sessionExerciseComparisons(latestCompletedToday, data.sessions) : [];
+  const pendingRecoveryItems = data.sessions.flatMap((session) => (session.recoveryExercises ?? []).map((exercise) => ({ sessionId: session.id, exercise })));
   const primaryAction = todayPrimaryAction(doneToday);
 
   const previousExercise = activeSession ? latestExercise(data.sessions, activeSession.plannedExercises[activeSession.activeExerciseIndex]?.exerciseId) : undefined;
@@ -989,12 +1086,13 @@ function TodayView({ data, todayDay, activeSession, onSelectExercise, onDeferExe
     <section className={activeSession ? 'today-hero session-active-hero' : 'today-hero'}>
       <div className="hero-art" aria-hidden="true"><img src={workoutDay.exercises[0]?.imageUrl ?? '/exercises/atlas-push.webp'} alt="" /></div>
       <div className="hero-orbit"><span>{data.profile.gym || 'TU GIMNASIO'}</span><Dumbbell size={29} /></div>
-      <div className="hero-copy"><p className="eyebrow light">{activeSession ? 'sesión en curso' : doneToday ? 'hecho por hoy' : workoutDay.weekday === currentWeekday() ? 'entrenamiento de hoy' : 'siguiente sesión'}</p><h2>{displayWorkoutName(workoutDay.name)}</h2><p>{workoutDay.focus} · {plannedExercises.length} ejercicios / ~{data.profile.sessionMinutes} min</p></div>
+      <div className="hero-copy"><p className="eyebrow light">{activeSession ? 'sesión en curso' : doneToday ? 'hecho por hoy' : workoutDay.weekday === currentWeekday() ? 'entrenamiento de hoy' : 'siguiente sesión'}</p><h2>{displayWorkoutName(workoutDay.name)}</h2><p>{workoutDay.focus} · {displayedExerciseCount} ejercicios / ~{data.profile.sessionMinutes} min</p></div>
       <div className="hero-progress"><strong>{activeSession ? `${activeExerciseNumber}/${activeSession.plannedExercises.length}` : doneToday ? '✓' : String(plannedExercises.length)}</strong><span>{activeSession ? 'ejercicio actual' : doneToday ? 'sesión guardada' : 'bloques'}</span></div>
       <div className="hero-actions">{!activeSession && <button className="primary-button start-button" type="button" onClick={() => setReadinessOpen(true)}><Play size={18} fill="currentColor" /> {primaryAction.label}</button>}<button className="hero-icon-button" type="button" aria-label="Ver rutina" onClick={() => onNavigate('routine')}><Clipboard size={19} /></button><button className="hero-icon-button" type="button" aria-label="Ayuda" onClick={onHelp}><MoreHorizontal size={21} /></button></div>
     </section>
     {activeSession ? <><SessionAdaptationNotice readiness={activeSession.readiness} /><ActiveSession session={activeSession} restRemaining={restRemaining} restExerciseName={restExerciseName} onRestartRest={onRestartRest} screenWakeLockActive={screenWakeLockActive} previousExercise={previousExercise} bestRecord={bestRecordForExercise(data.sessions, activeSession.plannedExercises[activeSession.activeExerciseIndex]?.exerciseId ?? '')} recommendation={currentRecommendation} progression={currentProgressionCue} progressionAction={currentProgressionAction} alternatives={currentAlternatives} equipmentAlternatives={equipmentAlternatives} exerciseEquipment={activeExerciseEquipment} onSelectExercise={(index) => onSelectExercise(activeSession.id, index)} onDefer={() => onDeferExercise(activeSession)} onComplete={onComplete} onDraft={onDraft} onSwap={(replacement, reason) => onSwapExercise(activeSession.id, activeSession.plannedExercises[activeSession.activeExerciseIndex].plannedExerciseId, replacement, reason)} onRest={onRest} onUndo={onUndo} canUndo={canUndo} onExit={onExit} /> </> : <>
-      {completedSummary && <CompletedSessionSummary summary={completedSummary} comparisons={completedExerciseComparisons} onViewProgress={() => onNavigate('progress')} />}
+      {completedSummary && latestCompletedToday && <CompletedSessionSummary session={latestCompletedToday} summary={completedSummary} comparisons={completedExerciseComparisons} onQueueRecovery={onQueueRecovery} onViewProgress={() => onNavigate('progress')} />}
+      {pendingRecoveryItems.length > 0 && <RecoveryQueueCard items={pendingRecoveryItems} onRemove={onRemoveRecoveryExercise} />}
       <section className="training-plan" aria-labelledby="training-plan-title">
         <div className="section-heading plan-heading"><div><p className="eyebrow">el plan</p><h2 id="training-plan-title">{workoutDay.weekday === currentWeekday() ? 'Tu sesión' : 'Próximo entrenamiento'}</h2><div className="plan-summary" aria-label="Resumen del entrenamiento"><span><Dumbbell size={16} aria-hidden="true" /> {plannedExercises.length} ejercicios</span><span className="plan-summary-separator" aria-hidden="true">·</span><span><Layers3 size={16} aria-hidden="true" /> {plannedSets} series</span><span className="plan-summary-separator" aria-hidden="true">·</span><span><Timer size={16} aria-hidden="true" /> ~{data.profile.sessionMinutes} min</span></div></div><button className="text-button plan-edit-button" type="button" onClick={() => onNavigate('routine')}><Pencil size={17} aria-hidden="true" /> Editar rutina <ChevronRight size={16} aria-hidden="true" /></button></div>
         <p className="today-start-hint plan-info"><Info size={17} aria-hidden="true" /><span>{primaryAction.hint}</span></p>
@@ -1060,7 +1158,17 @@ interface SessionExerciseComparison {
   nextAction?: ReturnType<typeof progressionAction>;
 }
 
-function CompletedSessionSummary({ summary, comparisons, onViewProgress }: { summary: SessionSummary; comparisons: SessionExerciseComparison[]; onViewProgress: () => void }) {
+interface RecoveryQueueItem { sessionId: string; exercise: PlannedExercise }
+
+function RecoveryQueueCard({ items, onRemove }: { items: RecoveryQueueItem[]; onRemove: (sessionId: string, exerciseId: string) => void }) {
+  return <section className="recovery-queue" aria-labelledby="recovery-queue-title">
+    <div className="recovery-queue-heading"><div><p className="eyebrow">para tu próxima sesión</p><h2 id="recovery-queue-title">Ejercicios pendientes</h2></div><span>{items.length}</span></div>
+    <p>Se añadirán al siguiente entrenamiento que empieces.</p>
+    <ul>{items.map(({ sessionId, exercise }) => <li key={`${sessionId}-${exercise.id}`}><span>{exercise.name}</span><button className="text-button" type="button" onClick={() => onRemove(sessionId, exercise.id)}>Quitar</button></li>)}</ul>
+  </section>;
+}
+
+function CompletedSessionSummary({ session, summary, comparisons, onQueueRecovery, onViewProgress }: { session: WorkoutSession; summary: SessionSummary; comparisons: SessionExerciseComparison[]; onQueueRecovery: (sessionId: string) => void; onViewProgress: () => void }) {
   const allExercisesCompleted = summary.completedExercises === summary.totalExercises;
   const pendingExercises = summary.totalExercises - summary.completedExercises - summary.skippedExercises.length;
   const skippedLabel = summary.skippedExercises.length === 1 ? '1 ejercicio saltado' : `${summary.skippedExercises.length} ejercicios saltados`;
@@ -1073,6 +1181,7 @@ function CompletedSessionSummary({ summary, comparisons, onViewProgress }: { sum
     <div className="completed-summary-heading"><div><p className="eyebrow">sesión guardada</p><h2 id="completed-summary-title">Buen trabajo.</h2></div><span className="completed-summary-mark"><Check size={18} /></span></div>
     <div className="session-summary-grid"><div><Timer size={16} /><strong>{formatSessionDuration(summary.durationSeconds)}</strong><span>duración</span></div><div><Dumbbell size={16} /><strong>{summary.completedExercises}/{summary.totalExercises}</strong><span>ejercicios</span></div><div><Check size={16} /><strong>{summary.completedWorkSets}</strong><span>series de trabajo</span></div><div><Layers3 size={16} /><strong>{summary.volumeKg > 0 ? formatVolume(summary.volumeKg) : 'Sin carga'}</strong><span>volumen estimado</span></div></div>
     {summary.skippedExercises.length > 0 && <div className="summary-skipped"><p className="eyebrow">ejercicios saltados</p><ul>{summary.skippedExercises.map((exercise) => <li key={exercise.exerciseId}>{exercise.name}</li>)}</ul></div>}
+    {summary.skippedExercises.length > 0 && <div className="summary-recovery-action">{session.recoveryExercises?.length ? <p role="status">Guardados para la próxima sesión.</p> : <><p>¿Quieres recuperarlos en tu próximo entrenamiento?</p><button className="secondary-button small" type="button" onClick={() => onQueueRecovery(session.id)}><RotateCcw size={15} /> Añadir a próxima sesión</button></>}</div>}
     {summary.records.length > 0 && <div className="summary-records"><p className="eyebrow">marcas de hoy</p>{summary.records.map((record) => <div className="summary-record" key={record.exerciseId}><Trophy size={15} /><span><strong>{record.name}</strong>{record.event.kind === 'first' ? `Primera marca · ${formatWeight(record.event.weightKg)}` : record.event.kind === 'weight' ? `Nuevo peso · ${formatWeight(record.event.weightKg)}` : `Nuevo volumen · ${formatWeight(record.event.weightKg)}`}</span></div>)}</div>}
     {comparisons.length > 0 && <div className="summary-exercise-comparisons"><p className="eyebrow">comparación por ejercicio</p><ul>{comparisons.map((comparison) => <li className="summary-exercise-comparison" key={comparison.plannedExerciseId}><strong className="summary-exercise-name">{comparison.name}</strong><div className="summary-exercise-values"><p><span>Última vez{comparison.previous ? ` · ${formatDate(comparison.previous.dateKey, { day: 'numeric', month: 'short' })}` : ''}</span><strong>{comparison.previous?.result ?? 'Sin sesión previa'}</strong></p><p><span>Hoy</span><strong>{comparison.currentResult}</strong></p></div><div className="summary-exercise-next"><Gauge size={14} aria-hidden="true" /><span><small>Próxima sesión</small><strong>{comparison.nextAction?.title.replace(/^Próxima vez:\s*/, '') ?? 'Repite el rango previsto'}</strong>{comparison.nextAction && <span>{comparison.nextAction.detail}</span>}</span></div></li>)}</ul></div>}
     <div className="completed-summary-footer"><span>{statusMessage}</span><button className="text-button" type="button" onClick={onViewProgress}>Ver progreso <ChevronRight size={15} /></button></div>
@@ -1385,6 +1494,7 @@ function exerciseTrendOptions(data: AppData): ExerciseTrendOption[] {
   data.sessions.filter((session) => session.status === 'completed').forEach((session) => session.plannedExercises.forEach((exercise) => {
     if (!options.has(exercise.exerciseId)) options.set(exercise.exerciseId, { id: exercise.exerciseId, name: exercise.name });
   }));
+
   return Array.from(options.values()).sort((a, b) => a.name.localeCompare(b.name, 'es'));
 }
 
