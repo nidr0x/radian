@@ -17,7 +17,7 @@ import { exerciseTrend } from './lib/exerciseHistory';
 import { compareSyncCopies, deleteSyncData, generateSyncKey, loadSyncState, normalizeSyncKey, persistSyncState, pullSyncData, pushSyncData, SyncApiError, type RemoteSyncData, type SyncState } from './lib/sync';
 import { buildWeeklySummary } from './lib/weeklySummary';
 import { applyAppUpdate, hasAppUpdate } from './lib/pwa';
-import { readCheckpoint, saveCheckpoint, syncDecision, readRecovery, preserveRecovery } from './lib/syncRecovery';
+import { dataRevisionFromVersion, dataVersion as buildDataVersion, readCheckpoint, saveCheckpoint, syncDecision, readRecovery, preserveRecovery } from './lib/syncRecovery';
 import { requestScreenWakeLock, type ScreenWakeLock } from './lib/wakeLock';
 import { summarizeSession, type SessionSummary } from './lib/sessionSummary';
 import { sessionAdaptation } from './lib/sessionAdaptation';
@@ -81,7 +81,18 @@ interface BeforeInstallPromptEvent extends Event {
 }
 
 function App() {
-  const [data, setData] = useState<AppData>(() => loadData());
+  const [data, setDataState] = useState<AppData>(() => loadData());
+  const [initialSyncCheckpoint] = useState(() => {
+    const checkpoint = readCheckpoint();
+    const matches = checkpoint?.snapshot === JSON.stringify(data);
+    return { checkpoint, matches, revision: matches ? dataRevisionFromVersion(checkpoint?.localVersion) : 0 };
+  });
+  const dataRevisionRef = useRef(initialSyncCheckpoint.revision);
+  const setData = (next: AppData | ((current: AppData) => AppData)): void => {
+    dataRevisionRef.current += 1;
+    setDataState(next);
+  };
+  const dataVersion = buildDataVersion(data, dataRevisionRef.current);
   const [view, setView] = useState<View>('today');
   const [activeDayId, setActiveDayId] = useState<string>(() => data.plan.days.find((day) => day.weekday === currentWeekday())?.id ?? data.plan.days[0].id);
   const [toast, setToast] = useState<string>();
@@ -107,7 +118,7 @@ function App() {
   const [online, setOnline] = useState(navigator.onLine);
   const [updateAvailable, setUpdateAvailable] = useState(hasAppUpdate);
   const [recovery, setRecovery] = useState(readRecovery);
-  const [acknowledged, setAcknowledged] = useState(() => readCheckpoint()?.snapshot);
+  const [acknowledged, setAcknowledged] = useState(() => initialSyncCheckpoint.matches ? initialSyncCheckpoint.checkpoint?.localVersion ?? dataVersion : undefined);
   const [syncAttempt, setSyncAttempt] = useState(0);
   const showConfirm = (opts: { title: string; message: string; confirmLabel: string; danger: boolean }): Promise<boolean> => new Promise((resolve) => setConfirmDialog({
     ...opts,
@@ -117,10 +128,10 @@ function App() {
   const dataRef = useRef(data);
   dataRef.current = data;
   const cloudBusyRef = useRef(false);
-  const acknowledge = (snapshot: AppData, updatedAt?: string): void => {
+  const acknowledge = (snapshot: AppData, updatedAt?: string, version = buildDataVersion(snapshot, dataRevisionRef.current)): void => {
     if (!updatedAt || !authUserRef.current) return;
-    saveCheckpoint(authUserRef.current.id, updatedAt, snapshot);
-    setAcknowledged(JSON.stringify(snapshot));
+    saveCheckpoint(authUserRef.current.id, updatedAt, snapshot, version);
+    setAcknowledged(version);
     cloudUpdatedAtRef.current = updatedAt;
     setCloudUpdatedAt(updatedAt);
   };
@@ -189,12 +200,13 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [data, syncReady, syncState.key, online]);
   useEffect(() => {
-    if (!online || !authUser || !cloudSyncReadyRef.current || cloudBusyRef.current || JSON.stringify(data) === acknowledged) return undefined;
+    if (!online || !authUser || !cloudSyncReadyRef.current || cloudBusyRef.current || dataVersion === acknowledged) return undefined;
+    const snapshotVersion = dataVersion;
     const timer = window.setTimeout(() => {
       setAuthStatus('syncing');
       cloudBusyRef.current = true;
       pushCloudData(data, cloudUpdatedAtRef.current).then(({ updatedAt }) => {
-        acknowledge(data, updatedAt);
+        acknowledge(data, updatedAt, snapshotVersion);
         setAuthStatus('signed_in');
         setAuthError(undefined);
       }).catch((error: unknown) => {
@@ -217,7 +229,7 @@ function App() {
       });
     }, 900);
     return () => window.clearTimeout(timer);
-  }, [authUser, data, online, syncAttempt, acknowledged]);
+  }, [authUser, data, online, syncAttempt, acknowledged, dataVersion]);
   useEffect(() => {
     let cancelled = false;
     currentUser().then(async (user) => {
@@ -736,6 +748,7 @@ function App() {
     cloudSyncReadyRef.current = false;
     const remote = await pullCloudData();
     localSnapshot = dataRef.current;
+    const localVersion = buildDataVersion(localSnapshot, dataRevisionRef.current);
     if (remote.data) {
       const normalized = migrateData(remote.data);
       const decision = syncDecision(localSnapshot, normalized, remote.updatedAt, readCheckpoint(), user.id);
@@ -747,13 +760,13 @@ function App() {
       }
       if (decision === 'upload') {
         const saved = await pushCloudData(localSnapshot, remote.updatedAt);
-        acknowledge(localSnapshot, saved.updatedAt);
+        acknowledge(localSnapshot, saved.updatedAt, localVersion);
       } else {
         if (decision === 'download') {
           setRecovery(preserveRecovery(localSnapshot));
           setData(normalized);
         }
-        acknowledge(normalized, remote.updatedAt);
+        acknowledge(decision === 'download' ? normalized : localSnapshot, remote.updatedAt, decision === 'download' ? buildDataVersion(normalized, dataRevisionRef.current) : localVersion);
       }
     } else {
       if (readCheckpoint()?.userId === user.id) {
@@ -762,7 +775,7 @@ function App() {
         return;
       }
       const saved = await pushCloudData(localSnapshot);
-      acknowledge(localSnapshot, saved.updatedAt);
+      acknowledge(localSnapshot, saved.updatedAt, localVersion);
     }
     cloudSyncReadyRef.current = true;
     setAuthStatus('signed_in');
@@ -786,7 +799,7 @@ function App() {
     if (choice === 'remote') {
       const next = migrateData(conflict.data);
       setData(next);
-      acknowledge(next, conflict.updatedAt);
+      acknowledge(next, conflict.updatedAt, buildDataVersion(next, dataRevisionRef.current));
       setCloudConflict(undefined);
       setAuthError(undefined);
       cloudSyncReadyRef.current = true;
@@ -796,8 +809,10 @@ function App() {
     }
     setAuthStatus('syncing');
     try {
-      const saved = await pushCloudData(data, conflict.updatedAt);
-      acknowledge(data, saved.updatedAt);
+      const localVersion = dataVersion;
+      const localSnapshot = data;
+      const saved = await pushCloudData(localSnapshot, conflict.updatedAt);
+      acknowledge(localSnapshot, saved.updatedAt, localVersion);
       setCloudConflict(undefined);
       setAuthError(undefined);
       cloudSyncReadyRef.current = true;
@@ -940,7 +955,7 @@ function App() {
       setToast('Copia recuperada en este dispositivo');
     } catch { setAuthError('No se pudo restaurar la copia. Comprueba el espacio disponible.'); }
   };
-  const pendingChanges = JSON.stringify(data) !== acknowledged;
+  const pendingChanges = dataVersion !== acknowledged;
   const updateCopy = updateActionCopy(Boolean(activeSession));
 
   return (
