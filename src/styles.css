@@ -1618,3 +1618,13 @@ h3 { font-weight: 650; letter-spacing: -.02em; }
 }
 
 .session-equipment-alternative-panel[hidden] { display: none; }
+
+:root[data-text-size='large'] { font-size: 17px; }
+:root[data-text-size='large'] h1 { font-size: clamp(38px, 10vw, 56px); }
+:root[data-text-size='large'] h2 { font-size: 27px; }
+:root[data-text-size='large'] h3 { font-size: 17px; }
+:root[data-text-size='large'] .eyebrow { font-size: 10px; }
+:root[data-text-size='large'] .primary-button,
+:root[data-text-size='large'] .secondary-button { font-size: 15px; min-height: 54px; }
+:root[data-text-size='large'] .exercise-meta,
+:root[data-text-size='large'] .set-log-row label { font-size: 12px; }
