@@ -347,6 +347,13 @@ h3 { font-size: 15px; }
 .exercise-detail-sheet { width: min(100%, 620px); max-height: calc(100dvh - 24px); overflow: auto; padding: 18px 18px 28px; border: 1px solid var(--line); border-radius: 28px 28px 12px 12px; color: var(--ink); background: var(--surface); box-shadow: 0 28px 70px rgba(0, 0, 0, .3); animation: detail-sheet-in .24s ease both; }
 .session-exit-backdrop { position: fixed; z-index: var(--z-dialog); inset: 0; display: grid; place-items: center; padding: 18px; background: rgba(12, 20, 15, .62); }
 .session-exit-dialog { width: min(100%, 420px); padding: 20px; border: 1px solid var(--line); border-radius: 24px 24px 24px var(--cut-corner); color: var(--ink); background: var(--surface); box-shadow: 0 28px 70px rgba(0, 0, 0, .3); animation: detail-sheet-in .2s ease both; }
+.rest-ended-backdrop { position: fixed; z-index: var(--z-dialog); inset: 0; display: grid; place-items: center; padding: 18px; background: rgba(12, 20, 15, .72); }
+.rest-ended-dialog { display: grid; justify-items: center; gap: 10px; width: min(100%, 420px); padding: 26px 22px 22px; border: 1px solid var(--line); border-radius: 24px 24px 24px var(--cut-corner); color: var(--ink); background: var(--surface); box-shadow: 0 28px 70px rgba(0, 0, 0, .3); text-align: center; animation: detail-sheet-in .2s ease both; }
+.rest-ended-check { color: var(--action); }
+.rest-ended-dialog .eyebrow { margin: 0; color: var(--muted); }
+.rest-ended-dialog h2 { margin: 0; font-size: 25px; }
+.rest-ended-dialog > p:not(.eyebrow) { margin: 0 0 8px; color: var(--muted); font-size: 13px; }
+.rest-ended-dialog button { width: 100%; min-height: 46px; }
 .session-exit-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .session-exit-heading .eyebrow { margin: 8px 0 0; color: var(--muted); }
 .session-exit-dialog h2 { margin: 8px 0 8px; font-size: 25px; }

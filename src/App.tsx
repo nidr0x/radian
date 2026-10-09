@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Activity, ArrowDown, ArrowUp, BarChart3, CalendarDays, Check, ChevronRight, Clipboard, CloudOff,
@@ -100,6 +100,7 @@ function App() {
   const [exitDialogOpen, setExitDialogOpen] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState<{ title: string; message: string; confirmLabel: string; danger: boolean; onConfirm: () => void; onCancel: () => void } | null>(null);
   const [restRemaining, setRestRemaining] = useState(0);
+  const [restEnded, setRestEnded] = useState(false);
   const [restUntil, setRestUntil] = useState<number | null>(null);
   const [restContext, setRestContext] = useState<{ exerciseName: string; seconds: number }>();
   const [restPaused, setRestPaused] = useState(false);
@@ -283,6 +284,7 @@ function App() {
         setRestUntil(null);
         setRestContext(undefined);
         setRestPaused(false);
+        setRestEnded(true);
         if ('vibrate' in navigator) navigator.vibrate?.(90);
         setToast('Descanso terminado');
       }
@@ -298,6 +300,7 @@ function App() {
   }, [toast]);
 
   const updateData = (updater: (current: AppData) => AppData): void => setData((current) => updater(current));
+  const dismissRestEnded = useCallback(() => setRestEnded(false), []);
   const startRest = (seconds: number, exerciseName: string): void => {
     setRestContext({ exerciseName, seconds });
     setRestUntil(Date.now() + seconds * 1000);
@@ -986,6 +989,7 @@ function App() {
           onRestartRest={restartRest}
           screenWakeLockActive={screenWakeLockActive}
           onStart={startSession}
+          onDismissRestEnded={dismissRestEnded}
           onComplete={completeExercise}
           onDraft={updateExerciseDraft}
           onSwapExercise={swapSessionExercise}
@@ -1005,6 +1009,7 @@ function App() {
       <BottomNav view={view} onChange={setView} />
       {exitDialogOpen && <SessionExitDialog onCancel={() => setExitDialogOpen(false)} onConfirm={confirmLeaveSession} />}
       {confirmDialog && <ConfirmDialog {...confirmDialog} />}
+      {restEnded && <RestEndedOverlay nextExerciseName={activeSession?.plannedExercises[activeSession.activeExerciseIndex]?.name} onDismiss={dismissRestEnded} />}
       {(restRemaining > 0 || toast || storageWarning) && <div className="floating-feedback" aria-live="polite">
         {toast && <div className="toast" role="status"><Check size={16} />{toast}</div>}
         {storageWarning && <div className="storage-warning" role="alert"><CloudOff size={16} />{storageWarning}</div>}
@@ -1078,7 +1083,31 @@ function ConfirmDialog({ title, message, confirmLabel = 'Confirmar', danger = fa
   return createPortal(content, document.body);
 }
 
-function TodayView({ data, todayDay, activeSession, onSelectExercise, onDeferExercise, restRemaining, restExerciseName, onRestartRest, screenWakeLockActive, onStart, onComplete, onDraft, onSwapExercise, onQueueRecovery, onRemoveRecoveryExercise, onRest, onNavigate, onUndo, canUndo, onExit, onHelp }: {
+function RestEndedOverlay({ nextExerciseName, onDismiss }: { nextExerciseName?: string; onDismiss: () => void }) {
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const closeOnEscape = (event: KeyboardEvent): void => { if (event.key === 'Escape') onDismiss(); };
+    const trapFocus = (event: KeyboardEvent): void => {
+      if (event.key !== 'Tab') return;
+      const dialog = document.querySelector<HTMLElement>('.rest-ended-dialog');
+      const focusable = dialog ? Array.from(dialog.querySelectorAll<HTMLElement>('button, input, select, textarea, [tabindex]:not([tabindex="-1"])')).filter((element) => !element.hasAttribute('disabled')) : [];
+      if (focusable.length === 0) return;
+      event.preventDefault();
+      focusable[0].focus();
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    document.addEventListener('keydown', trapFocus);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.setTimeout(() => document.querySelector<HTMLButtonElement>('.rest-ended-dialog button')?.focus(), 0);
+    const timer = window.setTimeout(onDismiss, 10_000);
+    return () => { window.clearTimeout(timer); document.removeEventListener('keydown', closeOnEscape); document.removeEventListener('keydown', trapFocus); document.body.style.overflow = previousOverflow; previousFocus?.focus(); };
+  }, [onDismiss]);
+  const content = <div className="rest-ended-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onDismiss(); }}><section className="rest-ended-dialog" role="dialog" aria-modal="true" aria-labelledby="rest-ended-title" onMouseDown={(event) => event.stopPropagation()}><Check className="rest-ended-check" size={52} aria-hidden="true" /><p className="eyebrow">temporizador</p><h2 id="rest-ended-title">¡Descanso terminado!</h2><p>{nextExerciseName ? `Siguiente: ${nextExerciseName}` : 'Cuando quieras, puedes continuar.'}</p><button className="primary-button" type="button" onClick={onDismiss}>Continuar</button></section></div>;
+  return createPortal(content, document.body);
+}
+
+function TodayView({ data, todayDay, activeSession, onSelectExercise, onDeferExercise, restRemaining, restExerciseName, onRestartRest, screenWakeLockActive, onStart, onDismissRestEnded, onComplete, onDraft, onSwapExercise, onQueueRecovery, onRemoveRecoveryExercise, onRest, onNavigate, onUndo, canUndo, onExit, onHelp }: {
   data: AppData;
   todayDay?: WorkoutDay;
   activeSession?: WorkoutSession;
@@ -1089,6 +1118,7 @@ function TodayView({ data, todayDay, activeSession, onSelectExercise, onDeferExe
   onRestartRest: () => void;
   screenWakeLockActive: boolean;
   onStart: (day: WorkoutDay, readiness?: SessionReadiness) => void;
+  onDismissRestEnded: () => void;
   onComplete: (session: WorkoutSession, exercise: ExerciseSession, patch: Partial<ExerciseSession>, startRest: boolean) => void;
   onDraft: (sessionId: string, plannedExerciseId: string, patch: Partial<ExerciseSession>) => void;
   onSwapExercise: (sessionId: string, plannedExerciseId: string, replacement: ExerciseDefinition, reason: 'discomfort' | 'equipment') => void;
@@ -1144,7 +1174,7 @@ function TodayView({ data, todayDay, activeSession, onSelectExercise, onDeferExe
       <section className="training-plan" aria-labelledby="training-plan-title">
         <div className="section-heading plan-heading"><div><p className="eyebrow">el plan</p><h2 id="training-plan-title">{workoutDay.weekday === currentWeekday() ? 'Tu sesión' : 'Próximo entrenamiento'}</h2><div className="plan-summary" aria-label="Resumen del entrenamiento"><span><Dumbbell size={16} aria-hidden="true" /> {plannedExercises.length} ejercicios</span><span className="plan-summary-separator" aria-hidden="true">·</span><span><Layers3 size={16} aria-hidden="true" /> {plannedSets} series</span><span className="plan-summary-separator" aria-hidden="true">·</span><span><Timer size={16} aria-hidden="true" /> ~{data.profile.sessionMinutes} min</span></div></div><button className="text-button plan-edit-button" type="button" onClick={() => onNavigate('routine')}><Pencil size={17} aria-hidden="true" /> Editar rutina <ChevronRight size={16} aria-hidden="true" /></button></div>
         <p className="today-start-hint plan-info"><Info size={17} aria-hidden="true" /><span>{primaryAction.hint}</span></p>
-        {readinessOpen && <ReadinessPrompt value={readiness} onChange={setReadiness} onSkip={() => { setReadinessOpen(false); onStart(workoutDay); }} onStart={() => { setReadinessOpen(false); onStart(workoutDay, readiness); }} />}
+        {readinessOpen && <ReadinessPrompt value={readiness} onChange={setReadiness} onSkip={() => { setReadinessOpen(false); onDismissRestEnded(); onStart(workoutDay); }} onStart={() => { setReadinessOpen(false); onDismissRestEnded(); onStart(workoutDay, readiness); }} />}
         <div className="exercise-list plan-exercise-list">{plannedExercises.map((exercise, index) => <ExercisePreview key={exercise.id} exercise={exercise} index={index} muscleGroup={data.exercises.find((item) => item.id === exercise.exerciseId)?.muscleGroup} onOpenDetails={() => setDetailExercise(exercise)} />)}</div>
       </section>
     </>}
