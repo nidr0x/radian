@@ -31,8 +31,9 @@ describe('tarjeta previa de ejercicio', () => {
     expect(html).toContain('exercise-preview-heading');
     expect(html).toContain('exercise-meta');
     expect(html).toContain('exercise-card-chevron');
-    expect(html).toContain('role="button"');
-    expect(html).toContain('tabindex="0"');
+    expect(html).toContain('<button');
+    expect(html).toContain('type="button"');
+    expect(html).not.toContain('tabindex="0"');
     expect(html).not.toContain('last-feedback');
     expect(html).not.toContain('next-action');
   });
