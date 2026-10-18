@@ -1275,11 +1275,16 @@ const TodayDashboardAside = memo(function TodayDashboardAside({ data, onNavigate
   }, { volumeKg: 0, durationSeconds: 0 }), [monthSessions]);
   const weekDays = useMemo(() => buildWeekDays(data.profile.trainingDays, data.sessions), [data.sessions, data.plan.days, data.profile.trainingDays]);
   const streak = useMemo(() => getLatestWorkoutStreak(data.profile.trainingDays, data.sessions), [data.sessions, data.profile.trainingDays]);
+  const completedWeekdays = weekDays.filter((day) => day.completed).map((day) => dayNames[new Date(`${day.key}T12:00:00`).getDay()]);
+  const completedWeekdayLabel = completedWeekdays.length === 0
+    ? 'ningún entrenamiento completado'
+    : `${completedWeekdays.length > 1 ? `${completedWeekdays.slice(0, -1).join(', ')} y ${completedWeekdays.at(-1)}` : completedWeekdays[0]} completado${completedWeekdays.length === 1 ? '' : 's'}`;
+  const plannedDaysCount = weekDays.filter((day) => day.planned).length;
   return <aside className="today-dashboard-aside" aria-label="Resumen y calendario">
     <section className="progress-card home-streak-card">
       <div className="section-heading compact"><div><p className="eyebrow">constancia</p><h2>Racha de sesiones</h2></div><Activity size={19} /></div>
       <div className="home-streak-reading"><strong>{streak}</strong><span>sesiones seguidas</span></div>
-      <div className="home-week-dots" aria-label="Actividad de esta semana">{weekDays.map((day) => <span key={day.key} className={`${day.completed ? 'is-complete' : ''}${day.planned ? ' is-planned' : ''}`} title={`${day.label}: ${day.completed ? 'completado' : day.planned ? 'previsto' : 'descanso'}`} />)}</div>
+      <div className="home-week-dots" role="img" aria-label={`Semana: ${completedWeekdayLabel} de ${plannedDaysCount} planificados`}>{weekDays.map((day) => <span key={day.key} className={`${day.completed ? 'is-complete' : ''}${day.planned ? ' is-planned' : ''}`} title={`${day.label}: ${day.completed ? 'completado' : day.planned ? 'previsto' : 'descanso'}`} />)}</div>
       <div className="home-week-labels" aria-hidden="true">{weekDays.map((day) => <span key={day.key}>{day.label}</span>)}</div>
     </section>
     <section className="progress-card home-month-card">
@@ -1456,7 +1461,7 @@ function SessionExerciseNavigator({ session, onSelect }: { session: WorkoutSessi
       const current = index === session.activeExerciseIndex;
       const status = current ? 'Ahora' : deferred ? 'Aplazado' : skipped ? 'Saltado' : completed ? 'Hecho' : 'Pendiente';
       return <li key={exercise.plannedExerciseId}>
-        <button ref={current ? activeStepRef : undefined} type="button" className={`session-exercise-step${current ? ' is-active' : ''}${completed ? ' is-complete' : ''}${skipped ? ' is-skipped' : ''}${deferred ? ' is-deferred' : ''}`} aria-current={current ? 'step' : undefined} aria-label={`${exercise.name}: ${status}${current ? ', ejercicio actual' : ', seleccionar ejercicio'}`} onClick={() => onSelect(index)}>
+        <button ref={current ? activeStepRef : undefined} type="button" className={`session-exercise-step${current ? ' is-active' : ''}${completed ? ' is-complete' : ''}${skipped ? ' is-skipped' : ''}${deferred ? ' is-deferred' : ''}`} aria-current={current ? 'step' : undefined} aria-setsize={session.plannedExercises.length} aria-posinset={index + 1} aria-label={`${exercise.name}: ${status}${current ? ', ejercicio actual' : ', seleccionar ejercicio'}`} onClick={() => onSelect(index)}>
           <span className="session-exercise-step-index">{completed ? <Check size={14} /> : skipped ? <SkipForward size={14} /> : deferred ? <Pause size={14} /> : index + 1}</span>
           <span className="session-exercise-step-copy"><span className="session-exercise-step-name">{exercise.name}</span><small>{status}</small></span>
         </button>
