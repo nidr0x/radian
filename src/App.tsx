@@ -14,7 +14,7 @@ import { isWorkSet } from './lib/progression';
 import { bestRecordForExercise, detectPersonalRecord, type ExerciseRecord } from './lib/records';
 import { createSession, createSetLogs, loadData, migrateData, parseBackup, persistData, serializeBackup } from './lib/storage';
 import { exerciseTrend } from './lib/exerciseHistory';
-import { buildSvgChart } from './lib/progressChart';
+import { buildSvgChart, type SvgChartPoint } from './lib/progressChart';
 import { buildCalendarCells } from './lib/sessionCalendar';
 import { buildProgressBuckets, type ProgressBucket, type ProgressRange } from './lib/progressOverview';
 import { compareSyncCopies, deleteSyncData, generateSyncKey, loadSyncState, normalizeSyncKey, persistSyncState, pullSyncData, pushSyncData, SyncApiError, type RemoteSyncData, type SyncState } from './lib/sync';
@@ -1765,6 +1765,42 @@ function exerciseTrendOptions(data: AppData): ExerciseTrendOption[] {
   return Array.from(options.values()).sort((a, b) => a.name.localeCompare(b.name, 'es'));
 }
 
+type SvgLineChartProps = {
+  points: SvgChartPoint[];
+  linePath: string;
+  areaPath: string;
+  width?: number;
+  height?: number;
+  gradientId: string;
+  accentColor?: string;
+  className?: string;
+  areaClassName?: string;
+  gridlines?: number[] | false;
+  title: string;
+  description: string;
+  role?: 'group' | 'img';
+  selectedIndex?: number;
+  pointLabels?: string[];
+  onSelectPoint?: (index: number) => void;
+};
+
+const SvgLineChart = memo(function SvgLineChart({ points, linePath, areaPath, width = 320, height = 140, gradientId, accentColor = 'var(--accent)', className = 'weight-chart-svg', areaClassName, gridlines = [14, 68, 122], title, description, role = 'img', selectedIndex, pointLabels, onSelectPoint }: SvgLineChartProps) {
+  const titleId = `${gradientId}-title`;
+  const descriptionId = `${gradientId}-description`;
+  return <svg className={className} viewBox={`0 0 ${width} ${height}`} role={role} aria-labelledby={`${titleId} ${descriptionId}`} preserveAspectRatio="none">
+    <title id={titleId}>{title}</title>
+    <desc id={descriptionId}>{description}</desc>
+    <defs><linearGradient id={gradientId} x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor={accentColor} stopOpacity=".32" /><stop offset="100%" stopColor={accentColor} stopOpacity="0" /></linearGradient></defs>
+    {gridlines && gridlines.map((y) => <line className="weight-chart-gridline" key={y} x1="0" x2={width} y1={y} y2={y} />)}
+    {points.length > 1 && <path className={`weight-chart-area${areaClassName ? ` ${areaClassName}` : ''}`} d={areaPath} />}
+    <path className="weight-chart-line" d={linePath} />
+    {points.map((point, index) => <g key={`${point.date}-${index}`}>
+      {onSelectPoint && <circle className="weight-chart-hit-area" cx={point.x} cy={point.y} r="12" fill="transparent" pointerEvents="all" role="button" tabIndex={0} aria-pressed={index === selectedIndex} aria-label={pointLabels?.[index] ?? `Seleccionar registro ${index + 1}`} onClick={() => onSelectPoint(index)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelectPoint(index); } }} />}
+      <circle className={`weight-chart-point${index === points.length - 1 ? ' is-latest' : ''}${index === selectedIndex ? ' is-selected' : ''}`} cx={point.x} cy={point.y} r={index === points.length - 1 ? 4.5 : 3} pointerEvents="none" />
+    </g>)}
+  </svg>;
+});
+
 function ExerciseTrendCard({ data }: { data: AppData }) {
   const [selectedExerciseId, setSelectedExerciseId] = useState('');
   const [selectedPointIndex, setSelectedPointIndex] = useState<number>();
@@ -1796,7 +1832,18 @@ function ExerciseTrendCard({ data }: { data: AppData }) {
   const numberFormat = { maximumFractionDigits: 1 } as const;
   const displayValue = (value: number): string => weighted ? `${value.toLocaleString('es-ES', numberFormat)} kg` : formatVolume(value);
   const metricLabel = weighted ? 'carga máxima' : 'volumen';
-  return <section className="progress-card exercise-trend-card" aria-labelledby="exercise-trend-heading"><div className="section-heading compact"><div><p className="eyebrow">histórico por ejercicio</p><h2 id="exercise-trend-heading">Tu evolución</h2></div><History size={19} /></div><label className="exercise-trend-select" htmlFor="exercise-trend-picker"><span>Ejercicio</span><select id="exercise-trend-picker" value={selected.id} onChange={(event) => { setSelectedExerciseId(event.target.value); setSelectedPointIndex(undefined); }}>{options.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label><div className="weight-chart-reading exercise-trend-reading" aria-live="polite"><strong>{displayValue(values[activeIndex])}</strong><span>{metricLabel} · {formatDate(selectedPoint.date, { day: 'numeric', month: 'short', year: 'numeric' })}</span></div><div className="weight-chart-body"><div className="weight-chart-scale" aria-hidden="true">{scaleValues.map((value, index) => <span key={`${value}-${index}`}>{weighted ? `${value.toLocaleString('es-ES', numberFormat)} kg` : formatVolume(value)}</span>)}</div><svg className="weight-chart-svg" viewBox="0 0 320 140" role="group" aria-labelledby="exercise-trend-title exercise-trend-description" preserveAspectRatio="none"><title id="exercise-trend-title">Evolución de {selected.name}</title><desc id="exercise-trend-description">{`${metricLabel} registrado entre ${formatDate(chartPoints[0].date, { day: 'numeric', month: 'long', year: 'numeric' })} y ${formatDate(latest.date, { day: 'numeric', month: 'long', year: 'numeric' })}. Selecciona un punto para consultar su valor.`}</desc><defs><linearGradient id="exercise-trend-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="var(--accent)" stopOpacity=".32" /><stop offset="100%" stopColor="var(--accent)" stopOpacity="0" /></linearGradient></defs>{[plotTop, (plotTop + plotBottom) / 2, plotBottom].map((y) => <line className="weight-chart-gridline" key={y} x1="0" x2={width} y1={y} y2={y} />)}{chartPoints.length > 1 && <path className="weight-chart-area exercise-trend-area" d={areaPath} />}<path className="weight-chart-line" d={linePath} />{points.map((point, index) => <g key={`${point.x}-${point.y}`}><circle className="weight-chart-hit-area" cx={point.x} cy={point.y} r="12" fill="transparent" pointerEvents="all" role="button" tabIndex={0} aria-pressed={index === activeIndex} aria-label={`${formatDate(chartPoints[index].date, { day: 'numeric', month: 'long', year: 'numeric' })}: ${displayValue(values[index])}`} onClick={() => setSelectedPointIndex(index)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedPointIndex(index); } }} /><circle className={`weight-chart-point${index === points.length - 1 ? ' is-latest' : ''}${index === activeIndex ? ' is-selected' : ''}`} cx={point.x} cy={point.y} r={index === points.length - 1 ? 4.5 : 3} pointerEvents="none" /></g>)}</svg></div><div className="weight-chart-footer"><span>{formatDate(chartPoints[0].date, { month: 'short', year: 'numeric' })}</span><span>{chartPoints.length} {chartPoints.length === 1 ? 'registro' : 'registros'}</span><span>{formatDate(latest.date, { month: 'short', year: 'numeric' })}</span></div>{chartPoints.length === 1 ? <p className="weight-chart-note">Añade otra sesión con este ejercicio para ver la tendencia.</p> : <p className="weight-chart-note">Selecciona un punto para consultar esa sesión. La línea muestra {weighted ? 'la carga máxima registrada en una serie' : 'el volumen de trabajo registrado'}.</p>}{selectedPoint.discomfort && <p className="weight-chart-note exercise-trend-warning">Esta sesión incluye molestias; prioriza control y comodidad antes de progresar.</p>}</section>;
+  return <section className="progress-card exercise-trend-card" aria-labelledby="exercise-trend-heading">
+    <div className="section-heading compact"><div><p className="eyebrow">histórico por ejercicio</p><h2 id="exercise-trend-heading">Tu evolución</h2></div><History size={19} /></div>
+    <label className="exercise-trend-select" htmlFor="exercise-trend-picker"><span>Ejercicio</span><select id="exercise-trend-picker" value={selected.id} onChange={(event) => { setSelectedExerciseId(event.target.value); setSelectedPointIndex(undefined); }}>{options.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label>
+    <div className="weight-chart-reading exercise-trend-reading" aria-live="polite"><strong>{displayValue(values[activeIndex])}</strong><span>{metricLabel} · {formatDate(selectedPoint.date, { day: 'numeric', month: 'short', year: 'numeric' })}</span></div>
+    <div className="weight-chart-body">
+      <div className="weight-chart-scale" aria-hidden="true">{scaleValues.map((value, index) => <span key={`${value}-${index}`}>{weighted ? `${value.toLocaleString('es-ES', numberFormat)} kg` : formatVolume(value)}</span>)}</div>
+      <SvgLineChart points={points} linePath={linePath} areaPath={areaPath} gradientId="exercise-trend-fill" areaClassName="exercise-trend-area" role="group" gridlines={[plotTop, (plotTop + plotBottom) / 2, plotBottom]} title={`Evolución de ${selected.name}`} description={`${metricLabel} registrado entre ${formatDate(chartPoints[0].date, { day: 'numeric', month: 'long', year: 'numeric' })} y ${formatDate(latest.date, { day: 'numeric', month: 'long', year: 'numeric' })}. Selecciona un punto para consultar su valor.`} selectedIndex={activeIndex} pointLabels={chartPoints.map((point, index) => `${formatDate(point.date, { day: 'numeric', month: 'long', year: 'numeric' })}: ${displayValue(values[index])}`)} onSelectPoint={setSelectedPointIndex} />
+    </div>
+    <div className="weight-chart-footer"><span>{formatDate(chartPoints[0].date, { month: 'short', year: 'numeric' })}</span><span>{chartPoints.length} {chartPoints.length === 1 ? 'registro' : 'registros'}</span><span>{formatDate(latest.date, { month: 'short', year: 'numeric' })}</span></div>
+    {chartPoints.length === 1 ? <p className="weight-chart-note">Añade otra sesión con este ejercicio para ver la tendencia.</p> : <p className="weight-chart-note">Selecciona un punto para consultar esa sesión. La línea muestra {weighted ? 'la carga máxima registrada en una serie' : 'el volumen de trabajo registrado'}.</p>}
+    {selectedPoint.discomfort && <p className="weight-chart-note exercise-trend-warning">Esta sesión incluye molestias; prioriza control y comodidad antes de progresar.</p>}
+  </section>;
 }
 
 function WeeklyTrends({ summary }: { summary: ReturnType<typeof buildWeeklySummary> }) {
@@ -1958,18 +2005,7 @@ function WeightChart({ entries }: { entries: ProgressEntry[] }) {
     {rangeControls}
     <div className="weight-chart-body">
       <div className="weight-chart-scale" aria-hidden="true">{scaleValues.map((value, index) => <span key={`${value}-${index}`}>{value.toLocaleString('es-ES', numberFormat)}</span>)}</div>
-      <svg className="weight-chart-svg" viewBox="0 0 320 140" role="group" aria-labelledby="weight-chart-title" aria-describedby="weight-chart-description" preserveAspectRatio="none">
-        <title id="weight-chart-title">Evolución del peso</title>
-        <desc id="weight-chart-description">{`Peso registrado entre ${formatDate(weightEntries[0].date, { day: 'numeric', month: 'long', year: 'numeric' })} y ${formatDate(latest.date, { day: 'numeric', month: 'long', year: 'numeric' })}. Selecciona un punto para consultar esa medición.`}</desc>
-        <defs><linearGradient id="weight-chart-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="var(--accent)" stopOpacity=".32" /><stop offset="100%" stopColor="var(--accent)" stopOpacity="0" /></linearGradient></defs>
-        {[plotTop, (plotTop + plotBottom) / 2, plotBottom].map((y) => <line className="weight-chart-gridline" key={y} x1="0" x2={width} y1={y} y2={y} />)}
-        {weightEntries.length > 1 && <path className="weight-chart-area" d={areaPath} />}
-        <path className="weight-chart-line" d={linePath} />
-        {points.map((point, index) => <g key={weightEntries[index].id}>
-          <circle className="weight-chart-hit-area" cx={point.x} cy={point.y} r="12" fill="transparent" pointerEvents="all" role="button" tabIndex={0} aria-pressed={index === activeIndex} aria-label={`${formatDate(weightEntries[index].date, { day: 'numeric', month: 'long', year: 'numeric' })}: ${weightEntries[index].weightKg!.toLocaleString('es-ES', numberFormat)} kg`} onClick={() => setSelectedEntryId(weightEntries[index].id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedEntryId(weightEntries[index].id); } }} />
-          <circle className={`weight-chart-point${index === points.length - 1 ? ' is-latest' : ''}${index === activeIndex ? ' is-selected' : ''}`} cx={point.x} cy={point.y} r={index === points.length - 1 ? 4.5 : 3} pointerEvents="none" />
-        </g>)}
-      </svg>
+      <SvgLineChart points={points} linePath={linePath} areaPath={areaPath} gradientId="weight-chart-fill" width={width} height={140} role="group" title="Evolución del peso" description={`Peso registrado entre ${formatDate(weightEntries[0].date, { day: 'numeric', month: 'long', year: 'numeric' })} y ${formatDate(latest.date, { day: 'numeric', month: 'long', year: 'numeric' })}. Selecciona un punto para consultar esa medición.`} selectedIndex={activeIndex} pointLabels={weightEntries.map((entry) => `${formatDate(entry.date, { day: 'numeric', month: 'long', year: 'numeric' })}: ${entry.weightKg!.toLocaleString('es-ES', numberFormat)} kg`)} onSelectPoint={(index) => setSelectedEntryId(weightEntries[index].id)} />
     </div>
     <table className="sr-only" aria-label="Datos del gráfico de peso"><thead><tr><th>Fecha</th><th>Peso (kg)</th></tr></thead><tbody>{weightEntries.map((entry) => <tr key={entry.id}><td>{formatDate(entry.date, { day: 'numeric', month: 'long', year: 'numeric' })}</td><td>{entry.weightKg!.toLocaleString('es-ES', numberFormat)}</td></tr>)}</tbody></table>
     <div className="weight-chart-footer"><span>{formatDate(weightEntries[0].date, { month: 'short', year: 'numeric' })}</span><span>{weightEntries.length} {weightEntries.length === 1 ? 'registro' : 'registros'}</span><span>{formatDate(latest.date, { month: 'short', year: 'numeric' })}</span></div>
@@ -1992,7 +2028,7 @@ function ExerciseProgressChart({ exerciseId, sessions }: { exerciseId: string; s
   const numberFormat = { maximumFractionDigits: 1 } as const;
   return <div className="weight-chart exercise-progress-chart" aria-labelledby="exercise-progress-title">
     <div className="weight-chart-heading"><div><p className="eyebrow">carga máxima</p><div className="weight-chart-reading"><strong>{latest.value.toLocaleString('es-ES', numberFormat)}<small> kg</small></strong></div></div><time dateTime={latest.date}>{formatDate(latest.date, { day: 'numeric', month: 'short', year: 'numeric' })}</time></div>
-    <div className="weight-chart-body"><div className="weight-chart-scale" aria-hidden="true">{scaleValues.map((value, index) => <span key={`${value}-${index}`}>{value.toLocaleString('es-ES', numberFormat)}</span>)}</div><svg className="weight-chart-svg" viewBox="0 0 320 140" role="img" aria-labelledby="exercise-progress-title exercise-progress-description" preserveAspectRatio="none"><title id="exercise-progress-title">Progresión de carga de {name}</title><desc id="exercise-progress-description">Carga máxima en series de trabajo registradas entre {formatDate(entries[0].date, { day: 'numeric', month: 'long', year: 'numeric' })} y {formatDate(latest.date, { day: 'numeric', month: 'long', year: 'numeric' })}.</desc><defs><linearGradient id="exercise-progress-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="var(--accent)" stopOpacity=".32" /><stop offset="100%" stopColor="var(--accent)" stopOpacity="0" /></linearGradient></defs>{[14, 68, 122].map((y) => <line className="weight-chart-gridline" key={y} x1="0" x2="320" y1={y} y2={y} />)}{entries.length > 1 && <path className="weight-chart-area exercise-progress-area" d={areaPath} />}<path className="weight-chart-line" d={linePath} />{points.map((point, index) => <circle className={`weight-chart-point${index === points.length - 1 ? ' is-latest' : ''}`} key={`${point.date}-${index}`} cx={point.x} cy={point.y} r={index === points.length - 1 ? 4.5 : 3} />)}</svg></div>
+    <div className="weight-chart-body"><div className="weight-chart-scale" aria-hidden="true">{scaleValues.map((value, index) => <span key={`${value}-${index}`}>{value.toLocaleString('es-ES', numberFormat)}</span>)}</div><SvgLineChart points={points} linePath={linePath} areaPath={areaPath} gradientId="exercise-progress-fill" areaClassName="exercise-progress-area" width={320} height={140} role="img" title={`Progresión de carga de ${name}`} description={`Carga máxima en series de trabajo registradas entre ${formatDate(entries[0].date, { day: 'numeric', month: 'long', year: 'numeric' })} y ${formatDate(latest.date, { day: 'numeric', month: 'long', year: 'numeric' })}.`} /></div>
     <table className="sr-only" aria-label={`Datos de carga de ${name}`}><thead><tr><th>Fecha</th><th>Peso (kg)</th></tr></thead><tbody>{entries.map((entry, index) => <tr key={`${entry.date}-${index}`}><td>{formatDate(entry.date, { day: 'numeric', month: 'long', year: 'numeric' })}</td><td>{entry.value.toLocaleString('es-ES', numberFormat)}</td></tr>)}</tbody></table>
     <div className="weight-chart-footer"><span>{formatDate(entries[0].date, { month: 'short', year: 'numeric' })}</span><span>{entries.length} {entries.length === 1 ? 'registro' : 'registros'}</span><span>{formatDate(latest.date, { month: 'short', year: 'numeric' })}</span></div>
   </div>;
