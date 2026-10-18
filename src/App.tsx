@@ -1209,7 +1209,7 @@ function TodayView({ data, todayDay, activeSession, onSelectExercise, onDeferExe
   const doneToday = data.sessions.some((session) => session.dateKey === dateKey() && session.status === 'completed');
   const latestCompletedToday = data.sessions.filter((session) => session.dateKey === dateKey() && session.status === 'completed').sort((a, b) => (b.completedAt ?? '').localeCompare(a.completedAt ?? ''))[0];
   const completedSummary = latestCompletedToday ? summarizeSession(latestCompletedToday, data.sessions) : undefined;
-  const completedExerciseComparisons = latestCompletedToday ? sessionExerciseComparisons(latestCompletedToday, data.sessions) : [];
+  const completedExerciseComparisons = useMemo(() => latestCompletedToday ? sessionExerciseComparisons(latestCompletedToday, data.sessions) : [], [data.sessions, workoutDay]);
   const pendingRecoveryItems = data.sessions.flatMap((session) => (session.recoveryExercises ?? []).map((exercise) => ({ sessionId: session.id, exercise })));
   const primaryAction = todayPrimaryAction(doneToday);
 
@@ -1264,15 +1264,17 @@ function TodayStats({ sessions, exerciseCount, setCount, sessionMinutes }: { ses
   </section>;
 }
 
-function TodayDashboardAside({ data, onNavigate }: { data: AppData; onNavigate: (view: View) => void }) {
-  const monthKey = dateKey().slice(0, 7);
-  const monthSessions = data.sessions.filter((session) => session.status === 'completed' && session.dateKey.startsWith(monthKey));
-  const monthSummary = monthSessions.reduce((total, session) => {
+const TodayDashboardAside = memo(function TodayDashboardAside({ data, onNavigate }: { data: AppData; onNavigate: (view: View) => void }) {
+  const monthSessions = useMemo(() => {
+    const monthKey = dateKey().slice(0, 7);
+    return data.sessions.filter((session) => session.status === 'completed' && session.dateKey.startsWith(monthKey));
+  }, [data.sessions]);
+  const monthSummary = useMemo(() => monthSessions.reduce((total, session) => {
     const summary = summarizeSession(session);
     return { volumeKg: total.volumeKg + summary.volumeKg, durationSeconds: total.durationSeconds + summary.durationSeconds };
-  }, { volumeKg: 0, durationSeconds: 0 });
-  const weekDays = buildWeekDays(data.profile.trainingDays, data.sessions);
-  const streak = getLatestWorkoutStreak(data.profile.trainingDays, data.sessions);
+  }, { volumeKg: 0, durationSeconds: 0 }), [monthSessions]);
+  const weekDays = useMemo(() => buildWeekDays(data.profile.trainingDays, data.sessions), [data.sessions, data.plan.days, data.profile.trainingDays]);
+  const streak = useMemo(() => getLatestWorkoutStreak(data.profile.trainingDays, data.sessions), [data.sessions, data.profile.trainingDays]);
   return <aside className="today-dashboard-aside" aria-label="Resumen y calendario">
     <section className="progress-card home-streak-card">
       <div className="section-heading compact"><div><p className="eyebrow">constancia</p><h2>Racha de sesiones</h2></div><Activity size={19} /></div>
@@ -1288,10 +1290,10 @@ function TodayDashboardAside({ data, onNavigate }: { data: AppData; onNavigate: 
     <section className="progress-card home-calendar-card"><div className="section-heading compact"><div><p className="eyebrow">historial</p><h2>Calendario</h2></div><CalendarDays size={19} /></div><SessionCalendar sessions={data.sessions} trainingDays={data.profile.trainingDays} exercises={data.exercises} workoutDays={data.plan.days} /></section>
     <blockquote className="home-quote-card"><span aria-hidden="true">“</span><p>La disciplina de hoy<br />es la libertad de mañana.</p></blockquote>
   </aside>;
-}
+});
 
 function HomeMuscleGroupsCard({ data, onNavigate }: { data: AppData; onNavigate: (view: View) => void }) {
-  const muscleGroups = muscleGroupVolumes(data).slice(0, 3);
+  const muscleGroups = useMemo(() => muscleGroupVolumes(data).slice(0, 3), [data.sessions, data.exercises]);
   return <section className="progress-card home-muscle-card"><div className="section-heading compact"><div><p className="eyebrow">actividad</p><h2>Grupos musculares</h2></div><button type="button" className="text-button" onClick={() => onNavigate('progress')}>Ver más <ChevronRight size={15} /></button></div>{muscleGroups.length ? <div className="home-muscle-grid">{muscleGroups.map((group) => { const image = data.exercises.find((exercise) => exercise.muscleGroup === group.muscleGroup)?.imageUrl; return <article className="home-muscle-tile" key={group.muscleGroup}>{image && <img src={image} alt="" loading="lazy" />}<strong>{group.muscleGroup}</strong><span>{formatVolume(group.volume)}</span></article>; })}</div> : <p className="home-muscle-empty">Completa sesiones para ver el volumen por grupo.</p>}</section>;
 }
 
