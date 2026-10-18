@@ -16,7 +16,17 @@ const securityHeaders: Record<string, string> = {
 export const onRequest = async (context: MiddlewareContext): Promise<Response> => {
   let response: Response;
   try {
-    response = await context.next();
+    const url = new URL(context.request.url);
+    const method = context.request.method.toUpperCase();
+    const authMutation = url.pathname.startsWith('/api/auth/') && !['GET', 'HEAD', 'OPTIONS'].includes(method);
+    const origin = context.request.headers.get('Origin');
+    const fetchSite = context.request.headers.get('Sec-Fetch-Site');
+    const contentType = context.request.headers.get('Content-Type')?.split(';', 1)[0].trim().toLowerCase();
+    if (authMutation && (contentType !== 'application/json' || (origin !== null && origin !== url.origin) || fetchSite === 'cross-site')) {
+      response = json({ error: 'cross_site_request', message: 'La solicitud de autenticación debe proceder de Radian.' }, 403);
+    } else {
+      response = await context.next();
+    }
   } catch (error: unknown) {
     console.error('Unhandled Pages Function error', {
       path: new URL(context.request.url).pathname,

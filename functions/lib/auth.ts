@@ -59,6 +59,7 @@ const clientAddress = (context: SyncContext): string => context.request.headers.
 
 const rateLimitMax = (route: string): number => {
   if (route.endsWith('-options')) return 30;
+  if (route === 'sync-put-ip') return 5;
   if (route.startsWith('sync-')) return 120;
   if (route === 'passkeys-list') return 60;
   return 10;
@@ -114,6 +115,30 @@ export const randomId = (bytes = 16): string => {
   const value = new Uint8Array(bytes);
   crypto.getRandomValues(value);
   return encodeBase64Url(value);
+};
+
+const challengeCookieName = (id: string, request: Request): string | undefined => {
+  if (!/^[A-Za-z0-9_-]{24}$/.test(id)) return undefined;
+  const prefix = isLocalRequest(request) ? 'radian_challenge_' : '__Host-radian_challenge_';
+  return `${prefix}${id}`;
+};
+
+export const createChallengeBinding = async (context: SyncContext, id: string): Promise<{ hash: string; cookie: string }> => {
+  const cookieName = challengeCookieName(id, context.request);
+  if (!cookieName) throw new Error('INVALID_CHALLENGE_ID');
+  const token = randomId(32);
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token)));
+  const hash = Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  const secure = isLocalRequest(context.request) ? '' : ' Secure;';
+  return { hash, cookie: `${cookieName}=${token}; Path=/; Max-Age=300; HttpOnly; SameSite=Strict;${secure}` };
+};
+
+export const getChallengeBinding = (context: SyncContext, id: string): string | undefined => {
+  const name = challengeCookieName(id, context.request);
+  if (!name) return undefined;
+  const cookie = context.request.headers.get('Cookie')?.split(';').map((value) => value.trim()).find((value) => value.startsWith(`${name}=`));
+  const token = cookie?.slice(name.length + 1);
+  return token && /^[A-Za-z0-9_-]{40,50}$/.test(token) ? token : undefined;
 };
 
 const asArrayBuffer = (bytes: Uint8Array): ArrayBuffer => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
@@ -273,11 +298,14 @@ export const markSessionReauthenticated = async (context: AuthenticatedContext):
   await database.prepare('UPDATE auth_sessions SET reauthenticated_at = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL').bind(new Date().toISOString(), context.sessionId, context.user.id).run();
 };
 
-export const consumeChallenge = async (db: D1DatabaseLike, id: string, kind: ChallengeRow['kind']): Promise<ChallengeRow | undefined> => {
+export const consumeChallenge = async (db: D1DatabaseLike, id: string, kind: ChallengeRow['kind'], binding: string | undefined): Promise<ChallengeRow | undefined> => {
+  if (!binding || !/^[A-Za-z0-9_-]{24}$/.test(id)) return undefined;
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(binding)));
+  const bindingHash = Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
   const usedAt = new Date().toISOString();
   const result = await db.prepare(
-    'UPDATE auth_challenges SET used_at = ? WHERE id = ? AND kind = ? AND used_at IS NULL AND expires_at > ?',
-  ).bind(usedAt, id, kind, usedAt).run();
+    'UPDATE auth_challenges SET used_at = ? WHERE id = ? AND kind = ? AND browser_binding_hash = ? AND used_at IS NULL AND expires_at > ?',
+  ).bind(usedAt, id, kind, bindingHash, usedAt).run();
   if ((result.meta?.changes ?? 0) !== 1) return undefined;
   return (await db.prepare(
     'SELECT id, kind, mode, challenge, user_id AS userId, display_name AS displayName, passkey_label AS passkeyLabel FROM auth_challenges WHERE id = ?',

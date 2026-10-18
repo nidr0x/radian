@@ -197,20 +197,25 @@ export const createAuthorizationCode = async (database: D1DatabaseLike, request:
   return code;
 };
 
-const insertTokens = async (database: D1DatabaseLike, clientId: string, userId: string, scope: string): Promise<{ accessToken: string; refreshToken: string; expiresIn: number }> => {
+const insertTokens = async (database: D1DatabaseLike, clientId: string, userId: string, scope: string): Promise<{ accessToken: string; refreshToken: string; expiresIn: number } | undefined> => {
   const accessToken = randomId(32);
   const refreshToken = randomId(32);
   const now = new Date().toISOString();
   const accessExpiresAt = new Date(Date.now() + ACCESS_TOKEN_TTL_MS).toISOString();
   const refreshExpiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_MS).toISOString();
-  await database.batch([
+  const inserted = await database.batch([
     database.prepare(
-      'INSERT INTO mcp_tokens (token_hash, token_type, client_id, user_id, scope, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    ).bind(await sha256(accessToken), 'access', clientId, userId, scope, now, accessExpiresAt),
+      `INSERT INTO mcp_tokens (token_hash, token_type, client_id, user_id, scope, created_at, expires_at)
+       SELECT ?, 'access', ?, id, ?, ?, ? FROM users WHERE id = ? AND disabled = 0`,
+    ).bind(await sha256(accessToken), clientId, scope, now, accessExpiresAt, userId),
     database.prepare(
-      'INSERT INTO mcp_tokens (token_hash, token_type, client_id, user_id, scope, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    ).bind(await sha256(refreshToken), 'refresh', clientId, userId, scope, now, refreshExpiresAt),
+      `INSERT INTO mcp_tokens (token_hash, token_type, client_id, user_id, scope, created_at, expires_at)
+       SELECT ?, 'refresh', ?, id, ?, ?, ? FROM users WHERE id = ? AND disabled = 0`,
+    ).bind(await sha256(refreshToken), clientId, scope, now, refreshExpiresAt, userId),
   ]);
+  if (inserted.length !== 2 || inserted.some((result) => (result.meta?.changes ?? 0) !== 1)) return undefined;
+  const activeUser = await database.prepare('SELECT 1 AS active FROM users WHERE id = ? AND disabled = 0').bind(userId).first<{ active: number }>();
+  if (!activeUser) return undefined;
   return { accessToken, refreshToken, expiresIn: Math.floor(ACCESS_TOKEN_TTL_MS / 1000) };
 };
 
@@ -223,32 +228,35 @@ export const exchangeAuthorizationCode = async (database: D1DatabaseLike, values
   const row = await database.prepare(
     `SELECT code_hash AS codeHash, client_id AS clientId, user_id AS userId, redirect_uri AS redirectUri,
             code_challenge AS codeChallenge, scope, expires_at AS expiresAt
-       FROM mcp_authorization_codes
-      WHERE code_hash = ? AND client_id = ? AND redirect_uri = ? AND expires_at > ? AND used_at IS NULL`,
+       FROM mcp_authorization_codes c JOIN users u ON u.id = c.user_id AND u.disabled = 0
+      WHERE c.code_hash = ? AND c.client_id = ? AND c.redirect_uri = ? AND c.expires_at > ? AND c.used_at IS NULL`,
   ).bind(await sha256(values.code), values.clientId, values.redirectUri, new Date().toISOString()).first<McpAuthorizationCodeRow>();
   if (!row || row.codeChallenge !== await pkceChallengeFor(values.codeVerifier)) return undefined;
   const result = await database.prepare(
     'UPDATE mcp_authorization_codes SET used_at = ? WHERE code_hash = ? AND used_at IS NULL AND expires_at > ?',
   ).bind(new Date().toISOString(), row.codeHash, new Date().toISOString()).run();
   if ((result.meta?.changes ?? 0) !== 1) return undefined;
-  return { ...(await insertTokens(database, row.clientId, row.userId, row.scope)), scope: row.scope };
+  const tokens = await insertTokens(database, row.clientId, row.userId, row.scope);
+  return tokens ? { ...tokens, scope: row.scope } : undefined;
 };
 
 export const exchangeRefreshToken = async (database: D1DatabaseLike, values: { refreshToken: string; clientId: string }): Promise<{ accessToken: string; refreshToken: string; expiresIn: number; scope: string } | undefined> => {
   const row = await database.prepare(
     `SELECT token_hash AS tokenHash, token_type AS tokenType, client_id AS clientId, user_id AS userId,
             scope, expires_at AS expiresAt
-       FROM mcp_tokens
-      WHERE token_hash = ? AND token_type = 'refresh' AND client_id = ? AND expires_at > ? AND revoked_at IS NULL`,
+       FROM mcp_tokens t JOIN users u ON u.id = t.user_id AND u.disabled = 0
+      WHERE t.token_hash = ? AND t.token_type = 'refresh' AND t.client_id = ? AND t.expires_at > ? AND t.revoked_at IS NULL`,
   ).bind(await sha256(values.refreshToken), values.clientId, new Date().toISOString()).first<McpTokenRow>();
   if (!row) return undefined;
   const revokedAt = new Date().toISOString();
   const result = await database.prepare(
     `UPDATE mcp_tokens SET revoked_at = ?
-      WHERE token_hash = ? AND token_type = 'refresh' AND revoked_at IS NULL AND expires_at > ?`,
+      WHERE token_hash = ? AND token_type = 'refresh' AND revoked_at IS NULL AND expires_at > ?
+        AND EXISTS (SELECT 1 FROM users WHERE users.id = mcp_tokens.user_id AND users.disabled = 0)`,
   ).bind(revokedAt, row.tokenHash, revokedAt).run();
   if ((result.meta?.changes ?? 0) !== 1) return undefined;
-  return { ...(await insertTokens(database, row.clientId, row.userId, row.scope)), scope: row.scope };
+  const tokens = await insertTokens(database, row.clientId, row.userId, row.scope);
+  return tokens ? { ...tokens, scope: row.scope } : undefined;
 };
 
 export const authenticateMcpRequest = async (context: SyncContext): Promise<McpAuthenticatedRequest | Response> => {
@@ -261,8 +269,8 @@ export const authenticateMcpRequest = async (context: SyncContext): Promise<McpA
   const row = await database.prepare(
     `SELECT token_hash AS tokenHash, token_type AS tokenType, client_id AS clientId,
             user_id AS userId, scope, expires_at AS expiresAt
-       FROM mcp_tokens
-      WHERE token_hash = ? AND token_type = 'access' AND expires_at > ? AND revoked_at IS NULL`,
+       FROM mcp_tokens t JOIN users u ON u.id = t.user_id AND u.disabled = 0
+      WHERE t.token_hash = ? AND t.token_type = 'access' AND t.expires_at > ? AND t.revoked_at IS NULL`,
   ).bind(tokenHash, new Date().toISOString()).first<McpTokenRow>();
   if (!row || !hasMcpScope(row.scope, MCP_READ_SCOPE)) return mcpUnauthorized(context);
   return { database, userId: row.userId, clientId: row.clientId, scope: row.scope };

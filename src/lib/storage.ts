@@ -9,6 +9,9 @@ export const STORAGE_KEY = 'radian-data-v1';
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 const isLegacyImage = (imageUrl?: string): boolean => !imageUrl || imageUrl.startsWith('https://wger.de/') || (imageUrl.startsWith('/exercises/atlas-') && (imageUrl.endsWith('.png') || imageUrl.endsWith('.webp')));
 const clampWarmupSets = (value: unknown): number => typeof value === 'number' && Number.isFinite(value) ? Math.min(3, Math.max(0, Math.round(value))) : 0;
+const clampSetCount = (value: unknown, fallback: number): number => typeof value === 'number' && Number.isFinite(value)
+  ? Math.min(12, Math.max(1, Math.round(value)))
+  : fallback;
 const optionalNumber = (value: unknown): number | undefined => typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 const validIncrement = (value: unknown): number => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 2.5;
 const validPolicy = (value: unknown): ProgressionPolicy => value === 'off' || value === 'linear' || value === 'double' ? value : 'double';
@@ -29,9 +32,14 @@ interface SetLogOptions {
   copyCompleted?: boolean;
 }
 
-export const createSetLogs = (sets: number, repMin: number, source?: SetLog[], legacy?: Pick<ExerciseSession, 'actualWeightKg' | 'actualReps' | 'completed'>, options: SetLogOptions = {}): SetLog[] => Array.from({ length: sets + (options.warmupSets ?? 0) }, (_, index) => {
+export const createSetLogs = (sets: number, repMin: number, source?: SetLog[], legacy?: Pick<ExerciseSession, 'actualWeightKg' | 'actualReps' | 'completed'>, options: SetLogOptions = {}): SetLog[] => {
+  const warmupSets = options.warmupSets ?? 0;
+  if (!Number.isInteger(sets) || sets < 1 || sets > 12 || !Number.isInteger(warmupSets) || warmupSets < 0 || warmupSets > 3) {
+    throw new Error('El número de series no es válido.');
+  }
+  return Array.from({ length: sets + warmupSets }, (_, index) => {
   const previous = source?.[index];
-  const phase = previous?.phase ?? (index < (options.warmupSets ?? 0) ? 'warmup' : 'work');
+  const phase = previous?.phase ?? (index < warmupSets ? 'warmup' : 'work');
   return {
     setNumber: index + 1,
     phase,
@@ -40,7 +48,8 @@ export const createSetLogs = (sets: number, repMin: number, source?: SetLog[], l
     weightKg: previous?.weightKg ?? legacy?.actualWeightKg ?? options.defaultWeightKg,
     completed: options.copyCompleted === false ? false : previous?.completed ?? Boolean(legacy?.completed),
   };
-});
+  });
+};
 
 const normalizeSetLogs = (exercise: ExerciseSession): SetLog[] => createSetLogs(exercise.sets, exercise.repMin, exercise.setLogs, exercise, {
   warmupSets: clampWarmupSets(exercise.warmupSets),
@@ -140,6 +149,7 @@ export const migrateData = (value: unknown): AppData => {
       return {
         ...(current ?? exercise),
         ...exercise,
+        sets: clampSetCount(exercise.sets, current?.sets ?? 3),
         warmupSets: clampWarmupSets(exercise.warmupSets ?? current?.warmupSets),
         progressionPolicy: validPolicy(exercise.progressionPolicy ?? current?.progressionPolicy),
         progressionIncrementKg: validIncrement(exercise.progressionIncrementKg ?? current?.progressionIncrementKg),
@@ -154,15 +164,17 @@ export const migrateData = (value: unknown): AppData => {
     plannedExercises: session.plannedExercises.map((exercise) => {
       const visual = exerciseVisuals.get(exercise.exerciseId);
       const planned = fallbackPlanned.get(exercise.exerciseId);
+      const sets = clampSetCount(exercise.sets, planned?.sets ?? 3);
       const warmupSets = clampWarmupSets(exercise.warmupSets);
       return {
         ...exercise,
+        sets,
         warmupSets,
         progressionPolicy: validPolicy(exercise.progressionPolicy ?? planned?.progressionPolicy),
         progressionIncrementKg: validIncrement(exercise.progressionIncrementKg ?? planned?.progressionIncrementKg),
         imageUrl: isLegacyImage(exercise.imageUrl) ? visual?.imageUrl : exercise.imageUrl,
         imagePosition: exercise.imagePosition ?? visual?.imagePosition,
-        setLogs: normalizeSetLogs({ ...exercise, warmupSets }),
+        setLogs: normalizeSetLogs({ ...exercise, sets, warmupSets }),
       };
     }),
   }));

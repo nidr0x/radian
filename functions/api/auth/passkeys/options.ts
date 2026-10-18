@@ -1,5 +1,5 @@
 import { generateRegistrationOptions } from '@simplewebauthn/server';
-import { challengeExpiry, enforceAuthRateLimit, getAuthenticatedContext, getWebAuthnConfig, json, pruneChallenges, randomId, readJson, requireRecentReauthentication } from '../../../lib/auth';
+import { challengeExpiry, createChallengeBinding, enforceAuthRateLimit, getAuthenticatedContext, getWebAuthnConfig, json, pruneChallenges, randomId, readJson, requireRecentReauthentication } from '../../../lib/auth';
 import type { SyncContext } from '../../../types';
 
 interface ExistingCredential { credentialId: string; transports: string }
@@ -28,8 +28,9 @@ export const onRequestPost = async (context: SyncContext): Promise<Response> => 
     excludeCredentials: existing.results.map((credential) => ({ id: credential.credentialId, transports: JSON.parse(credential.transports || '[]') })),
   });
   const challengeId = randomId(18);
+  const binding = await createChallengeBinding(context, challengeId);
   await database.prepare(
-    'INSERT INTO auth_challenges (id, kind, mode, challenge, user_id, display_name, passkey_label, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-  ).bind(challengeId, 'register', 'add_passkey', options.challenge, authenticated.user.id, authenticated.user.displayName, passkeyLabel || 'Passkey', challengeExpiry()).run();
-  return json({ challengeId, options });
+    'INSERT INTO auth_challenges (id, kind, mode, challenge, user_id, display_name, passkey_label, expires_at, browser_binding_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind(challengeId, 'register', 'add_passkey', options.challenge, authenticated.user.id, authenticated.user.displayName, passkeyLabel || 'Passkey', challengeExpiry(), binding.hash).run();
+  return json({ challengeId, options }, 200, { 'Set-Cookie': binding.cookie });
 };

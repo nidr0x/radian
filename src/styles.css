@@ -964,6 +964,9 @@ h3 { font-weight: 650; letter-spacing: -.02em; }
 
 .account-section { display: grid; gap: 13px; }
 .account-section .section-heading { margin-bottom: 0; }
+.account-upload-pending { display: grid; gap: 10px; padding: 12px; border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--line)); border-radius: 14px; background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+.account-upload-pending p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.account-upload-pending button { justify-self: start; }
 .account-identity { display: flex; gap: 11px; align-items: center; padding: 11px; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); border-radius: 14px; background: var(--accent-pale); }
 .account-avatar { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 12px; color: var(--action-ink); background: var(--action); }
 .account-identity > div { display: grid; gap: 3px; min-width: 0; }

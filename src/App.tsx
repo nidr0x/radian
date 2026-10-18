@@ -122,6 +122,7 @@ function App() {
   const [passkeys, setPasskeys] = useState<AuthPasskey[]>([]);
   const [cloudUpdatedAt, setCloudUpdatedAt] = useState<string>();
   const [cloudConflict, setCloudConflict] = useState<CloudData>();
+  const [accountUploadPending, setAccountUploadPending] = useState(false);
   const [online, setOnline] = useState(navigator.onLine);
   const [updateAvailable, setUpdateAvailable] = useState(hasAppUpdate);
   const [recovery, setRecovery] = useState(readRecovery);
@@ -283,21 +284,16 @@ function App() {
   }, []);
   useEffect(() => {
     if (restUntil === null) return undefined;
-    const updateRest = (): void => {
-      const remaining = Math.max(0, Math.ceil((restUntil - Date.now()) / 1000));
-      setRestRemaining(remaining);
-      if (remaining === 0) {
-        setRestUntil(null);
-        setRestContext(undefined);
-        setRestPaused(false);
-        setRestEnded(true);
-        if ('vibrate' in navigator) navigator.vibrate?.(90);
-        setToast('Descanso terminado');
-      }
-    };
-    updateRest();
-    const timer = window.setInterval(updateRest, 250);
-    return () => window.clearInterval(timer);
+    const timer = window.setTimeout(() => {
+      setRestRemaining(0);
+      setRestUntil(null);
+      setRestContext(undefined);
+      setRestPaused(false);
+      setRestEnded(true);
+      if ('vibrate' in navigator) navigator.vibrate?.(90);
+      setToast('Descanso terminado');
+    }, Math.max(0, restUntil - Date.now()));
+    return () => window.clearTimeout(timer);
   }, [restUntil]);
   useEffect(() => {
     if (!toast) return undefined;
@@ -316,18 +312,23 @@ function App() {
   const restartRest = (): void => {
     if (restContext) startRest(restContext.seconds, restContext.exerciseName);
   };
+  const currentRestRemaining = (): number => restUntil === null ? restRemaining : Math.max(0, Math.ceil((restUntil - Date.now()) / 1000));
   const pauseRest = (): void => {
-    if (restRemaining <= 0) return;
+    const remaining = currentRestRemaining();
+    if (remaining <= 0) return;
+    setRestRemaining(remaining);
     setRestUntil(null);
     setRestPaused(true);
   };
   const resumeRest = (): void => {
-    if (restRemaining <= 0) return;
-    setRestUntil(Date.now() + restRemaining * 1000);
+    const remaining = currentRestRemaining();
+    if (remaining <= 0) return;
+    setRestRemaining(remaining);
+    setRestUntil(Date.now() + remaining * 1000);
     setRestPaused(false);
   };
   const adjustRest = (seconds: number): void => {
-    const next = Math.max(1, restRemaining + seconds);
+    const next = Math.max(1, currentRestRemaining() + seconds);
     setRestRemaining(next);
     setRestUntil(restPaused ? null : Date.now() + next * 1000);
   };
@@ -749,6 +750,10 @@ function App() {
   const hydrateAccount = async (user: AuthUser, localSnapshot: AppData): Promise<void> => {
     if (cloudBusyRef.current) return;
     cloudBusyRef.current = true;
+    if (authUserRef.current?.id !== user.id) {
+      setCloudUpdatedAt(undefined);
+      setCloudConflict(undefined);
+    }
     try {
     authUserRef.current = user;
     setAuthUser(user);
@@ -759,6 +764,7 @@ function App() {
     localSnapshot = dataRef.current;
     const localVersion = buildDataVersion(localSnapshot, dataRevisionRef.current);
     if (remote.data) {
+      setAccountUploadPending(false);
       const normalized = migrateData(remote.data);
       const decision = syncDecision(localSnapshot, normalized, remote.updatedAt, readCheckpoint(), user.id);
       if (decision === 'conflict') {
@@ -779,8 +785,25 @@ function App() {
       }
     } else {
       if (readCheckpoint()?.userId === user.id) {
+        setAccountUploadPending(false);
         setAuthStatus('error');
         setAuthError('La copia remota se ha borrado. Tus datos locales siguen guardados; revisa las revisiones del MCP antes de volver a subirlos.');
+        return;
+      }
+      if (accountUploadPending) {
+        setAuthStatus('signed_in');
+        return;
+      }
+      const confirmed = await showConfirm({
+        title: '¿Subir la copia local a tu cuenta?',
+        message: 'Se enviará a D1 la copia completa: perfil, rutinas, sesiones, medidas y seguimiento. Esa copia no usa cifrado de extremo a extremo. Puedes cancelar y seguir usando Radian solo en este dispositivo.',
+        confirmLabel: 'Subir copia',
+        danger: false,
+      });
+      if (!confirmed) {
+        setAccountUploadPending(true);
+        setAuthStatus('signed_in');
+        setAuthError(undefined);
         return;
       }
       const saved = await pushCloudData(localSnapshot);
@@ -793,6 +816,49 @@ function App() {
     } finally {
       cloudBusyRef.current = false;
       setSyncAttempt((value) => value + 1);
+    }
+  };
+
+  const uploadLocalToAccount = async (): Promise<void> => {
+    const user = authUserRef.current;
+    if (!user || !online || cloudBusyRef.current) return;
+    cloudBusyRef.current = true;
+    setAuthStatus('syncing');
+    setAuthError(undefined);
+    cloudSyncReadyRef.current = false;
+    try {
+      const remote = await pullCloudData();
+      if (remote.data) {
+        setCloudConflict(remote);
+        setAccountUploadPending(false);
+        setAuthStatus('error');
+        setAuthError('Ya hay una copia remota. Elige qué copia conservar antes de continuar.');
+        return;
+      }
+      const localSnapshot = dataRef.current;
+      const localVersion = buildDataVersion(localSnapshot, dataRevisionRef.current);
+      const saved = await pushCloudData(localSnapshot);
+      acknowledge(localSnapshot, saved.updatedAt, localVersion);
+      cloudSyncReadyRef.current = true;
+      setAccountUploadPending(false);
+      setAuthStatus('signed_in');
+      setToast('Copia local subida a tu cuenta');
+    } catch (error: unknown) {
+      const value = error instanceof AuthApiError ? error : new AuthApiError('No se pudo subir la copia a D1.', 0);
+      if (value.status === 401) {
+        clearAuthenticatedState();
+        setAuthError(value.message);
+        return;
+      }
+      if (value.status === 409 && value.remote?.data) {
+        setCloudConflict(value.remote);
+        setAccountUploadPending(false);
+      }
+      setAuthStatus('error');
+      reportAuthError(value, 'No se pudo subir la copia a D1.');
+    } finally {
+      cloudBusyRef.current = false;
+      setSyncAttempt((current) => current + 1);
     }
   };
 
@@ -850,6 +916,7 @@ function App() {
   const clearAuthenticatedState = (): void => {
     cloudSyncReadyRef.current = false;
     authUserRef.current = undefined;
+    setAccountUploadPending(false);
     setAuthUser(undefined);
     setPasskeys([]);
     setCloudUpdatedAt(undefined);
@@ -966,7 +1033,7 @@ function App() {
   };
   const pendingChanges = dataVersion !== acknowledged;
   const updateCopy = updateActionCopy(Boolean(activeSession));
-  const connectionLabel = !online ? 'sin conexión' : cloudConflict ? 'conflicto' : authStatus === 'syncing' ? 'sincronizando' : authUser ? pendingChanges ? 'cambios pendientes' : 'sincronizado' : 'guardado local';
+  const connectionLabel = !online ? 'sin conexión' : cloudConflict ? 'conflicto' : authStatus === 'syncing' ? 'sincronizando' : accountUploadPending ? 'copia local pendiente de subir' : authUser ? pendingChanges ? 'cambios pendientes' : 'sincronizado' : 'guardado local';
 
   return (
     <div className={activeSession && view === 'today' ? 'app-shell session-active-app' : 'app-shell'}>
@@ -996,8 +1063,8 @@ function App() {
       <main className="app-main" id="main-content">
         {!online && <section className="profile-section" role="status">Sin conexión. Puedes seguir registrando el entrenamiento; los cambios quedan en este dispositivo.</section>}
         {updateAvailable && <section className="update-banner" role="status"><div className="update-mark"><RotateCcw size={22} aria-hidden="true" /></div><div className="update-copy"><strong>Hay una actualización disponible</strong><p>{activeSession ? 'Puedes actualizar al terminar el entrenamiento.' : 'Tus datos guardados se conservarán al actualizar.'}</p></div>{updateCopy.available ? <button className="primary-button update-button" disabled={Boolean(storageWarning) || authStatus === 'syncing'} onClick={() => { if (persistData(dataRef.current)) applyAppUpdate(); else setStorageWarning('No se pudo guardar antes de actualizar.'); }}>{updateCopy.label}<ChevronRight size={19} /></button> : <span className="update-locked"><Timer size={15} aria-hidden="true" />{updateCopy.label}</span>}</section>}
-        {view === 'profile' && <section className="profile-section data-status-section"><div className="section-heading compact"><div><p className="eyebrow">datos</p><h2>Estado de tus datos</h2></div><span className="data-state-pill">{dataStateCopy({ authenticated: Boolean(authUser), pendingChanges, cloudConflict: Boolean(cloudConflict), codeConnected: Boolean(syncState.key) })}</span></div><p>{authUser ? pendingChanges ? 'Hay cambios locales pendientes de sincronizar.' : 'Tu copia local coincide con la última sincronización.' : 'Los datos están guardados en este dispositivo.'}</p><p>{cloudUpdatedAt ? `Última versión sincronizada: ${new Date(cloudUpdatedAt).toLocaleString('es-ES')}` : 'Todavía no se ha confirmado una sincronización en esta sesión.'}</p><button className="secondary-button small" disabled={!online || authStatus === 'syncing'} onClick={() => void refreshCloud()}>Comprobar sincronización</button>{recovery && <div><p>Copia anterior conservada: {new Date(recovery.savedAt).toLocaleString('es-ES')}</p><button className="secondary-button small" disabled={authStatus === 'syncing'} onClick={restoreLocalRecovery}>Restaurar copia anterior</button><button className="text-button" onClick={() => downloadFile('radian-recovery.json', recovery.backup, 'application/json')}>Exportar copia anterior</button></div>}</section>}
-        {view === 'profile' && <AccountPanel user={authUser} passkeys={passkeys} status={authStatus} error={authError} cloudUpdatedAt={cloudUpdatedAt} onRegister={handleRegisterPasskey} onLogin={handleLoginPasskey} onAddPasskey={handleAddPasskey} onRenamePasskey={handleRenamePasskey} onRevokePasskey={handleRevokePasskey} onLogout={handleLogout} onLogoutEverywhere={handleLogoutEverywhere} />}
+        {view === 'profile' && <section className="profile-section data-status-section"><div className="section-heading compact"><div><p className="eyebrow">datos</p><h2>Estado de tus datos</h2></div><span className="data-state-pill">{accountUploadPending ? 'Solo este dispositivo · pendiente de subir' : dataStateCopy({ authenticated: Boolean(authUser), pendingChanges, cloudConflict: Boolean(cloudConflict), codeConnected: Boolean(syncState.key) })}</span></div><p>{accountUploadPending ? 'La cuenta está conectada, pero la copia local todavía no se ha enviado.' : authUser ? pendingChanges ? 'Hay cambios locales pendientes de sincronizar.' : 'Tu copia local coincide con la última sincronización.' : 'Los datos están guardados en este dispositivo.'}</p><p>{cloudUpdatedAt ? `Última versión sincronizada: ${new Date(cloudUpdatedAt).toLocaleString('es-ES')}` : 'Todavía no se ha confirmado una sincronización en esta sesión.'}</p><button className="secondary-button small" disabled={!online || authStatus === 'syncing'} onClick={() => void refreshCloud()}>Comprobar sincronización</button>{recovery && <div><p>Copia anterior conservada: {new Date(recovery.savedAt).toLocaleString('es-ES')}</p><button className="secondary-button small" disabled={authStatus === 'syncing'} onClick={restoreLocalRecovery}>Restaurar copia anterior</button><button className="text-button" onClick={() => downloadFile('radian-recovery.json', recovery.backup, 'application/json')}>Exportar copia anterior</button></div>}</section>}
+        {view === 'profile' && <AccountPanel user={authUser} passkeys={passkeys} status={authStatus} error={authError} cloudUpdatedAt={cloudUpdatedAt} uploadPending={accountUploadPending} uploadDisabled={!online} onUploadLocal={() => void uploadLocalToAccount()} onRegister={handleRegisterPasskey} onLogin={handleLoginPasskey} onAddPasskey={handleAddPasskey} onRenamePasskey={handleRenamePasskey} onRevokePasskey={handleRevokePasskey} onLogout={handleLogout} onLogoutEverywhere={handleLogoutEverywhere} />}
         {cloudConflict?.data && <SyncConflictCard local={data} remote={cloudConflict} remoteLabel="Copia de la nube" intro="La nube cambió desde la última sincronización. Elige qué copia conservar." onKeepLocal={() => void resolveCloudConflict('local')} onUseRemote={() => void resolveCloudConflict('remote')} />}
         {activeSession && view !== 'today' && <ResumeSessionBanner session={activeSession} onResume={() => setView('today')} />}
         {view === 'today' && <TodayView
@@ -1007,6 +1074,7 @@ function App() {
           onSelectExercise={selectSessionExercise}
           onDeferExercise={deferSessionExercise}
           restRemaining={restRemaining}
+          restUntil={restUntil}
           restExerciseName={restContext?.exerciseName}
           onRestartRest={restartRest}
           screenWakeLockActive={screenWakeLockActive}
@@ -1035,11 +1103,28 @@ function App() {
       {(restRemaining > 0 || toast || storageWarning) && <div className="floating-feedback" aria-live="polite">
         {toast && <div className="toast" role="status"><Check size={16} />{toast}</div>}
         {storageWarning && <div className="storage-warning" role="alert"><CloudOff size={16} />{storageWarning}</div>}
-        {restRemaining > 0 && <div className="rest-float"><Timer size={17} /><div><strong>{formatDuration(restRemaining)}</strong><span>{restContext ? `Tras ${restContext.exerciseName} · ${restPaused ? 'pausado' : 'en curso'}` : restPaused ? 'descanso pausado' : 'descanso en curso'}</span></div><div className="rest-controls"><button type="button" aria-label="Restar 15 segundos" onClick={() => adjustRest(-15)}><Minus size={14} /></button><button type="button" aria-label={restPaused ? 'Reanudar descanso' : 'Pausar descanso'} onClick={restPaused ? resumeRest : pauseRest}>{restPaused ? <Play size={14} fill="currentColor" /> : <Pause size={14} />}</button><button type="button" aria-label="Añadir 30 segundos" onClick={() => adjustRest(30)}><Plus size={14} /></button><button type="button" aria-label="Cerrar temporizador" onClick={() => { setRestUntil(null); setRestRemaining(0); setRestContext(undefined); setRestPaused(false); }}><X size={17} /></button></div></div>}
+        <RestFloating restUntil={restUntil} restRemaining={restRemaining} exerciseName={restContext?.exerciseName} paused={restPaused} onAdjust={adjustRest} onPause={pauseRest} onResume={resumeRest} onClose={() => { setRestUntil(null); setRestRemaining(0); setRestContext(undefined); setRestPaused(false); }} />
       </div>}
       {!data.onboardingComplete && <OnboardingDialog profile={data.profile} onComplete={completeOnboarding} />}
     </div>
   );
+}
+
+function useRestCountdown(restUntil: number | null, pausedRemaining: number): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (restUntil === null) return undefined;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [restUntil]);
+  return restUntil === null ? pausedRemaining : Math.max(0, Math.ceil((restUntil - now) / 1000));
+}
+
+function RestFloating({ restUntil, restRemaining, exerciseName, paused, onAdjust, onPause, onResume, onClose }: { restUntil: number | null; restRemaining: number; exerciseName?: string; paused: boolean; onAdjust: (seconds: number) => void; onPause: () => void; onResume: () => void; onClose: () => void }) {
+  const remaining = useRestCountdown(restUntil, restRemaining);
+  if (remaining <= 0) return null;
+  return <div className="rest-float"><Timer size={17} /><div><strong>{formatDuration(remaining)}</strong><span>{exerciseName ? `Tras ${exerciseName} · ${paused ? 'pausado' : 'en curso'}` : paused ? 'descanso pausado' : 'descanso en curso'}</span></div><div className="rest-controls"><button type="button" aria-label="Restar 15 segundos" onClick={() => onAdjust(-15)}><Minus size={14} /></button><button type="button" aria-label={paused ? 'Reanudar descanso' : 'Pausar descanso'} onClick={paused ? onResume : onPause}>{paused ? <Play size={14} fill="currentColor" /> : <Pause size={14} />}</button><button type="button" aria-label="Añadir 30 segundos" onClick={() => onAdjust(30)}><Plus size={14} /></button><button type="button" aria-label="Cerrar temporizador" onClick={onClose}><X size={17} /></button></div></div>;
 }
 
 const BottomNav = memo(function BottomNav({ view, onChange }: { view: View; onChange: (view: View) => void }) {
@@ -1129,13 +1214,14 @@ function RestEndedOverlay({ nextExerciseName, onDismiss }: { nextExerciseName?: 
   return createPortal(content, document.body);
 }
 
-function TodayView({ data, todayDay, activeSession, onSelectExercise, onDeferExercise, restRemaining, restExerciseName, onRestartRest, screenWakeLockActive, onStart, onDismissRestEnded, onComplete, onDraft, onSwapExercise, onQueueRecovery, onRemoveRecoveryExercise, onRest, onNavigate, onUndo, canUndo, onExit, onHelp }: {
+function TodayView({ data, todayDay, activeSession, onSelectExercise, onDeferExercise, restRemaining, restUntil, restExerciseName, onRestartRest, screenWakeLockActive, onStart, onDismissRestEnded, onComplete, onDraft, onSwapExercise, onQueueRecovery, onRemoveRecoveryExercise, onRest, onNavigate, onUndo, canUndo, onExit, onHelp }: {
   data: AppData;
   todayDay?: WorkoutDay;
   activeSession?: WorkoutSession;
   onSelectExercise: (sessionId: string, index: number) => void;
   onDeferExercise: (session: WorkoutSession) => void;
   restRemaining: number;
+  restUntil: number | null;
   restExerciseName?: string;
   onRestartRest: () => void;
   screenWakeLockActive: boolean;
@@ -1200,16 +1286,16 @@ function TodayView({ data, todayDay, activeSession, onSelectExercise, onDeferExe
       <div className="hero-progress"><strong>{activeSession ? `${activeExerciseNumber}/${activeSession.plannedExercises.length}` : doneToday ? '✓' : String(plannedExercises.length)}</strong><span>{activeSession ? 'ejercicio actual' : doneToday ? 'sesión guardada' : 'bloques'}</span></div>
       <div className="hero-actions">{!activeSession && <button className="primary-button start-button" type="button" onClick={() => setReadinessOpen(true)}><Play size={18} fill="currentColor" /> {primaryAction.label}</button>}<button className="hero-icon-button" type="button" aria-label="Ver rutina" onClick={() => onNavigate('routine')}><Clipboard size={19} /></button><button className="hero-icon-button" type="button" aria-label="Ayuda" onClick={onHelp}><MoreHorizontal size={21} /></button></div>
     </section>
-    {activeSession ? <><SessionAdaptationNotice readiness={activeSession.readiness} /><ActiveSession session={activeSession} restRemaining={restRemaining} restExerciseName={restExerciseName} onRestartRest={onRestartRest} screenWakeLockActive={screenWakeLockActive} previousExercise={previousExercise} bestRecord={bestRecordForExercise(data.sessions, activeSession.plannedExercises[activeSession.activeExerciseIndex]?.exerciseId ?? '')} recommendation={currentRecommendation} progression={currentProgressionCue} progressionAction={currentProgressionAction} alternatives={currentAlternatives} equipmentAlternatives={equipmentAlternatives} exerciseEquipment={activeExerciseEquipment} onSelectExercise={(index) => onSelectExercise(activeSession.id, index)} onDefer={() => onDeferExercise(activeSession)} onComplete={onComplete} onDraft={onDraft} onSwap={(replacement, reason) => onSwapExercise(activeSession.id, activeSession.plannedExercises[activeSession.activeExerciseIndex].plannedExerciseId, replacement, reason)} onRest={onRest} onUndo={onUndo} canUndo={canUndo} onExit={onExit} /> </> : <>
+    {activeSession ? <><SessionAdaptationNotice readiness={activeSession.readiness} /><ActiveSession session={activeSession} restRemaining={restRemaining} restUntil={restUntil} restExerciseName={restExerciseName} onRestartRest={onRestartRest} screenWakeLockActive={screenWakeLockActive} previousExercise={previousExercise} bestRecord={bestRecordForExercise(data.sessions, activeSession.plannedExercises[activeSession.activeExerciseIndex]?.exerciseId ?? '')} recommendation={currentRecommendation} progression={currentProgressionCue} progressionAction={currentProgressionAction} alternatives={currentAlternatives} equipmentAlternatives={equipmentAlternatives} exerciseEquipment={activeExerciseEquipment} onSelectExercise={(index) => onSelectExercise(activeSession.id, index)} onDefer={() => onDeferExercise(activeSession)} onComplete={onComplete} onDraft={onDraft} onSwap={(replacement, reason) => onSwapExercise(activeSession.id, activeSession.plannedExercises[activeSession.activeExerciseIndex].plannedExerciseId, replacement, reason)} onRest={onRest} onUndo={onUndo} canUndo={canUndo} onExit={onExit} /> </> : <>
       {completedSummary && latestCompletedToday && <CompletedSessionSummary session={latestCompletedToday} summary={completedSummary} comparisons={completedExerciseComparisons} onQueueRecovery={onQueueRecovery} onViewProgress={() => onNavigate('progress')} />}
       {pendingRecoveryItems.length > 0 && <RecoveryQueueCard items={pendingRecoveryItems} onRemove={onRemoveRecoveryExercise} />}
-      <TodayDashboardAside data={data} onNavigate={onNavigate} />
       <section className="training-plan" aria-labelledby="training-plan-title">
         <div className="section-heading plan-heading"><div><p className="eyebrow">el plan</p><h2 id="training-plan-title">{isAlternativeWorkout ? 'Sesión elegida para hoy' : workoutDay.weekday === currentWeekday() ? 'Tu sesión' : 'Próximo entrenamiento'}</h2><div className="plan-summary" aria-label="Resumen del entrenamiento"><span><Dumbbell size={16} aria-hidden="true" /> {plannedExercises.length} ejercicios</span><span className="plan-summary-separator" aria-hidden="true">·</span><span><Layers3 size={16} aria-hidden="true" /> {plannedSets} series</span><span className="plan-summary-separator" aria-hidden="true">·</span><span><Timer size={16} aria-hidden="true" /> ~{data.profile.sessionMinutes} min</span></div></div><button className="text-button plan-edit-button" type="button" onClick={() => onNavigate('routine')}><Pencil size={17} aria-hidden="true" /> Editar rutina <ChevronRight size={16} aria-hidden="true" /></button></div>
         <p className="today-start-hint plan-info"><Info size={17} aria-hidden="true" /><span>{primaryAction.hint}</span></p>
         {readinessOpen && <ReadinessPrompt value={readiness} onChange={setReadiness} onSkip={() => { setReadinessOpen(false); onDismissRestEnded(); onStart(workoutDay); }} onStart={() => { setReadinessOpen(false); onDismissRestEnded(); onStart(workoutDay, readiness); }} />}
         <div className="exercise-list plan-exercise-list">{plannedExercises.map((exercise, index) => <ExercisePreview key={exercise.id} exercise={exercise} index={index} muscleGroup={data.exercises.find((item) => item.id === exercise.exerciseId)?.muscleGroup} onOpenDetails={() => setDetailExercise(exercise)} />)}</div>
       </section>
+      <TodayDashboardAside data={data} onNavigate={onNavigate} />
 
     </>}
   </section>{detailExercise && <ExerciseDetailSheet exercise={detailExercise} muscleGroup={data.exercises.find((item) => item.id === detailExercise.exerciseId)?.muscleGroup} guidance={exerciseGuidance[detailExercise.exerciseId]} recommendation={recommendationFor(detailExercise.exerciseId, data.sessions)} progressionAction={progressionAction(detailExercise.exerciseId, data.sessions, detailExercise)} lastSession={latestExercise(data.sessions, detailExercise.exerciseId)} onClose={() => setDetailExercise(undefined)} />}</>;
@@ -1327,7 +1413,8 @@ function CompletedSessionSummary({ session, summary, comparisons, onQueueRecover
   </section>;
 }
 
-function ActiveSession({ session, restRemaining, restExerciseName, onRestartRest, screenWakeLockActive, previousExercise, bestRecord, recommendation, progression, progressionAction: action, alternatives, equipmentAlternatives, exerciseEquipment, onSelectExercise, onDefer, onComplete, onDraft, onSwap, onRest, onUndo, canUndo, onExit }: { session: WorkoutSession; restRemaining: number; restExerciseName?: string; onRestartRest: () => void; screenWakeLockActive: boolean; previousExercise?: ExerciseSession; bestRecord?: ExerciseRecord; recommendation?: ReturnType<typeof recommendationFor>; progression?: string; progressionAction?: ReturnType<typeof progressionAction>; alternatives: ExerciseDefinition[]; equipmentAlternatives: ExerciseDefinition[]; exerciseEquipment?: ExerciseEquipment; onSelectExercise: (index: number) => void; onDefer: () => void; onComplete: (session: WorkoutSession, exercise: ExerciseSession, patch: Partial<ExerciseSession>, startRest: boolean) => void; onDraft: (sessionId: string, plannedExerciseId: string, patch: Partial<ExerciseSession>) => void; onSwap: (replacement: ExerciseDefinition, reason: 'discomfort' | 'equipment') => void; onRest: () => void; onUndo: () => void; canUndo: boolean; onExit: () => void }) {
+function ActiveSession({ session, restRemaining, restUntil, restExerciseName, onRestartRest, screenWakeLockActive, previousExercise, bestRecord, recommendation, progression, progressionAction: action, alternatives, equipmentAlternatives, exerciseEquipment, onSelectExercise, onDefer, onComplete, onDraft, onSwap, onRest, onUndo, canUndo, onExit }: { session: WorkoutSession; restRemaining: number; restUntil: number | null; restExerciseName?: string; onRestartRest: () => void; screenWakeLockActive: boolean; previousExercise?: ExerciseSession; bestRecord?: ExerciseRecord; recommendation?: ReturnType<typeof recommendationFor>; progression?: string; progressionAction?: ReturnType<typeof progressionAction>; alternatives: ExerciseDefinition[]; equipmentAlternatives: ExerciseDefinition[]; exerciseEquipment?: ExerciseEquipment; onSelectExercise: (index: number) => void; onDefer: () => void; onComplete: (session: WorkoutSession, exercise: ExerciseSession, patch: Partial<ExerciseSession>, startRest: boolean) => void; onDraft: (sessionId: string, plannedExerciseId: string, patch: Partial<ExerciseSession>) => void; onSwap: (replacement: ExerciseDefinition, reason: 'discomfort' | 'equipment') => void; onRest: () => void; onUndo: () => void; canUndo: boolean; onExit: () => void }) {
+  const visibleRestRemaining = useRestCountdown(restUntil, restRemaining);
   const exercise = session.plannedExercises[session.activeExerciseIndex];
   const [setLogs, setSetLogs] = useState<SetLog[]>([]);
   const [discomfort, setDiscomfort] = useState(false);
@@ -1391,7 +1478,7 @@ function ActiveSession({ session, restRemaining, restExerciseName, onRestartRest
   const skipExercise = (): void => onComplete(session, exercise, { completed: false, difficulty: 'incomplete', setLogs, discomfort, discomfortNote: note || undefined }, false);
 
   return <div className="session-wrap"><SessionExerciseNavigator session={session} onSelect={onSelectExercise} /><div className="session-topline"><div><p className="eyebrow">sesión en curso</p><strong>Ejercicio {currentExerciseNumber} de {session.plannedExercises.length}</strong><span className="session-completed-count">{completed} completados</span></div><div className="session-progress"><span style={{ width: `${progress}%` }} /></div><div className="session-menu-wrap"><button className="icon-button subtle" aria-label="Opciones de la sesión" aria-expanded={sessionMenuOpen} onClick={() => setSessionMenuOpen((value) => !value)}><MoreHorizontal size={19} /></button>{sessionMenuOpen && <div className="session-menu"><button type="button" onClick={() => { onUndo(); setSessionMenuOpen(false); }} disabled={!canUndo}><RotateCcw size={15} /> Deshacer último</button><button type="button" onClick={() => { skipExercise(); setSessionMenuOpen(false); }}><SkipForward size={15} /> Saltar definitivamente</button><button type="button" className="danger-action" onClick={() => { setSessionMenuOpen(false); onExit(); }}><X size={15} /> Salir de la sesión</button></div>}</div></div>
-    {restRemaining > 0 && <div className="rest-inline"><Timer size={16} /><span>{restExerciseName ? <>Descanso tras <strong>{restExerciseName}</strong>: {formatDuration(restRemaining)}.</> : <>Descansa {formatDuration(restRemaining)} antes del siguiente ejercicio.</>}</span><button onClick={onRestartRest}>Reiniciar</button></div>}
+    {visibleRestRemaining > 0 && <div className="rest-inline"><Timer size={16} /><span>{restExerciseName ? <>Descanso tras <strong>{restExerciseName}</strong>: {formatDuration(visibleRestRemaining)}.</> : <>Descansa {formatDuration(visibleRestRemaining)} antes del siguiente ejercicio.</>}</span><button onClick={onRestartRest}>Reiniciar</button></div>}
     <article className="active-exercise-card"><div className="active-card-header"><span className="exercise-kicker">ejercicio {session.activeExerciseIndex + 1} / {session.plannedExercises.length}</span><span className="active-status"><span className="status-dot" /> {screenWakeLockActive ? 'pantalla activa' : 'guardado en este dispositivo'}</span></div><div className="active-exercise-overview"><ExerciseThumb src={exercise.imageUrl} position={exercise.imagePosition} alt={`Referencia de ${exercise.name}`} large /><div className="active-exercise-summary"><h2 id="active-exercise-title" tabIndex={-1}>{exercise.name}</h2><div className="target-row"><div><strong>{exercise.sets}</strong><span>series de trabajo</span></div>{exercise.warmupSets > 0 && <div><strong>{exercise.warmupSets}</strong><span>calentamiento</span></div>}<div><strong>{exercise.repMin}-{exercise.repMax}</strong><span>repeticiones</span></div><div><strong>{formatDuration(exercise.restSeconds)}</strong><span>descanso</span></div></div></div></div><div className="session-equipment-actions"><button className="secondary-button small" type="button" onClick={onDefer}><Pause size={15} /> Aplazar ejercicio</button><button className="secondary-button small" type="button" aria-expanded={equipmentAlternativesOpen} aria-controls="session-equipment-alternatives" onClick={() => setEquipmentAlternativesOpen((open) => !open)}><Dumbbell size={15} /> {equipmentAlternativesOpen ? 'Ocultar alternativas' : 'Equipo ocupado · ver alternativas'}</button></div><section className="session-equipment-alternative-panel" hidden={!equipmentAlternativesOpen} id="session-equipment-alternatives" aria-label="Alternativas por equipo ocupado"><strong>Alternativas para esta sesión</strong><p>El cambio solo afecta a esta sesión; tu rutina queda igual.</p>{equipmentAlternatives.length > 0 ? <div className="alternative-actions">{equipmentAlternatives.map((replacement) => <button type="button" className="secondary-button small" key={replacement.id} onClick={() => { onSwap(replacement, 'equipment'); setEquipmentAlternativesOpen(false); }}>{replacement.name}</button>)}</div> : <p>No hay otra variante de este grupo con el equipo disponible. Puedes aplazarlo y volver más tarde.</p>}</section><div className="difficulty-prompt"><p>¿Cómo ha ido?<span>{completionActionHint}</span></p><div className="difficulty-grid">{difficultyOptions.map((option) => <button type="button" key={option.value} aria-label={`${option.label}: ${completionActionHint.toLowerCase()}`} className={pendingDifficulty === option.value ? `difficulty-button ${option.value} selected` : `difficulty-button ${option.value}`} onClick={() => saveExercise(option.value)}><span>{option.label}</span><small>{option.hint}</small></button>)}</div></div><details className="active-insights"><summary><Gauge size={15} /> Ver consejo, historial y marcas</summary><div className="active-insights-body">{previousExercise && <p className="last-session-summary"><History size={14} /> Última vez: {previousExercise.sets} series · {formatExerciseSummary(previousExercise)}</p>}{bestRecord && <p className="personal-record-note"><Trophy size={14} /> Mejor marca: {formatWeight(bestRecord.maxWeightKg)}{bestRecord.maxWeightReps ? ` · ${bestRecord.maxWeightReps} reps` : ''}</p>}{action && <div className={`progression-note ${action.tone}`}><Gauge size={16} /><div><strong>{action.title}</strong><span>{action.detail}</span></div></div>}{progression && !action && <div className={`progression-note ${recommendation?.tone ?? 'neutral'}`}><Gauge size={16} /><span>{progression}</span></div>}</div></details><SetLogEditor logs={setLogs} repMin={exercise.repMin} repMax={exercise.repMax} exerciseEquipment={exerciseEquipment} hasPrevious={Boolean(previousExercise)} prefilled={Boolean(previousExercise && setLogs.some((set) => set.actualReps !== undefined || set.weightKg !== undefined))} onChange={updateSet} onCopy={copyPrevious} /><button type="button" className="details-toggle" onClick={() => setDetailsOpen((value) => !value)}><Plus size={17} /> {detailsOpen ? 'Ocultar molestias y nota' : 'Añadir molestias o nota'}</button>{detailsOpen && <div className="optional-fields"><label className="toggle-field"><span>¿Alguna molestia?</span><button type="button" className={discomfort ? 'toggle on' : 'toggle'} aria-pressed={discomfort} onClick={() => { const next = !discomfort; setDiscomfort(next); onDraft(session.id, exercise.plannedExerciseId, { discomfort: next }); }}><span /></button></label><label className="full-field">Nota breve <textarea value={note} onChange={(event) => { setNote(event.target.value); onDraft(session.id, exercise.plannedExerciseId, { discomfortNote: event.target.value || undefined }); }} placeholder="¿Qué has notado?" rows={2} /></label>{discomfort && <div className="discomfort-panel"><strong>Prueba otra variante</strong><span>La rutina original no cambia. Elige una opción del mismo grupo para continuar con menos dudas.</span>{alternatives.length > 0 ? <div className="alternative-actions">{alternatives.map((replacement) => <button type="button" className="secondary-button small" key={replacement.id} onClick={() => onSwap(replacement, 'discomfort')}>{replacement.name}</button>)}</div> : <p>No hay otra variante guardada para este grupo. Puedes bajar la carga o parar y anotar lo ocurrido.</p>}</div>}</div>}</article><div className="session-next"><span>Después</span><strong>{nextExerciseIndex === undefined ? 'Fin de la sesión' : session.plannedExercises[nextExerciseIndex].name}</strong><ArrowDown size={17} /></div><p className="session-note"><Info size={14} /> Solo necesitas marcar cómo ha ido. El registro por series es opcional.</p></div>;
 }
 
@@ -2021,10 +2108,10 @@ function OnboardingDialog({ profile, onComplete }: { profile: UserProfile; onCom
     trainingDays: form.trainingDays.length ? form.trainingDays : profile.trainingDays,
     availableEquipment: form.availableEquipment.length ? form.availableEquipment : profile.availableEquipment,
   });
-  return <div className="onboarding-backdrop"><section className="onboarding-dialog" role="dialog" aria-modal="true" aria-labelledby="onboarding-title"><div className="onboarding-kicker"><Sparkles size={16} /> primera configuración</div><h2 id="onboarding-title">Vamos a dejarlo a tu medida.</h2><p className="onboarding-lead">Unos datos básicos para que la rutina de Hoy encaje contigo desde el primer entrenamiento.</p><form onSubmit={(event) => { event.preventDefault(); save(); }}><label className="onboarding-field">¿Dónde entrenas?<input value={form.gym} onChange={(event) => setForm((current) => ({ ...current, gym: event.target.value }))} placeholder="Ej. Evanfit Picanya" /></label><label className="onboarding-field">¿Qué quieres conseguir?<input value={form.goal} onChange={(event) => setForm((current) => ({ ...current, goal: event.target.value }))} placeholder="Ej. ganar fuerza" /></label><div className="onboarding-grid"><label className="onboarding-field">Duración habitual<span>minutos</span><input inputMode="numeric" value={form.sessionMinutes} onChange={(event) => setForm((current) => ({ ...current, sessionMinutes: event.target.value }))} /></label><div className="onboarding-field"><span>¿Qué días entrenas?</span><span>elige los tuyos</span><DayPicker selected={form.trainingDays} onChange={(trainingDays) => setForm((current) => ({ ...current, trainingDays }))} /></div></div><div className="onboarding-field equipment-field"><span>¿Qué material tienes disponible?</span><span>Las sustituciones y la biblioteca se adaptarán a esto</span><EquipmentPicker selected={form.availableEquipment} onChange={(availableEquipment) => setForm((current) => ({ ...current, availableEquipment }))} /></div><fieldset className="experience-options"><legend>Tu punto de partida</legend>{experienceOptions.map((option) => <label key={option.value} className={form.experienceLevel === option.value ? 'experience-option selected' : 'experience-option'}><input type="radio" name="experience" value={option.value} checked={form.experienceLevel === option.value} onChange={() => setForm((current) => ({ ...current, experienceLevel: option.value }))} /><span><strong>{option.label}</strong><small>{option.description}</small></span></label>)}</fieldset><div className="onboarding-section"><div className="onboarding-section-heading"><span>Datos opcionales</span><small>No hacen falta para empezar</small></div><div className="onboarding-grid"><label className="onboarding-field">Altura<span>cm · opcional</span><input inputMode="decimal" value={form.heightCm} onChange={(event) => setForm((current) => ({ ...current, heightCm: event.target.value }))} placeholder="-" /></label><label className="onboarding-field">Peso actual<span>kg · opcional</span><input inputMode="decimal" value={form.currentWeightKg} onChange={(event) => setForm((current) => ({ ...current, currentWeightKg: event.target.value }))} placeholder="-" /></label></div><p className="onboarding-privacy"><CloudOff size={15} /> Se guarda todo en este dispositivo. Puedes dejar estos datos vacíos y completarlos más adelante.</p></div><div className="onboarding-actions"><button className="primary-button" type="submit">Guardar y empezar <ChevronRight size={17} /></button><button className="secondary-button" type="button" onClick={() => onComplete({})}>Empezar sin completar</button></div></form></section></div>;
+  return <div className="onboarding-backdrop"><section className="onboarding-dialog" role="dialog" aria-modal="true" aria-labelledby="onboarding-title"><div className="onboarding-kicker"><Sparkles size={16} /> primera configuración</div><h2 id="onboarding-title">Vamos a dejarlo a tu medida.</h2><p className="onboarding-lead">Unos datos básicos para que la rutina de Hoy encaje contigo desde el primer entrenamiento.</p><form onSubmit={(event) => { event.preventDefault(); save(); }}><label className="onboarding-field">¿Dónde entrenas?<input value={form.gym} onChange={(event) => setForm((current) => ({ ...current, gym: event.target.value }))} placeholder="Ej. Evanfit Picanya" /></label><label className="onboarding-field">¿Qué quieres conseguir?<input value={form.goal} onChange={(event) => setForm((current) => ({ ...current, goal: event.target.value }))} placeholder="Ej. ganar fuerza" /></label><div className="onboarding-grid"><label className="onboarding-field">Duración habitual<span>minutos</span><input inputMode="numeric" value={form.sessionMinutes} onChange={(event) => setForm((current) => ({ ...current, sessionMinutes: event.target.value }))} /></label><div className="onboarding-field"><span>¿Qué días entrenas?</span><span>elige los tuyos</span><DayPicker selected={form.trainingDays} onChange={(trainingDays) => setForm((current) => ({ ...current, trainingDays }))} /></div></div><div className="onboarding-field equipment-field"><span>¿Qué material tienes disponible?</span><span>Las sustituciones y la biblioteca se adaptarán a esto</span><EquipmentPicker selected={form.availableEquipment} onChange={(availableEquipment) => setForm((current) => ({ ...current, availableEquipment }))} /></div><fieldset className="experience-options"><legend>Tu punto de partida</legend>{experienceOptions.map((option) => <label key={option.value} className={form.experienceLevel === option.value ? 'experience-option selected' : 'experience-option'}><input type="radio" name="experience" value={option.value} checked={form.experienceLevel === option.value} onChange={() => setForm((current) => ({ ...current, experienceLevel: option.value }))} /><span><strong>{option.label}</strong><small>{option.description}</small></span></label>)}</fieldset><div className="onboarding-section"><div className="onboarding-section-heading"><span>Datos opcionales</span><small>No hacen falta para empezar</small></div><div className="onboarding-grid"><label className="onboarding-field">Altura<span>cm · opcional</span><input inputMode="decimal" value={form.heightCm} onChange={(event) => setForm((current) => ({ ...current, heightCm: event.target.value }))} placeholder="-" /></label><label className="onboarding-field">Peso actual<span>kg · opcional</span><input inputMode="decimal" value={form.currentWeightKg} onChange={(event) => setForm((current) => ({ ...current, currentWeightKg: event.target.value }))} placeholder="-" /></label></div><p className="onboarding-privacy"><CloudOff size={15} /> En modo local, los datos se guardan en este dispositivo. Si conectas una cuenta, la copia completa se almacena en D1 sin cifrado de extremo a extremo.</p></div><div className="onboarding-actions"><button className="primary-button" type="submit">Guardar y empezar <ChevronRight size={17} /></button><button className="secondary-button" type="button" onClick={() => onComplete({})}>Empezar sin completar</button></div></form></section></div>;
 }
 
-function AccountPanel({ user, passkeys, status, error, cloudUpdatedAt, onRegister, onLogin, onAddPasskey, onRenamePasskey, onRevokePasskey, onLogout, onLogoutEverywhere }: { user?: AuthUser; passkeys: AuthPasskey[]; status: AuthStatus; error?: string; cloudUpdatedAt?: string; onRegister: (displayName: string, passkeyLabel: string) => void; onLogin: () => void; onAddPasskey: (passkeyLabel: string) => void; onRenamePasskey: (credentialId: string, label: string) => void; onRevokePasskey: (credentialId: string) => void; onLogout: () => void; onLogoutEverywhere: () => void }) {
+function AccountPanel({ user, passkeys, status, error, cloudUpdatedAt, uploadPending, uploadDisabled, onUploadLocal, onRegister, onLogin, onAddPasskey, onRenamePasskey, onRevokePasskey, onLogout, onLogoutEverywhere }: { user?: AuthUser; passkeys: AuthPasskey[]; status: AuthStatus; error?: string; cloudUpdatedAt?: string; uploadPending: boolean; uploadDisabled: boolean; onUploadLocal: () => void; onRegister: (displayName: string, passkeyLabel: string) => void; onLogin: () => void; onAddPasskey: (passkeyLabel: string) => void; onRenamePasskey: (credentialId: string, label: string) => void; onRevokePasskey: (credentialId: string) => void; onLogout: () => void; onLogoutEverywhere: () => void }) {
   const [displayName, setDisplayName] = useState('');
   const [passkeyLabel, setPasskeyLabel] = useState('Passkey principal');
   const [editingId, setEditingId] = useState<string>();
@@ -2033,7 +2120,7 @@ function AccountPanel({ user, passkeys, status, error, cloudUpdatedAt, onRegiste
   const statusCopy = status === 'checking' ? 'Comprobando tu cuenta…' : status === 'registering' ? 'Preparando tu passkey…' : status === 'signing_in' ? 'Esperando la confirmación…' : status === 'syncing' ? 'Sincronizando con D1…' : user ? cloudUpdatedAt ? `Sincronizado ${new Date(cloudUpdatedAt).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' })}` : 'Cuenta conectada' : 'Sin cuenta en la nube';
   const beginEdit = (passkey: AuthPasskey): void => { setEditingId(passkey.credentialId); setEditingLabel(passkey.label); };
   const saveEdit = (): void => { if (editingId && editingLabel.trim()) onRenamePasskey(editingId, editingLabel.trim()); setEditingId(undefined); };
-  return <section className="profile-section account-section"><div className="section-heading compact"><div><p className="eyebrow">cuenta · opcional</p><h2>{user ? 'Tu cuenta Radian' : 'Sincroniza con passkey'}</h2></div><Fingerprint size={21} /></div>{user ? <><div className="account-identity"><span className="account-avatar"><Fingerprint size={19} /></span><div><strong>{user.displayName}</strong><span>{statusCopy}</span></div></div><p className="section-description">Tus rutinas y sesiones se guardan en D1 y siguen disponibles en este dispositivo aunque estés sin conexión.</p><label className="account-name-field">Nombre de la nueva passkey<input value={passkeyLabel} onChange={(event) => setPasskeyLabel(event.target.value)} placeholder="Ej. iPhone" /></label><div className="account-actions"><button className="primary-button small" type="button" onClick={() => onAddPasskey(passkeyLabel.trim() || 'Passkey')} disabled={busy}><Fingerprint size={15} /> Añadir passkey</button><button className="secondary-button small" type="button" onClick={onLogout}><LogOut size={15} /> Cerrar sesión</button><button className="text-button danger-text" type="button" onClick={onLogoutEverywhere}>Cerrar en todos</button></div><div className="passkey-list"><div className="passkey-list-heading"><strong>Tus dispositivos</strong><span>{passkeys.length} passkey{passkeys.length === 1 ? '' : 's'}</span></div>{passkeys.map((passkey) => <div className="passkey-row" key={passkey.credentialId}>{editingId === passkey.credentialId ? <input value={editingLabel} onChange={(event) => setEditingLabel(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') saveEdit(); if (event.key === 'Escape') setEditingId(undefined); }} autoFocus /> : <div><strong>{passkey.label}</strong><span>{passkey.lastUsedAt ? `Usada ${new Date(passkey.lastUsedAt).toLocaleDateString('es-ES')}` : `Añadida ${new Date(passkey.createdAt).toLocaleDateString('es-ES')}`}</span></div>}<div className="passkey-row-actions">{editingId === passkey.credentialId ? <button type="button" aria-label="Guardar nombre" onClick={saveEdit}><Save size={15} /></button> : <button type="button" aria-label={`Renombrar ${passkey.label}`} onClick={() => beginEdit(passkey)}><Pencil size={15} /></button>}<button type="button" aria-label={`Revocar ${passkey.label}`} onClick={() => onRevokePasskey(passkey.credentialId)} disabled={passkeys.length <= 1}><Trash2 size={15} /></button></div></div>)}</div></> : <><p className="section-description">Usa la huella, Face ID, PIN o el gestor de contraseñas del dispositivo. No necesitas crear ni recordar una contraseña.</p><label className="account-name-field">Nombre para tu perfil<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Ej. Carlos" autoComplete="name" /></label><label className="account-name-field">Nombre de la passkey<input value={passkeyLabel} onChange={(event) => setPasskeyLabel(event.target.value)} placeholder="Ej. iPhone" /></label><div className="account-actions"><button className="primary-button small" type="button" onClick={() => onRegister(displayName.trim(), passkeyLabel.trim() || 'Passkey principal')} disabled={busy || !displayName.trim()}><UserPlus size={15} /> Crear con passkey</button><button className="secondary-button small" type="button" onClick={onLogin} disabled={busy}><LogIn size={15} /> Entrar</button></div><p className="account-status" role="status">{statusCopy}</p></>}{error && <p className="error-message" role="alert">{error}</p>}<p className="sync-security"><LockKeyhole size={13} /> La passkey nunca sale del dispositivo. Radian guarda la clave pública necesaria para verificarla.</p></section>;
+  return <section className="profile-section account-section"><div className="section-heading compact"><div><p className="eyebrow">cuenta · opcional</p><h2>{user ? 'Tu cuenta Radian' : 'Sincroniza con passkey'}</h2></div><Fingerprint size={21} /></div>{user ? <><div className="account-identity"><span className="account-avatar"><Fingerprint size={19} /></span><div><strong>{user.displayName}</strong><span>{statusCopy}</span></div></div><p className="section-description">La copia de tu cuenta incluye el perfil completo, rutinas, sesiones y métricas, y se almacena en D1 sin cifrado de extremo a extremo. En este dispositivo, Radian sigue disponible sin conexión.</p>{uploadPending && <div className="account-upload-pending" role="status"><p>Tu copia local sigue solo en este dispositivo. Sube los datos cuando quieras activar la copia de la cuenta.</p><button className="primary-button small" type="button" onClick={onUploadLocal} disabled={busy || uploadDisabled}>Subir copia local a la cuenta</button></div>}<label className="account-name-field">Nombre de la nueva passkey<input value={passkeyLabel} onChange={(event) => setPasskeyLabel(event.target.value)} placeholder="Ej. iPhone" /></label><div className="account-actions"><button className="primary-button small" type="button" onClick={() => onAddPasskey(passkeyLabel.trim() || 'Passkey')} disabled={busy}><Fingerprint size={15} /> Añadir passkey</button><button className="secondary-button small" type="button" onClick={onLogout}><LogOut size={15} /> Cerrar sesión</button><button className="text-button danger-text" type="button" onClick={onLogoutEverywhere}>Cerrar en todos</button></div><div className="passkey-list"><div className="passkey-list-heading"><strong>Tus dispositivos</strong><span>{passkeys.length} passkey{passkeys.length === 1 ? '' : 's'}</span></div>{passkeys.map((passkey) => <div className="passkey-row" key={passkey.credentialId}>{editingId === passkey.credentialId ? <input value={editingLabel} onChange={(event) => setEditingLabel(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') saveEdit(); if (event.key === 'Escape') setEditingId(undefined); }} autoFocus /> : <div><strong>{passkey.label}</strong><span>{passkey.lastUsedAt ? `Usada ${new Date(passkey.lastUsedAt).toLocaleDateString('es-ES')}` : `Añadida ${new Date(passkey.createdAt).toLocaleDateString('es-ES')}`}</span></div>}<div className="passkey-row-actions">{editingId === passkey.credentialId ? <button type="button" aria-label="Guardar nombre" onClick={saveEdit}><Save size={15} /></button> : <button type="button" aria-label={`Renombrar ${passkey.label}`} onClick={() => beginEdit(passkey)}><Pencil size={15} /></button>}<button type="button" aria-label={`Revocar ${passkey.label}`} onClick={() => onRevokePasskey(passkey.credentialId)} disabled={passkeys.length <= 1}><Trash2 size={15} /></button></div></div>)}</div></> : <><p className="section-description">Usa la huella, Face ID, PIN o el gestor de contraseñas del dispositivo. No necesitas crear ni recordar una contraseña.</p><label className="account-name-field">Nombre para tu perfil<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Ej. Carlos" autoComplete="name" /></label><label className="account-name-field">Nombre de la passkey<input value={passkeyLabel} onChange={(event) => setPasskeyLabel(event.target.value)} placeholder="Ej. iPhone" /></label><div className="account-actions"><button className="primary-button small" type="button" onClick={() => onRegister(displayName.trim(), passkeyLabel.trim() || 'Passkey principal')} disabled={busy || !displayName.trim()}><UserPlus size={15} /> Crear con passkey</button><button className="secondary-button small" type="button" onClick={onLogin} disabled={busy}><LogIn size={15} /> Entrar</button></div><p className="account-status" role="status">{statusCopy}</p></>}{error && <p className="error-message" role="alert">{error}</p>}<p className="sync-security"><LockKeyhole size={13} /> La passkey nunca sale del dispositivo. Radian guarda la clave pública necesaria para verificarla.</p></section>;
 }
 
 function ProfileView({ data, authUser, theme, onThemeChange, onUpdateProfile, onRepeatOnboarding, onImport, onConfirmImport, onConfirmEquipment, syncState, syncStatus, syncError, syncConflict, onKeepLocalSync, onUseRemoteSync, onConnectSync, onUploadSync, onDownloadSync, onDisconnectSync, onRevokeSync, onInstall, isInstalled }: { data: AppData; authUser?: AuthUser; theme: Theme; onThemeChange: (theme: Theme) => void; onUpdateProfile: (profile: Partial<AppData['profile']>, adaptEquipmentPlan?: boolean) => void; onRepeatOnboarding: () => void; onImport: (data: AppData) => void; onConfirmImport: () => Promise<boolean>; onConfirmEquipment: (message: string) => Promise<boolean>; syncState: SyncState; syncStatus: SyncStatus; syncError?: string; syncConflict?: RemoteSyncData; onKeepLocalSync: () => void; onUseRemoteSync: () => void; onConnectSync: (key: string) => void; onUploadSync: () => void; onDownloadSync: () => void; onDisconnectSync: () => void; onRevokeSync: () => void; onInstall?: () => void; isInstalled: boolean }) {
