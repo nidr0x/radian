@@ -1,5 +1,5 @@
 import { verifyRegistrationResponse } from '@simplewebauthn/server';
-import { consumeChallenge, enforceAuthRateLimit, getAuthenticatedContext, getWebAuthnConfig, issueSessionCookie, isRecord, json, readJson, requireAuthConfiguration, requireDatabase, requireRecentReauthentication } from '../../../lib/auth';
+import { consumeChallenge, enforceAuthRateLimit, getAuthenticatedContext, getChallengeBinding, getWebAuthnConfig, issueSessionCookie, isRecord, json, readJson, requireAuthConfiguration, requireDatabase, requireRecentReauthentication } from '../../../lib/auth';
 import type { SyncContext } from '../../../types';
 
 export const onRequestPost = async (context: SyncContext): Promise<Response> => {
@@ -13,7 +13,7 @@ export const onRequestPost = async (context: SyncContext): Promise<Response> => 
   const challengeId = typeof body.challengeId === 'string' ? body.challengeId : '';
   const credential = body.credential;
   if (!challengeId || !isRecord(credential)) return json({ error: 'invalid_request', message: 'La solicitud de registro no es válida.' }, 400);
-  const challenge = await consumeChallenge(database, challengeId, 'register');
+  const challenge = await consumeChallenge(database, challengeId, 'register', getChallengeBinding(context, challengeId));
   if (!challenge?.userId || !challenge.displayName) return json({ error: 'challenge_expired', message: 'La solicitud ha caducado. Inténtalo de nuevo.' }, 400);
   if (challenge.mode === 'add_passkey') {
     const authenticated = await getAuthenticatedContext(context);

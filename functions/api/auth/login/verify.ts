@@ -1,5 +1,5 @@
 import { verifyAuthenticationResponse } from '@simplewebauthn/server';
-import { consumeChallenge, enforceAuthRateLimit, getWebAuthnConfig, issueSessionCookie, isRecord, json, readJson, requireAuthConfiguration, requireDatabase } from '../../../lib/auth';
+import { consumeChallenge, enforceAuthRateLimit, getChallengeBinding, getWebAuthnConfig, issueSessionCookie, isRecord, json, readJson, requireAuthConfiguration, requireDatabase } from '../../../lib/auth';
 import type { SyncContext } from '../../../types';
 
 interface PasskeyRow {
@@ -22,7 +22,7 @@ export const onRequestPost = async (context: SyncContext): Promise<Response> => 
   const credential = body.credential;
   const credentialId = isRecord(credential) && typeof credential.id === 'string' ? credential.id : '';
   if (!challengeId || !isRecord(credential) || !credentialId) return json({ error: 'invalid_request', message: 'La solicitud de acceso no es válida.' }, 400);
-  const challenge = await consumeChallenge(database, challengeId, 'login');
+  const challenge = await consumeChallenge(database, challengeId, 'login', getChallengeBinding(context, challengeId));
   if (!challenge) return json({ error: 'challenge_expired', message: 'La solicitud ha caducado. Inténtalo de nuevo.' }, 400);
   const passkey = await database.prepare(
     'SELECT credential_id AS credentialId, user_id AS userId, public_key AS publicKey, counter, transports FROM passkeys WHERE credential_id = ?',

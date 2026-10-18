@@ -169,18 +169,31 @@ const prevalidateAppDataShape = (value: Record<string, unknown>): void => {
   const days = assertRecordArray(plan.days, 'plan.days');
   days.forEach((day, index) => {
     const dayRecord = assertRecord(day, `plan.days[${index}]`);
-    assertRecordArray(dayRecord.exercises, `plan.days[${index}].exercises`);
+    assertRecordArray(dayRecord.exercises, `plan.days[${index}].exercises`).forEach((exercise, exerciseIndex) => {
+      assertBoundedSetCounts(exercise, `plan.days[${index}].exercises[${exerciseIndex}]`);
+    });
   });
   const sessions = assertRecordArray(value.sessions, 'sessions');
   sessions.forEach((session, index) => {
     const sessionRecord = assertRecord(session, `sessions[${index}]`);
-    assertRecordArray(sessionRecord.plannedExercises, `sessions[${index}].plannedExercises`);
+    assertRecordArray(sessionRecord.plannedExercises, `sessions[${index}].plannedExercises`).forEach((exercise, exerciseIndex) => {
+      assertBoundedSetCounts(exercise, `sessions[${index}].plannedExercises[${exerciseIndex}]`);
+    });
   });
   assertRecordArray(value.progress, 'progress');
   assertRecordArray(value.checkins, 'checkins');
   exercises.forEach((exercise, index) => {
     assertRecord(exercise, `exercises[${index}]`);
   });
+};
+
+const assertBoundedSetCounts = (exercise: Record<string, unknown>, label: string): void => {
+  if ('sets' in exercise && (typeof exercise.sets !== 'number' || !Number.isInteger(exercise.sets) || exercise.sets < 1 || exercise.sets > 12)) {
+    throw new Error(`${label}.sets no es válido.`);
+  }
+  if ('warmupSets' in exercise && (typeof exercise.warmupSets !== 'number' || !Number.isInteger(exercise.warmupSets) || exercise.warmupSets < 0 || exercise.warmupSets > 3)) {
+    throw new Error(`${label}.warmupSets no es válido.`);
+  }
 };
 
 const validateProfile = (profile: Record<string, unknown>): void => {

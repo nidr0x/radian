@@ -44,7 +44,8 @@ const openBaseDatabase = (): DatabaseSync => {
   database.exec(`
     PRAGMA foreign_keys = ON;
     CREATE TABLE users (
-      id TEXT PRIMARY KEY NOT NULL
+      id TEXT PRIMARY KEY NOT NULL,
+      disabled INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE mcp_clients (
       client_id TEXT PRIMARY KEY NOT NULL

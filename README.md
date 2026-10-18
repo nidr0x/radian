@@ -19,7 +19,7 @@ npm run build
 npx wrangler pages functions build functions
 ```
 
-On first launch, Radian shows a short setup flow for choosing a goal, training days, session length, and experience level. Height and weight are optional, stay on the device, and can be skipped. You can repeat the setup from Profile. During a session, you can repeat the previous entry, skip an exercise, undo the last step, or leave while keeping the session in progress.
+On first launch, Radian shows a short setup flow for choosing a goal, training days, session length, and experience level. Height and weight are optional and can be skipped. In local mode, data stays on the device. If you connect an account, Radian asks before uploading the complete local copy; the account copy includes profile, routines, sessions, measurements, and check-ins, and is not end-to-end encrypted. You can repeat the setup from Profile. During a session, you can repeat the previous entry, skip an exercise, undo the last step, or leave while keeping the session in progress.
 
 The mobile interface keeps one dominant action per screen: starting the session from Hoy, recording the current exercise, and reviewing the next recommendation. Routine parameters are behind explicit editing controls, while the active session keeps history, coaching, and discomfort notes available without competing with the set log. Interactive controls target a 44px touch area and support visible keyboard focus.
 
@@ -59,7 +59,7 @@ curl -fsS https://radian.nidr0x.win/api/health
 
 ## Optional device sync
 
-The app still works without a backend. If you want to share data between a phone and a computer, the project includes the Pages Function `/api/sync` and the `migrations/0001_sync_records.sql` migration for Cloudflare D1.
+The app still works without a backend. If you want to share data between a phone and a computer, the project includes the Pages Function `/api/sync` and the Cloudflare D1 migrations in `migrations/`.
 
 1. Create a D1 database for sync if you are preparing a fork:
 
@@ -68,7 +68,7 @@ The app still works without a backend. If you want to share data between a phone
    ```
 
 2. In Cloudflare Pages, add a D1 binding named `DB` to production and another `DB` binding to preview, using separate databases. Radian's official deployment uses `radian-prod` in production; the preview database must be separate.
-3. Apply the migration remotely:
+3. Apply pending migrations to the matching D1 database before deploying Functions that use them:
 
    ```bash
    npx wrangler d1 migrations apply radian-prod --remote --env production
@@ -175,12 +175,12 @@ The first version does not count calories, log meals, or include an AI provider 
 
 ## Accounts, D1, and passkeys
 
-Radian can work without an account and keep data on the device. If you want to sync across devices, the optional account uses a passkey (WebAuthn) and stores the structured copy in Cloudflare D1.
+Radian can work without an account and keep data on the device. If you want to sync across devices, the optional account uses a passkey (WebAuthn) and stores the complete structured copy, including profile and progress metrics, in Cloudflare D1. The account copy is not end-to-end encrypted; Radian asks before first uploading a local copy. Pairing-code sync remains encrypted on the device before upload.
 
 To prepare the Cloudflare environment:
 
 1. Create a D1 database named `radian-prod` and replace the example identifier in `wrangler.jsonc` with your own. The official deployment already has this database created and configured.
-2. Apply the migrations with `npx wrangler d1 migrations apply radian-prod --remote --env production` (from `0001_sync_records.sql` through the latest numbered migration, currently `0008_mcp_receipts.sql`). Repeat the process with the preview database using the preview environment.
+2. Apply the migrations with `npx wrangler d1 migrations apply radian-prod --remote --env production` (from `0001_sync_records.sql` through the latest numbered migration). Repeat the process with the preview database using the preview environment.
 3. Configure the `SESSION_SECRET` secret in Pages Functions and, in production, `WEBAUTHN_RP_ID`, `WEBAUTHN_ORIGIN`, `WEBAUTHN_RP_NAME`, and `MCP_ORIGIN`.
 4. For `radian.nidr0x.win`, use `WEBAUTHN_RP_ID=radian.nidr0x.win` and `WEBAUTHN_ORIGIN=https://radian.nidr0x.win`.
 

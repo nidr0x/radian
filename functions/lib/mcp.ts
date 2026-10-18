@@ -351,6 +351,7 @@ const hasActiveWriteOwnership = async (database: D1DatabaseLike, userId: string,
         AND expires_at > ?
         AND revoked_at IS NULL
         AND instr(' ' || scope || ' ', ' ' || ? || ' ') > 0
+        AND EXISTS (SELECT 1 FROM users WHERE users.id = mcp_tokens.user_id AND users.disabled = 0)
       LIMIT 1`,
   ).bind(userId, clientId, new Date().toISOString(), MCP_WRITE_SCOPE).first<{ authorized: number }>();
   return row?.authorized === 1;
@@ -753,6 +754,7 @@ export const applyChange = async (
              AND expires_at > ?
              AND revoked_at IS NULL
              AND instr(' ' || scope || ' ', ' ' || ? || ' ') > 0
+        AND EXISTS (SELECT 1 FROM users WHERE users.id = mcp_tokens.user_id AND users.disabled = 0)
         )
       LIMIT 1`,
   ).bind(
@@ -795,6 +797,7 @@ export const applyChange = async (
              AND expires_at > ?
              AND revoked_at IS NULL
              AND instr(' ' || scope || ' ', ' ' || ? || ' ') > 0
+        AND EXISTS (SELECT 1 FROM users WHERE users.id = mcp_tokens.user_id AND users.disabled = 0)
         )`,
   ).bind(
     claimId,
@@ -836,6 +839,7 @@ export const applyChange = async (
                AND expires_at > ?
                AND revoked_at IS NULL
                AND instr(' ' || scope || ' ', ' ' || ? || ' ') > 0
+        AND EXISTS (SELECT 1 FROM users WHERE users.id = mcp_tokens.user_id AND users.disabled = 0)
           )`,
     ).bind(
       JSON.stringify(nextData),
@@ -873,6 +877,7 @@ export const applyChange = async (
                AND expires_at > ?
                AND revoked_at IS NULL
                AND instr(' ' || scope || ' ', ' ' || ? || ' ') > 0
+        AND EXISTS (SELECT 1 FROM users WHERE users.id = mcp_tokens.user_id AND users.disabled = 0)
           )`,
     ).bind(
       userId,
@@ -1015,6 +1020,7 @@ export const restoreRevision = async (
                AND expires_at > ?
                AND revoked_at IS NULL
                AND instr(' ' || scope || ' ', ' ' || ? || ' ') > 0
+        AND EXISTS (SELECT 1 FROM users WHERE users.id = mcp_tokens.user_id AND users.disabled = 0)
           )`,
     ).bind(
       JSON.stringify(restoredData),
@@ -1057,6 +1063,7 @@ export const restoreRevision = async (
                AND expires_at > ?
                AND revoked_at IS NULL
                AND instr(' ' || scope || ' ', ' ' || ? || ' ') > 0
+        AND EXISTS (SELECT 1 FROM users WHERE users.id = mcp_tokens.user_id AND users.disabled = 0)
           )`,
     ).bind(
       userId,
@@ -1157,6 +1164,7 @@ export const writeMcpData = async (
             AND expires_at > ?
             AND revoked_at IS NULL
             AND instr(' ' || scope || ' ', ' ' || ? || ' ') > 0
+        AND EXISTS (SELECT 1 FROM users WHERE users.id = mcp_tokens.user_id AND users.disabled = 0)
        )`,
   ).bind(
     JSON.stringify(next),

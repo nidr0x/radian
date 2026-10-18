@@ -1,5 +1,5 @@
 import { generateRegistrationOptions } from '@simplewebauthn/server';
-import { challengeExpiry, enforceAuthRateLimit, getWebAuthnConfig, json, pruneChallenges, randomId, readJson, requireAuthConfiguration, requireDatabase } from '../../../lib/auth';
+import { challengeExpiry, createChallengeBinding, enforceAuthRateLimit, getWebAuthnConfig, json, pruneChallenges, randomId, readJson, requireAuthConfiguration, requireDatabase } from '../../../lib/auth';
 import type { SyncContext } from '../../../types';
 
 export const onRequestPost = async (context: SyncContext): Promise<Response> => {
@@ -26,8 +26,9 @@ export const onRequestPost = async (context: SyncContext): Promise<Response> => 
     authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
   });
   const challengeId = randomId(18);
+  const binding = await createChallengeBinding(context, challengeId);
   await database.prepare(
-    'INSERT INTO auth_challenges (id, kind, mode, challenge, user_id, display_name, passkey_label, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-  ).bind(challengeId, 'register', 'new_account', options.challenge, userId, displayName, passkeyLabel || 'Passkey principal', challengeExpiry()).run();
-  return json({ challengeId, options });
+    'INSERT INTO auth_challenges (id, kind, mode, challenge, user_id, display_name, passkey_label, expires_at, browser_binding_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind(challengeId, 'register', 'new_account', options.challenge, userId, displayName, passkeyLabel || 'Passkey principal', challengeExpiry(), binding.hash).run();
+  return json({ challengeId, options }, 200, { 'Set-Cookie': binding.cookie });
 };

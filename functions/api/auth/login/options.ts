@@ -1,5 +1,5 @@
 import { generateAuthenticationOptions } from '@simplewebauthn/server';
-import { challengeExpiry, enforceAuthRateLimit, getWebAuthnConfig, json, pruneChallenges, randomId, requireAuthConfiguration, requireDatabase } from '../../../lib/auth';
+import { challengeExpiry, createChallengeBinding, enforceAuthRateLimit, getWebAuthnConfig, json, pruneChallenges, randomId, requireAuthConfiguration, requireDatabase } from '../../../lib/auth';
 import type { SyncContext } from '../../../types';
 
 export const onRequestPost = async (context: SyncContext): Promise<Response> => {
@@ -13,8 +13,9 @@ export const onRequestPost = async (context: SyncContext): Promise<Response> => 
   const { rpId } = getWebAuthnConfig(context);
   const options = await generateAuthenticationOptions({ rpID: rpId, userVerification: 'required' });
   const challengeId = randomId(18);
+  const binding = await createChallengeBinding(context, challengeId);
   await database.prepare(
-    'INSERT INTO auth_challenges (id, kind, challenge, expires_at) VALUES (?, ?, ?, ?)',
-  ).bind(challengeId, 'login', options.challenge, challengeExpiry()).run();
-  return json({ challengeId, options });
+    'INSERT INTO auth_challenges (id, kind, challenge, expires_at, browser_binding_hash) VALUES (?, ?, ?, ?, ?)',
+  ).bind(challengeId, 'login', options.challenge, challengeExpiry(), binding.hash).run();
+  return json({ challengeId, options }, 200, { 'Set-Cookie': binding.cookie });
 };

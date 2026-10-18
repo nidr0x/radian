@@ -123,6 +123,39 @@ const asControlledWriteError = (value: unknown): ControlledWriteError | null => 
 };
 
 const hasBearerSyntax = (request: Request): boolean => /^Bearer\s+[^\s]+$/i.test(request.headers.get('Authorization') ?? '');
+const MAX_MCP_BODY_BYTES = 1_000_000;
+
+const readBoundedJson = async (request: Request): Promise<unknown> => {
+  const declaredLength = Number(request.headers.get('Content-Length'));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_MCP_BODY_BYTES) throw new Error('BODY_TOO_LARGE');
+  const reader = request.body?.getReader();
+  if (!reader) return undefined;
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_MCP_BODY_BYTES) {
+      await reader.cancel();
+      throw new Error('BODY_TOO_LARGE');
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as unknown;
+};
+
+const validateWriteSchema = (toolName: string, args: Record<string, unknown>): void => {
+  const definition = MCP_WRITE_TOOL_DEFINITIONS.find((tool) => tool.name === toolName);
+  if (!definition) throw new Error('La herramienta solicitada no está disponible.');
+  assertWriteSchema(args, definition.inputSchema as McpInputSchema, 'arguments');
+};
 
 const initializeResult = (body: Record<string, unknown>, scope: string) => {
   const params = isRecord(body.params) ? body.params : {};
@@ -138,7 +171,13 @@ const initializeResult = (body: Record<string, unknown>, scope: string) => {
 };
 
 export const onRequestPost = async (context: SyncContext): Promise<Response> => {
-  const body: unknown = await context.request.json().catch(() => undefined);
+  let body: unknown;
+  try {
+    body = await readBoundedJson(context.request);
+  } catch (error) {
+    const tooLarge = error instanceof Error && error.message === 'BODY_TOO_LARGE';
+    return mcpJson(rpcError(null, tooLarge ? -32600 : -32700, tooLarge ? 'La solicitud MCP supera el tamaño permitido.' : 'La solicitud MCP no contiene JSON válido.'), tooLarge ? 413 : 400);
+  }
   if (!isRecord(body) || body.jsonrpc !== '2.0' || typeof body.method !== 'string') return mcpJson(rpcError(null, -32600, 'La solicitud MCP no es válida.'), 400);
   if (!hasRpcId(body) && body.method.startsWith('notifications/')) return new Response(null, { status: 202, headers: { 'Cache-Control': 'no-store' } });
   if (!hasRpcId(body)) return new Response(null, { status: 202, headers: { 'Cache-Control': 'no-store' } });
@@ -154,7 +193,7 @@ export const onRequestPost = async (context: SyncContext): Promise<Response> => 
 
     const args = isRecord(params.arguments) ? params.arguments : {};
     try {
-      validateWriteCall(params.name, args);
+      validateWriteSchema(params.name, args);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'La mutación no es válida.';
       return mcpJson(rpcError(body.id, -32602, message), 400);

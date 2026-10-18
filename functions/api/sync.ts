@@ -4,11 +4,37 @@ import type { SyncContext } from '../types';
 const MAX_BODY_BYTES = 900_000;
 const SYNC_KEY_PATTERN = /^[A-Z0-9]{4}(?:-[A-Z0-9]{4}){2}$/;
 
+const readBoundedText = async (request: Request): Promise<string> => {
+  const contentLength = Number(request.headers.get('Content-Length'));
+  if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) throw new Error('BODY_TOO_LARGE');
+  const reader = request.body?.getReader();
+  if (!reader) return '';
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_BODY_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error('BODY_TOO_LARGE');
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+};
+
 type SyncRow = { payload: string; updatedAt: string; expiresAt?: string };
 
-const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), {
+const json = (body: unknown, status = 200, extraHeaders: Record<string, string> = {}): Response => new Response(JSON.stringify(body), {
   status,
-  headers: { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' },
+  headers: { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8', ...extraHeaders },
 });
 
 const keyFromRequest = (request: Request): string | undefined => {
@@ -74,12 +100,23 @@ export const onRequestPut = async (context: SyncContext): Promise<Response> => {
   if (unavailable) return unavailable;
   const key = keyFromRequest(context.request);
   if (!key) return json({ error: 'invalid_key', message: 'El código de sincronización no es válido.' }, 400);
-  const rateLimitResponse = await enforceAuthRateLimit(context, 'sync-put', key.slice(0, 8));
+  const ipRateLimitResponse = await enforceAuthRateLimit(context, 'sync-put-ip');
+  if (ipRateLimitResponse) return ipRateLimitResponse;
+  const rateLimitResponse = await enforceAuthRateLimit(context, 'sync-put-code', key.slice(0, 8));
   if (rateLimitResponse) return rateLimitResponse;
+  await context.env.DB!.prepare(
+    'DELETE FROM sync_records WHERE sync_key IN (SELECT sync_key FROM sync_records WHERE expires_at <= ? ORDER BY expires_at LIMIT 100)',
+  ).bind(new Date().toISOString()).run();
+  await context.env.DB!.prepare('DELETE FROM sync_storage_daily_quota WHERE quota_day < ?').bind(new Date().toISOString().slice(0, 10)).run();
 
-  const body = await context.request.text();
-  if (new TextEncoder().encode(body).byteLength > MAX_BODY_BYTES) {
-    return json({ error: 'payload_too_large', message: 'La copia local es demasiado grande.' }, 413);
+  let body: string;
+  try {
+    body = await readBoundedText(context.request);
+  } catch (error: unknown) {
+    const tooLarge = error instanceof Error && error.message === 'BODY_TOO_LARGE';
+    return json(tooLarge
+      ? { error: 'payload_too_large', message: 'La copia local es demasiado grande.' }
+      : { error: 'invalid_json', message: 'El contenido enviado no es JSON válido.' }, tooLarge ? 413 : 400);
   }
 
   let parsed: unknown;
@@ -93,6 +130,7 @@ export const onRequestPut = async (context: SyncContext): Promise<Response> => {
   }
 
   const payload = JSON.stringify(parsed.data);
+  const payloadBytes = new TextEncoder().encode(payload).byteLength;
   const current = await getRow(context, key);
   const baseUpdatedAt = 'baseUpdatedAt' in parsed && typeof parsed.baseUpdatedAt === 'string' ? parsed.baseUpdatedAt : undefined;
   if (current && current.updatedAt !== baseUpdatedAt) return conflictResponse(current);
@@ -101,10 +139,19 @@ export const onRequestPut = async (context: SyncContext): Promise<Response> => {
   const updatedAt = new Date().toISOString();
   const expiresAt = new Date(Date.now() + 90 * 86400000).toISOString();
   const result = await context.env.DB!.prepare(
-    `INSERT INTO sync_records (sync_key, payload, updated_at, expires_at) VALUES (?, ?, ?, ?)
-     ON CONFLICT(sync_key) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at, expires_at = excluded.expires_at
+    `INSERT INTO sync_records (sync_key, payload, updated_at, expires_at, payload_bytes) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(sync_key) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at, expires_at = excluded.expires_at, payload_bytes = excluded.payload_bytes
      WHERE sync_records.updated_at = ?`,
-  ).bind(key, payload, updatedAt, expiresAt, baseUpdatedAt ?? '').run();
+  ).bind(key, payload, updatedAt, expiresAt, payloadBytes, baseUpdatedAt ?? '').run().catch((error: unknown) => {
+    if (error instanceof Error && (error.message.includes('sync_storage_quota_exceeded') || error.message.includes('sync_creation_quota_exceeded'))) return error.message;
+    throw error;
+  });
+  if (typeof result === 'string' && result.includes('sync_creation_quota_exceeded')) {
+    const now = new Date();
+    const secondsUntilReset = Math.ceil((Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1) - now.getTime()) / 1000);
+    return json({ error: 'creation_quota_exceeded', message: 'Se ha alcanzado el límite diario de nuevas copias emparejadas. Inténtalo mañana.' }, 429, { 'Retry-After': String(secondsUntilReset) });
+  }
+  if (typeof result === 'string') return json({ error: 'storage_quota_exceeded', message: 'Se ha alcanzado la capacidad de copias emparejadas. Revoca una copia que ya no uses o espera a que venza.' }, 507);
   if ((result.meta?.changes ?? 0) !== 1) {
     return conflictResponse(await getRow(context, key));
   }
