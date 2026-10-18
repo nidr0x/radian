@@ -26,6 +26,7 @@ import { summarizeSession, type SessionSummary } from './lib/sessionSummary';
 import { sessionAdaptation } from './lib/sessionAdaptation';
 import { completionActionHint, dataStateCopy, todayPrimaryAction, updateActionCopy } from './lib/uiCopy';
 import { textSizeToggleLabel, themeOptionLabel } from './lib/accessibility';
+import { useFocusTrap } from './lib/useFocusTrap';
 import { routineEditDraftFrom, routineEditPatch, type RoutineEditDraft } from './lib/routineEditor';
 import { addPasskey, AuthApiError, currentUser, listPasskeys, loginWithPasskey, logout, logoutEverywhere, pullCloudData, pushCloudData, registerPasskey, renamePasskey, revokePasskey, type AuthPasskey, type AuthUser, type CloudData } from './lib/auth';
 import type {
@@ -1142,75 +1143,26 @@ function ResumeSessionBanner({ session, onResume }: { session: WorkoutSession; o
 }
 
 function SessionExitDialog({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: () => void }) {
-  useEffect(() => {
-    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const closeOnEscape = (event: KeyboardEvent): void => { if (event.key === 'Escape') onCancel(); };
-    const trapFocus = (event: KeyboardEvent): void => {
-      if (event.key !== 'Tab') return;
-      const dialog = document.querySelector<HTMLElement>('.session-exit-dialog');
-      const focusable = dialog ? Array.from(dialog.querySelectorAll<HTMLElement>('button, input, select, textarea, [tabindex]:not([tabindex="-1"])')).filter((element) => !element.hasAttribute('disabled')) : [];
-      if (focusable.length === 0) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-    };
-    document.addEventListener('keydown', closeOnEscape);
-    document.addEventListener('keydown', trapFocus);
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    window.setTimeout(() => document.querySelector<HTMLButtonElement>('.session-exit-dialog button')?.focus(), 0);
-    return () => { document.removeEventListener('keydown', closeOnEscape); document.removeEventListener('keydown', trapFocus); document.body.style.overflow = previousOverflow; previousFocus?.focus(); };
-  }, [onCancel]);
-  return <div className="session-exit-backdrop" role="presentation" onMouseDown={onCancel}><section className="session-exit-dialog" role="dialog" aria-modal="true" aria-labelledby="session-exit-title" onMouseDown={(event) => event.stopPropagation()}><div className="session-exit-heading"><p className="eyebrow">salir de la sesión</p><button className="icon-button subtle" type="button" aria-label="Cerrar aviso" onClick={onCancel}><X size={18} /></button></div><h2 id="session-exit-title">¿Pausar aquí?</h2><p>Tu progreso se ha guardado en este dispositivo. Podrás continuar desde Hoy cuando quieras.</p><div className="session-exit-actions"><button className="secondary-button" type="button" onClick={onCancel}>Seguir entrenando</button><button className="primary-button" type="button" onClick={onConfirm}>Pausar y salir</button></div></section></div>;
+  const dialogRef = useRef<HTMLElement | null>(null);
+  useFocusTrap(dialogRef, true, onCancel);
+  return <div className="session-exit-backdrop" role="presentation" onMouseDown={onCancel}><section ref={dialogRef} className="session-exit-dialog" role="dialog" aria-modal="true" aria-labelledby="session-exit-title" onMouseDown={(event) => event.stopPropagation()}><div className="session-exit-heading"><p className="eyebrow">salir de la sesión</p><button className="icon-button subtle" type="button" aria-label="Cerrar aviso" onClick={onCancel}><X size={18} /></button></div><h2 id="session-exit-title">¿Pausar aquí?</h2><p>Tu progreso se ha guardado en este dispositivo. Podrás continuar desde Hoy cuando quieras.</p><div className="session-exit-actions"><button className="secondary-button" type="button" onClick={onCancel}>Seguir entrenando</button><button className="primary-button" type="button" onClick={onConfirm}>Pausar y salir</button></div></section></div>;
 }
 
 function ConfirmDialog({ title, message, confirmLabel = 'Confirmar', danger = false, onConfirm, onCancel }: { title: string; message: string; confirmLabel?: string; danger?: boolean; onConfirm: () => void; onCancel: () => void }) {
-  useEffect(() => {
-    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const closeOnEscape = (event: KeyboardEvent): void => { if (event.key === 'Escape') onCancel(); };
-    const trapFocus = (event: KeyboardEvent): void => {
-      if (event.key !== 'Tab') return;
-      const dialog = document.querySelector<HTMLElement>('.confirm-dialog');
-      const focusable = dialog ? Array.from(dialog.querySelectorAll<HTMLElement>('button, input, select, textarea, [tabindex]:not([tabindex="-1"])')).filter((element) => !element.hasAttribute('disabled')) : [];
-      if (focusable.length === 0) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-    };
-    document.addEventListener('keydown', closeOnEscape);
-    document.addEventListener('keydown', trapFocus);
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    window.setTimeout(() => document.querySelector<HTMLButtonElement>('.confirm-dialog button')?.focus(), 0);
-    return () => { document.removeEventListener('keydown', closeOnEscape); document.removeEventListener('keydown', trapFocus); document.body.style.overflow = previousOverflow; previousFocus?.focus(); };
-  }, [onCancel]);
-  const content = <div className="session-exit-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}><section className="session-exit-dialog confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title" aria-describedby="confirm-dialog-message" onMouseDown={(event) => event.stopPropagation()}><h2 id="confirm-dialog-title">{title}</h2><p id="confirm-dialog-message">{message}</p><div className="session-exit-actions"><button className="secondary-button" type="button" onClick={onCancel}>Cancelar</button><button className={danger ? 'primary-button danger-button' : 'primary-button'} type="button" onClick={onConfirm}>{confirmLabel}</button></div></section></div>;
+  const dialogRef = useRef<HTMLElement | null>(null);
+  useFocusTrap(dialogRef, true, onCancel);
+  const content = <div className="session-exit-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}><section ref={dialogRef} className="session-exit-dialog confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title" aria-describedby="confirm-dialog-message" onMouseDown={(event) => event.stopPropagation()}><h2 id="confirm-dialog-title">{title}</h2><p id="confirm-dialog-message">{message}</p><div className="session-exit-actions"><button className="secondary-button" type="button" onClick={onCancel}>Cancelar</button><button className={danger ? 'primary-button danger-button' : 'primary-button'} type="button" onClick={onConfirm}>{confirmLabel}</button></div></section></div>;
   return createPortal(content, document.body);
 }
 
 function RestEndedOverlay({ nextExerciseName, onDismiss }: { nextExerciseName?: string; onDismiss: () => void }) {
+  const dialogRef = useRef<HTMLElement | null>(null);
+  useFocusTrap(dialogRef, true, onDismiss);
   useEffect(() => {
-    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const closeOnEscape = (event: KeyboardEvent): void => { if (event.key === 'Escape') onDismiss(); };
-    const trapFocus = (event: KeyboardEvent): void => {
-      if (event.key !== 'Tab') return;
-      const dialog = document.querySelector<HTMLElement>('.rest-ended-dialog');
-      const focusable = dialog ? Array.from(dialog.querySelectorAll<HTMLElement>('button, input, select, textarea, [tabindex]:not([tabindex="-1"])')).filter((element) => !element.hasAttribute('disabled')) : [];
-      if (focusable.length === 0) return;
-      event.preventDefault();
-      focusable[0].focus();
-    };
-    document.addEventListener('keydown', closeOnEscape);
-    document.addEventListener('keydown', trapFocus);
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    window.setTimeout(() => document.querySelector<HTMLButtonElement>('.rest-ended-dialog button')?.focus(), 0);
     const timer = window.setTimeout(onDismiss, 10_000);
-    return () => { window.clearTimeout(timer); document.removeEventListener('keydown', closeOnEscape); document.removeEventListener('keydown', trapFocus); document.body.style.overflow = previousOverflow; previousFocus?.focus(); };
+    return () => { window.clearTimeout(timer); };
   }, [onDismiss]);
-  const content = <div className="rest-ended-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onDismiss(); }}><section className="rest-ended-dialog" role="dialog" aria-modal="true" aria-labelledby="rest-ended-title" onMouseDown={(event) => event.stopPropagation()}><Check className="rest-ended-check" size={52} aria-hidden="true" /><p className="eyebrow">temporizador</p><h2 id="rest-ended-title">¡Descanso terminado!</h2><p>{nextExerciseName ? `Siguiente: ${nextExerciseName}` : 'Cuando quieras, puedes continuar.'}</p><button className="primary-button" type="button" onClick={onDismiss}>Continuar</button></section></div>;
+  const content = <div className="rest-ended-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onDismiss(); }}><section ref={dialogRef} className="rest-ended-dialog" role="dialog" aria-modal="true" aria-labelledby="rest-ended-title" onMouseDown={(event) => event.stopPropagation()}><Check className="rest-ended-check" size={52} aria-hidden="true" /><p className="eyebrow">temporizador</p><h2 id="rest-ended-title">¡Descanso terminado!</h2><p>{nextExerciseName ? `Siguiente: ${nextExerciseName}` : 'Cuando quieras, puedes continuar.'}</p><button className="primary-button" type="button" onClick={onDismiss}>Continuar</button></section></div>;
   return createPortal(content, document.body);
 }
 
@@ -1529,30 +1481,12 @@ function SetLogEditor({ logs, repMin, repMax, exerciseEquipment, hasPrevious, pr
 }
 
 function ExerciseDetailSheet({ exercise, muscleGroup, guidance, recommendation, progressionAction: action, lastSession, onClose }: { exercise: PlannedExercise; muscleGroup?: string; guidance?: ExerciseGuidance; recommendation?: ReturnType<typeof recommendationFor>; progressionAction?: ReturnType<typeof progressionAction>; lastSession?: ExerciseSession; onClose: () => void }) {
+  const dialogRef = useRef<HTMLElement | null>(null);
   const detail = guidance ?? { setup: 'Ajusta el asiento y la carga para que puedas moverte con control.', cues: ['Mantén una postura estable.', 'Mueve la carga sin impulso.', 'Detén el recorrido si pierdes el control.'], commonMistake: 'Usar más carga de la que permite una ejecución limpia.' };
   const alternatives = detail.alternatives ?? ['Reduce la carga y acorta el recorrido.', 'Prueba una variante que no provoque molestias.', 'Si persiste, anótalo para revisarlo con tu entrenador.'];
   const discomfortAdvice = detail.discomfortAdvice ?? 'Una molestia articular no es una señal para forzar. Para, registra lo que has notado y revisa el ajuste.';
-  useEffect(() => {
-    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const closeOnEscape = (event: KeyboardEvent): void => { if (event.key === 'Escape') onClose(); };
-    const trapFocus = (event: KeyboardEvent): void => {
-      if (event.key !== 'Tab') return;
-      const dialog = document.querySelector<HTMLElement>('.exercise-detail-sheet');
-      const focusable = dialog ? Array.from(dialog.querySelectorAll<HTMLElement>('button, input, select, textarea, [tabindex]:not([tabindex="-1"])')).filter((element) => !element.hasAttribute('disabled')) : [];
-      if (focusable.length === 0) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-    };
-    document.addEventListener('keydown', closeOnEscape);
-    document.addEventListener('keydown', trapFocus);
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    window.setTimeout(() => document.querySelector<HTMLButtonElement>('.exercise-detail-sheet button[aria-label="Cerrar ficha"]')?.focus(), 0);
-    return () => { document.removeEventListener('keydown', closeOnEscape); document.removeEventListener('keydown', trapFocus); document.body.style.overflow = previousOverflow; previousFocus?.focus(); };
-  }, [onClose]);
-  return <div className="exercise-detail-backdrop" role="presentation" onMouseDown={onClose}><section className="exercise-detail-sheet" role="dialog" aria-modal="true" aria-labelledby="exercise-detail-title" onMouseDown={(event) => event.stopPropagation()}><div className="detail-sheet-topline"><p className="eyebrow">referencia de máquina</p><button className="icon-button subtle" type="button" aria-label="Cerrar ficha" onClick={onClose}><X size={19} /></button></div><ExerciseThumb src={exercise.imageUrl} position={exercise.imagePosition} alt={`Referencia de ${exercise.name}`} large /><h2 id="exercise-detail-title">{exercise.name}</h2><div className="detail-facts"><span>{muscleGroup ?? 'Ejercicio'}</span><span>{exercise.sets} series</span><span>{exercise.repMin}-{exercise.repMax} reps</span></div><div className="detail-section"><p className="eyebrow">ajuste inicial</p><p>{detail.setup}</p></div><div className="detail-section"><p className="eyebrow">claves de ejecución</p><ol className="detail-steps">{detail.cues.map((cue) => <li key={cue}>{cue}</li>)}</ol></div><div className="detail-warning"><strong>Error habitual</strong><span>{detail.commonMistake}</span></div><div className="detail-section"><p className="eyebrow">si hay molestias</p><p>{discomfortAdvice}</p><ul className="detail-alternatives">{alternatives.map((alternative) => <li key={alternative}>{alternative}</li>)}</ul></div>{lastSession && <p className="detail-history">Último registro: {formatExerciseSummary(lastSession)}</p>}{action && <div className={`detail-action ${action.tone}`}><strong>{action.title}</strong><span>{action.detail}</span></div>}{recommendation && <p className={`detail-recommendation ${recommendation.tone}`}><Gauge size={15} /> {recommendation.label}: {recommendation.message}</p>}</section></div>;
+  useFocusTrap(dialogRef, true, onClose);
+  return <div className="exercise-detail-backdrop" role="presentation" onMouseDown={onClose}><section ref={dialogRef} className="exercise-detail-sheet" role="dialog" aria-modal="true" aria-labelledby="exercise-detail-title" onMouseDown={(event) => event.stopPropagation()}><div className="detail-sheet-topline"><p className="eyebrow">referencia de máquina</p><button className="icon-button subtle" type="button" aria-label="Cerrar ficha" onClick={onClose}><X size={19} /></button></div><ExerciseThumb src={exercise.imageUrl} position={exercise.imagePosition} alt={`Referencia de ${exercise.name}`} large /><h2 id="exercise-detail-title">{exercise.name}</h2><div className="detail-facts"><span>{muscleGroup ?? 'Ejercicio'}</span><span>{exercise.sets} series</span><span>{exercise.repMin}-{exercise.repMax} reps</span></div><div className="detail-section"><p className="eyebrow">ajuste inicial</p><p>{detail.setup}</p></div><div className="detail-section"><p className="eyebrow">claves de ejecución</p><ol className="detail-steps">{detail.cues.map((cue) => <li key={cue}>{cue}</li>)}</ol></div><div className="detail-warning"><strong>Error habitual</strong><span>{detail.commonMistake}</span></div><div className="detail-section"><p className="eyebrow">si hay molestias</p><p>{discomfortAdvice}</p><ul className="detail-alternatives">{alternatives.map((alternative) => <li key={alternative}>{alternative}</li>)}</ul></div>{lastSession && <p className="detail-history">Último registro: {formatExerciseSummary(lastSession)}</p>}{action && <div className={`detail-action ${action.tone}`}><strong>{action.title}</strong><span>{action.detail}</span></div>}{recommendation && <p className={`detail-recommendation ${recommendation.tone}`}><Gauge size={15} /> {recommendation.label}: {recommendation.message}</p>}</section></div>;
 }
 
 function latestExercise(sessions: WorkoutSession[], exerciseId: string): ExerciseSession | undefined {
