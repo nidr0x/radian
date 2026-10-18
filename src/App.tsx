@@ -291,7 +291,17 @@ function App() {
       setRestContext(undefined);
       setRestPaused(false);
       setRestEnded(true);
-      if ('vibrate' in navigator) navigator.vibrate?.(90);
+      if (typeof navigator.vibrate === 'function') navigator.vibrate([200, 100, 200]);
+      if (document.visibilityState === 'hidden' && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        const notificationOptions: NotificationOptions & { renotify: boolean } = { body: 'Es hora de la siguiente serie.', tag: 'radian-rest', renotify: true };
+        const notification = new Notification('Descanso terminado', notificationOptions);
+        const closeNotificationOnReturn = (): void => {
+          if (document.visibilityState === 'hidden') return;
+          notification.close();
+          document.removeEventListener('visibilitychange', closeNotificationOnReturn);
+        };
+        document.addEventListener('visibilitychange', closeNotificationOnReturn);
+      }
       setToast('Descanso terminado');
     }, Math.max(0, restUntil - Date.now()));
     return () => window.clearTimeout(timer);
