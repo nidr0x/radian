@@ -1,83 +1,29 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import {
-  Activity, ArrowDown, ArrowUp, BarChart3, CalendarDays, Check, ChevronLeft, ChevronRight, Clipboard, CloudOff,
-  Dumbbell, Download, FileJson, Fingerprint, Gauge, History, Info, KeyRound, Layers3, LockKeyhole, LogIn, LogOut, Minus, Moon, MoreHorizontal, Pause, Pencil, Play,
-  Plus, RotateCcw, Save, Search, Settings2, ShieldCheck, SkipForward, Sparkles, Sun, Timer, Trash2, Trophy, Upload, UserPlus, UserRound, X,
-  Maximize2, Minimize2, Share2,
-} from 'lucide-react';
-import { currentWeekday, dateKey, dayNames, formatDate, formatDuration, normalizeTrainingDays, scheduledWorkoutDays, shortDayNames, weekKey } from './lib/date';
-import { exerciseGuidance } from './data/initialPlan';
-import { adaptPlanToEquipment, allExerciseEquipment, compatibleAlternatives, equipmentLabel, exerciseMatches, planEquipmentGaps, unresolvedPlanEquipmentGaps, type PlanEquipmentGap } from './lib/exercises';
-import { progressionAction, progressionCue, recommendationFor } from './lib/recommendations';
-import { isWorkSet } from './lib/progression';
-import { bestRecordForExercise, detectPersonalRecord, type ExerciseRecord } from './lib/records';
-import { createSession, createSetLogs, loadData, migrateData, parseBackup, persistData, serializeBackup } from './lib/storage';
-import { exerciseTrend } from './lib/exerciseHistory';
-import { buildSvgChart, type SvgChartPoint } from './lib/progressChart';
-import { buildCalendarCells } from './lib/sessionCalendar';
-import { buildProgressBuckets, type ProgressBucket, type ProgressRange } from './lib/progressOverview';
-import { compareSyncCopies, deleteSyncData, generateSyncKey, loadSyncState, normalizeSyncKey, persistSyncState, pullSyncData, pushSyncData, SyncApiError, type RemoteSyncData, type SyncState } from './lib/sync';
-import { buildWeeklySummary, weeklySummaryText } from './lib/weeklySummary';
-import { applyAppUpdate, hasAppUpdate } from './lib/pwa';
-import { dataRevisionFromVersion, dataVersion as buildDataVersion, readCheckpoint, saveCheckpoint, syncDecision, readRecovery, preserveRecovery } from './lib/syncRecovery';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Check, CloudOff, Search, Settings2, UserRound } from 'lucide-react';
+import { currentWeekday, scheduledWorkoutDays } from './lib/date';
+import { loadData, migrateData, persistData } from './lib/storage';
+import { dataVersion as buildDataVersion, dataRevisionFromVersion, readCheckpoint } from './lib/syncRecovery';
+import { updateActionCopy } from './lib/uiCopy';
+import { applyAppUpdate } from './lib/pwa';
 import { requestScreenWakeLock, type ScreenWakeLock } from './lib/wakeLock';
-import { summarizeSession, type SessionSummary } from './lib/sessionSummary';
-import { sessionAdaptation } from './lib/sessionAdaptation';
-import { completionActionHint, dataStateCopy, todayPrimaryAction, updateActionCopy } from './lib/uiCopy';
-import { textSizeToggleLabel, themeOptionLabel } from './lib/accessibility';
-import { useFocusTrap } from './lib/useFocusTrap';
-import { routineEditDraftFrom, routineEditPatch, type RoutineEditDraft } from './lib/routineEditor';
-import { addPasskey, AuthApiError, currentUser, listPasskeys, loginWithPasskey, logout, logoutEverywhere, pullCloudData, pushCloudData, registerPasskey, renamePasskey, revokePasskey, type AuthPasskey, type AuthUser, type CloudData } from './lib/auth';
-import type {
-  AppData, Difficulty, Energy, ExperienceLevel, ExerciseDefinition, ExerciseEquipment, ExerciseGuidance, ExerciseSession, PlannedExercise, ProgressEntry, SessionReadiness, SetLog, Soreness, Theme, UserProfile, View, WeeklyCheckin, WorkoutDay, WorkoutSession,
-} from './types';
-
-const navItems: Array<{ id: View; label: string; icon: typeof Activity }> = [
-  { id: 'today', label: 'Hoy', icon: Activity }, { id: 'routine', label: 'Rutina', icon: Dumbbell },
-  { id: 'progress', label: 'Progreso', icon: BarChart3 }, { id: 'profile', label: 'Perfil', icon: UserRound },
-];
-
-const difficultyOptions: Array<{ value: Difficulty; label: string; hint: string }> = [
-  { value: 'easy', label: 'Fácil', hint: 'Había margen' }, { value: 'good', label: 'Bien', hint: 'En su punto' },
-  { value: 'hard', label: 'Difícil', hint: 'Costó bastante' }, { value: 'incomplete', label: 'No pude', hint: 'No completado' },
-];
-
-const hasSessionExerciseResult = (exercise: ExerciseSession): boolean => exercise.completed || Boolean(exercise.completedAt);
-const isSessionExerciseDeferred = (exercise: ExerciseSession): boolean => Boolean(exercise.deferredAt) && !hasSessionExerciseResult(exercise);
-
-const findNextSessionExerciseIndex = (exercises: ExerciseSession[], activeIndex: number): number | undefined => {
-  if (exercises.length < 2) return undefined;
-  const startIndex = ((activeIndex % exercises.length) + exercises.length) % exercises.length;
-  const find = (includeDeferred: boolean): number | undefined => {
-    for (let offset = 1; offset < exercises.length; offset += 1) {
-      const index = (startIndex + offset) % exercises.length;
-      const exercise = exercises[index];
-      if (!hasSessionExerciseResult(exercise) && (includeDeferred || !isSessionExerciseDeferred(exercise))) return index;
-    }
-    return undefined;
-  };
-  return find(false) ?? find(true);
-};
-
-export const getNextSessionExerciseIndex = (session: WorkoutSession): number | undefined => findNextSessionExerciseIndex(session.plannedExercises, session.activeExerciseIndex);
-
-export const getNextSessionProgress = (session: WorkoutSession, updatedExercise: ExerciseSession): Pick<WorkoutSession, 'activeExerciseIndex' | 'status' | 'completedAt'> => {
-  const exercises = session.plannedExercises.map((exercise, index) => index === session.activeExerciseIndex ? updatedExercise : exercise);
-  if (exercises.every(hasSessionExerciseResult)) return { activeExerciseIndex: session.activeExerciseIndex, status: 'completed', completedAt: updatedExercise.completedAt };
-  const nextIndex = findNextSessionExerciseIndex(exercises, session.activeExerciseIndex);
-  return { activeExerciseIndex: nextIndex ?? session.activeExerciseIndex, status: 'in_progress', completedAt: undefined };
-};
-
-const formatWeight = (value?: number): string => value === undefined ? 'Sin registro' : `${value.toLocaleString('es-ES', { maximumFractionDigits: 1 })} kg`;
-const formatSessionDuration = (seconds: number): string => {
-  if (seconds < 60) return '<1 min';
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} min`;
-  return `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
-};
-type SyncStatus = 'idle' | 'checking' | 'syncing' | 'ready' | 'remote' | 'synced' | 'conflict' | 'unavailable' | 'error';
-type AuthStatus = 'checking' | 'signed_out' | 'registering' | 'signing_in' | 'syncing' | 'signed_in' | 'error';
+import { useDataSync } from './components/useDataSync';
+import { BottomNav, navItems } from './components/BottomNav';
+import { ConfirmDialog, RestEndedOverlay, SessionExitDialog } from './components/Dialogs';
+import { RestFloating } from './components/RestFloating';
+import { ResumeSessionBanner } from './components/ResumeSessionBanner';
+import { DataStatusPanel } from './components/DataStatusPanel';
+import { UpdateBanner } from './components/UpdateBanner';
+import { AccountPanel } from './components/AccountPanel';
+import { SyncConflictCard } from './components/SyncConflictCard';
+import { useRoutineActions } from './views/useRoutineActions';
+import { useSessionActions } from './views/useSessionActions';
+import { useRestTimer } from './views/useRestTimer';
+import { TodayView } from './views/TodayView';
+import { RoutineView } from './views/RoutineView';
+import { ProgressView } from './views/ProgressView';
+import { ProfileView } from './views/ProfileView';
+import { OnboardingDialog } from './views/OnboardingDialog';
+import type { AppData, Theme, View } from './types';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -96,6 +42,7 @@ function App() {
     dataRevisionRef.current += 1;
     setDataState(next);
   };
+  const updateData = (updater: (current: AppData) => AppData): void => setData((current) => updater(current));
   const dataVersion = buildDataVersion(data, dataRevisionRef.current);
   const [view, setView] = useState<View>('today');
   const [topbarSearch, setTopbarSearch] = useState('');
@@ -103,32 +50,9 @@ function App() {
   const clearExerciseSearchRequest = useCallback(() => setExerciseSearchRequest(undefined), []);
   const [activeDayId, setActiveDayId] = useState<string>(() => data.plan.days.find((day) => day.weekday === currentWeekday())?.id ?? data.plan.days[0].id);
   const [toast, setToast] = useState<string>();
-  const [storageWarning, setStorageWarning] = useState<string>();
   const [exitDialogOpen, setExitDialogOpen] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState<{ title: string; message: string; confirmLabel: string; danger: boolean; onConfirm: () => void; onCancel: () => void } | null>(null);
-  const [restRemaining, setRestRemaining] = useState(0);
-  const [restEnded, setRestEnded] = useState(false);
-  const [restUntil, setRestUntil] = useState<number | null>(null);
-  const [restContext, setRestContext] = useState<{ exerciseName: string; seconds: number }>();
-  const [restPaused, setRestPaused] = useState(false);
-  const [theme, setTheme] = useState<Theme>(data.profile.theme);
-  const [syncState, setSyncState] = useState<SyncState>(() => loadSyncState());
-  const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
-  const [syncError, setSyncError] = useState<string>();
-  const [syncConflict, setSyncConflict] = useState<RemoteSyncData>();
-  const [syncReady, setSyncReady] = useState(false);
-  const [authUser, setAuthUser] = useState<AuthUser>();
-  const [authStatus, setAuthStatus] = useState<AuthStatus>('checking');
-  const [authError, setAuthError] = useState<string>();
-  const [passkeys, setPasskeys] = useState<AuthPasskey[]>([]);
-  const [cloudUpdatedAt, setCloudUpdatedAt] = useState<string>();
-  const [cloudConflict, setCloudConflict] = useState<CloudData>();
-  const [accountUploadPending, setAccountUploadPending] = useState(false);
-  const [online, setOnline] = useState(navigator.onLine);
-  const [updateAvailable, setUpdateAvailable] = useState(hasAppUpdate);
-  const [recovery, setRecovery] = useState(readRecovery);
-  const [acknowledged, setAcknowledged] = useState(() => initialSyncCheckpoint.matches ? initialSyncCheckpoint.checkpoint?.localVersion ?? dataVersion : undefined);
-  const [syncAttempt, setSyncAttempt] = useState(0);
+  const rest = useRestTimer(setToast);
   const showConfirm = (opts: { title: string; message: string; confirmLabel: string; danger: boolean }): Promise<boolean> => new Promise((resolve) => setConfirmDialog({
     ...opts,
     onConfirm: () => { resolve(true); setConfirmDialog(null); },
@@ -136,136 +60,15 @@ function App() {
   }));
   const dataRef = useRef(data);
   dataRef.current = data;
-  const cloudBusyRef = useRef(false);
-  const acknowledge = (snapshot: AppData, updatedAt?: string, version = buildDataVersion(snapshot, dataRevisionRef.current)): void => {
-    if (!updatedAt || !authUserRef.current) return;
-    saveCheckpoint(authUserRef.current.id, updatedAt, snapshot, version);
-    setAcknowledged(version);
-    cloudUpdatedAtRef.current = updatedAt;
-    setCloudUpdatedAt(updatedAt);
-  };
-  useEffect(() => {
-    const connected = () => setOnline(navigator.onLine);
-    const updated = () => setUpdateAvailable(true);
-    window.addEventListener('online', connected);
-    window.addEventListener('offline', connected);
-    window.addEventListener('radian-update', updated);
-    return () => {
-      window.removeEventListener('online', connected);
-      window.removeEventListener('offline', connected);
-      window.removeEventListener('radian-update', updated);
-    };
-  }, []);
-  const [lastSessionChange, setLastSessionChange] = useState<{ sessionId: string; snapshot: WorkoutSession }>();
+  const sync = useDataSync(data, dataRef, setData, dataRevisionRef, dataVersion, showConfirm, setToast);
+  const [theme, setTheme] = useState<Theme>(data.profile.theme);
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [isInstalled, setIsInstalled] = useState(false);
   const [screenWakeLockActive, setScreenWakeLockActive] = useState(false);
   const screenWakeLockRef = useRef<ScreenWakeLock | undefined>(undefined);
-  const syncStateRef = useRef(syncState);
-  const authUserRef = useRef<AuthUser | undefined>(undefined);
-  const cloudUpdatedAtRef = useRef<string | undefined>(undefined);
-  const cloudSyncReadyRef = useRef(false);
-  const cloudRefreshRef = useRef(0);
+  const session = useSessionActions(data, updateData, setToast, setView, rest.startRest);
+  const routine = useRoutineActions(data, updateData, setToast);
 
-  const reportAuthError = (error: unknown, fallback: string): void => {
-    const value = error instanceof AuthApiError ? error : new AuthApiError(fallback, 0);
-    if (value.status === 409 && value.remote?.data) {
-      cloudSyncReadyRef.current = false;
-      setCloudConflict(value.remote);
-      setAuthError('Hay una versión más reciente en la nube. Elige qué copia conservar.');
-    } else {
-      setAuthError(value.message);
-    }
-  };
-
-  useEffect(() => {
-    syncStateRef.current = syncState;
-    const persisted = persistSyncState(syncState);
-    setStorageWarning((current) => persisted ? current === 'No se pudo guardar el progreso en este dispositivo.' ? undefined : current : 'No se pudo guardar la configuración local. Comprueba el espacio disponible.');
-  }, [syncState]);
-  useEffect(() => {
-    authUserRef.current = authUser;
-  }, [authUser]);
-  useEffect(() => {
-    const persisted = persistData(data);
-    setStorageWarning((current) => persisted ? current === 'No se pudo guardar la configuración local. Comprueba el espacio disponible.' ? undefined : current : 'No se pudo guardar el progreso en este dispositivo.');
-    if (!online || !syncReady || !syncState.key) return undefined;
-    const timer = window.setTimeout(() => {
-      const currentState = syncStateRef.current;
-      setSyncStatus('syncing');
-      pushSyncData(data, currentState).then(({ updatedAt }) => {
-        setSyncState((current) => ({ ...current, remoteUpdatedAt: updatedAt }));
-        setSyncConflict(undefined);
-        setSyncStatus('synced');
-        setSyncError(undefined);
-      }).catch((error: unknown) => {
-        const syncErrorValue = error instanceof SyncApiError ? error : new SyncApiError('No se pudo sincronizar ahora.', 0);
-        if (syncErrorValue.status === 409 && syncErrorValue.remote?.data) setSyncConflict(syncErrorValue.remote);
-        if (syncErrorValue.status === 409) setSyncReady(false);
-        setSyncStatus(syncErrorValue.status === 409 ? 'conflict' : syncErrorValue.status === 503 ? 'unavailable' : 'error');
-        setSyncError(syncErrorValue.message);
-      });
-    }, 900);
-    return () => window.clearTimeout(timer);
-  }, [data, syncReady, syncState.key, online]);
-  useEffect(() => {
-    if (!online || !authUser || !cloudSyncReadyRef.current || cloudBusyRef.current || dataVersion === acknowledged) return undefined;
-    const snapshotVersion = dataVersion;
-    const timer = window.setTimeout(() => {
-      setAuthStatus('syncing');
-      cloudBusyRef.current = true;
-      pushCloudData(data, cloudUpdatedAtRef.current).then(({ updatedAt }) => {
-        acknowledge(data, updatedAt, snapshotVersion);
-        setAuthStatus('signed_in');
-        setAuthError(undefined);
-      }).catch((error: unknown) => {
-        const value = error instanceof AuthApiError ? error : new AuthApiError('No se pudo sincronizar con D1.', 0);
-        if (value.status === 401) {
-          cloudSyncReadyRef.current = false;
-          setAuthUser(undefined);
-          setAuthStatus('signed_out');
-        } else if (value.status === 409 && value.remote?.data) {
-          cloudSyncReadyRef.current = false;
-          setCloudConflict(value.remote);
-          setAuthStatus('error');
-        } else {
-          setAuthStatus('error');
-        }
-        reportAuthError(value, 'No se pudo sincronizar con D1.');
-      }).finally(() => {
-        cloudBusyRef.current = false;
-        if (dataRef.current !== data) setSyncAttempt((value) => value + 1);
-      });
-    }, 900);
-    return () => window.clearTimeout(timer);
-  }, [authUser, data, online, syncAttempt, acknowledged, dataVersion]);
-  useEffect(() => {
-    let cancelled = false;
-    currentUser().then(async (user) => {
-      if (cancelled) return;
-      if (!user) {
-        setAuthStatus('signed_out');
-        return;
-      }
-      try {
-        await hydrateAccount(user, dataRef.current);
-      } catch (error: unknown) {
-        if (cancelled) return;
-        cloudSyncReadyRef.current = false;
-        setAuthStatus('error');
-        reportAuthError(error, 'No se pudo cargar la cuenta en la nube.');
-      }
-    }).catch((error: unknown) => {
-      if (cancelled) return;
-      if (error instanceof AuthApiError && error.status === 503) {
-        setAuthStatus('error');
-        setAuthError(error.message);
-      } else {
-        setAuthStatus('signed_out');
-      }
-    });
-    return () => { cancelled = true; };
-  }, []);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     document.documentElement.dataset.textSize = data.profile.largeText ? 'large' : 'normal';
@@ -284,65 +87,10 @@ function App() {
     return () => { window.removeEventListener('beforeinstallprompt', handleInstallPrompt); window.removeEventListener('appinstalled', handleInstalled); };
   }, []);
   useEffect(() => {
-    if (restUntil === null) return undefined;
-    const timer = window.setTimeout(() => {
-      setRestRemaining(0);
-      setRestUntil(null);
-      setRestContext(undefined);
-      setRestPaused(false);
-      setRestEnded(true);
-      if (typeof navigator.vibrate === 'function') navigator.vibrate([200, 100, 200]);
-      if (document.visibilityState === 'hidden' && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-        const notificationOptions: NotificationOptions & { renotify: boolean } = { body: 'Es hora de la siguiente serie.', tag: 'radian-rest', renotify: true };
-        const notification = new Notification('Descanso terminado', notificationOptions);
-        const closeNotificationOnReturn = (): void => {
-          if (document.visibilityState === 'hidden') return;
-          notification.close();
-          document.removeEventListener('visibilitychange', closeNotificationOnReturn);
-        };
-        document.addEventListener('visibilitychange', closeNotificationOnReturn);
-      }
-      setToast('Descanso terminado');
-    }, Math.max(0, restUntil - Date.now()));
-    return () => window.clearTimeout(timer);
-  }, [restUntil]);
-  useEffect(() => {
     if (!toast) return undefined;
     const timer = window.setTimeout(() => setToast(undefined), 2600);
     return () => window.clearTimeout(timer);
   }, [toast]);
-
-  const updateData = (updater: (current: AppData) => AppData): void => setData((current) => updater(current));
-  const dismissRestEnded = useCallback(() => setRestEnded(false), []);
-  const startRest = (seconds: number, exerciseName: string): void => {
-    setRestContext({ exerciseName, seconds });
-    setRestUntil(Date.now() + seconds * 1000);
-    setRestRemaining(seconds);
-    setRestPaused(false);
-  };
-  const restartRest = (): void => {
-    if (restContext) startRest(restContext.seconds, restContext.exerciseName);
-  };
-  const currentRestRemaining = (): number => restUntil === null ? restRemaining : Math.max(0, Math.ceil((restUntil - Date.now()) / 1000));
-  const pauseRest = (): void => {
-    const remaining = currentRestRemaining();
-    if (remaining <= 0) return;
-    setRestRemaining(remaining);
-    setRestUntil(null);
-    setRestPaused(true);
-  };
-  const resumeRest = (): void => {
-    const remaining = currentRestRemaining();
-    if (remaining <= 0) return;
-    setRestRemaining(remaining);
-    setRestUntil(Date.now() + remaining * 1000);
-    setRestPaused(false);
-  };
-  const adjustRest = (seconds: number): void => {
-    const next = Math.max(1, currentRestRemaining() + seconds);
-    setRestRemaining(next);
-    setRestUntil(restPaused ? null : Date.now() + next * 1000);
-  };
   useEffect(() => setData((current) => migrateData(current)), []);
   const scheduledDays = scheduledWorkoutDays(data.plan.days, data.profile.trainingDays);
   const todayDay = scheduledDays.find((day) => day.weekday === currentWeekday());
@@ -383,668 +131,39 @@ function App() {
     };
   }, [hasActiveSession]);
 
-  const startSession = (day: WorkoutDay, readiness?: SessionReadiness): void => {
-    const existing = data.sessions.find((session) => session.status === 'in_progress');
-    if (existing) { setView('today'); setToast('Tienes una sesión pendiente'); return; }
-    const recoverySources = data.sessions
-      .filter((session) => (session.recoveryExercises?.length ?? 0) > 0)
-      .sort((a, b) => (b.completedAt ?? b.startedAt).localeCompare(a.completedAt ?? a.startedAt));
-    const routineExerciseIds = new Set(day.exercises.filter((exercise) => exercise.active).map((exercise) => exercise.exerciseId));
-    const queuedByExercise = new Map<string, PlannedExercise>();
-    recoverySources.forEach((source) => source.recoveryExercises?.forEach((exercise) => {
-      if (!queuedByExercise.has(exercise.exerciseId)) queuedByExercise.set(exercise.exerciseId, exercise);
-    }));
-    const queuedRecoveryCount = queuedByExercise.size;
-    const recoveryExercises = Array.from(queuedByExercise.values()).filter((exercise) => !routineExerciseIds.has(exercise.exerciseId));
-    const sessionDay = recoveryExercises.length ? { ...day, exercises: [...day.exercises, ...recoveryExercises] } : day;
-    const createdSession = createSession(sessionDay, dateKey(), new Date(), data.sessions, readiness);
-    const session = data.sessions.some((item) => item.id === createdSession.id)
-      ? { ...createdSession, id: `${createdSession.id}-${Date.now()}` }
-      : createdSession;
-    const recoverySourceIds = new Set(recoverySources.map((source) => source.id));
-    updateData((current) => ({
-      ...current,
-      sessions: [
-        ...current.sessions.map((item) => recoverySourceIds.has(item.id) ? { ...item, recoveryExercises: undefined } : item),
-        session,
-      ],
-    }));
-    setView('today');
-    setToast(queuedRecoveryCount ? `Sesión preparada con ${queuedRecoveryCount} ejercicio${queuedRecoveryCount === 1 ? '' : 's'} pendiente${queuedRecoveryCount === 1 ? '' : 's'}` : 'Sesión preparada');
-  };
-
-  const updateSession = (sessionId: string, updater: (session: WorkoutSession) => WorkoutSession): void => {
-    updateData((current) => ({ ...current, sessions: current.sessions.map((session) => session.id === sessionId ? updater(session) : session) }));
-  };
-
-  const updateExerciseDraft = (sessionId: string, plannedExerciseId: string, patch: Partial<ExerciseSession>): void => {
-    updateSession(sessionId, (current) => ({
-      ...current,
-      plannedExercises: current.plannedExercises.map((exercise) => exercise.plannedExerciseId === plannedExerciseId ? { ...exercise, ...patch } : exercise),
-    }));
-  };
-
-  const queueSkippedExercises = (sessionId: string): void => {
-    updateSession(sessionId, (current) => ({
-      ...current,
-      recoveryExercises: current.plannedExercises
-        .filter((exercise) => !exercise.completed && Boolean(exercise.completedAt))
-        .map((exercise, index) => ({
-          id: `recovery-${current.dateKey}-${Date.now()}-${index}`,
-          exerciseId: exercise.exerciseId,
-          name: exercise.name,
-          sets: exercise.sets,
-          repMin: exercise.repMin,
-          repMax: exercise.repMax,
-          restSeconds: exercise.restSeconds,
-          active: true,
-          warmupSets: exercise.warmupSets,
-          progressionPolicy: exercise.progressionPolicy,
-          progressionIncrementKg: exercise.progressionIncrementKg,
-          imageUrl: exercise.imageUrl,
-          imagePosition: exercise.imagePosition,
-        })),
-    }));
-  };
-
-  const removeQueuedRecoveryExercise = (sessionId: string, recoveryExerciseId: string): void => {
-    updateSession(sessionId, (current) => {
-      const recoveryExercises = current.recoveryExercises?.filter((exercise) => exercise.id !== recoveryExerciseId);
-      return { ...current, recoveryExercises: recoveryExercises?.length ? recoveryExercises : undefined };
-    });
-  };
-
-  const selectSessionExercise = (sessionId: string, index: number): void => {
-    updateSession(sessionId, (current) => index >= 0 && index < current.plannedExercises.length
-      ? { ...current, activeExerciseIndex: index }
-      : current);
-  };
-
-  const deferSessionExercise = (session: WorkoutSession): void => {
-    const activeIndex = session.activeExerciseIndex;
-    const exercise = session.plannedExercises[activeIndex];
-    if (!exercise) return;
-    const deferredExercise: ExerciseSession = {
-      ...exercise,
-      completed: false,
-      completedAt: undefined,
-      difficulty: undefined,
-      deferredAt: new Date().toISOString(),
-    };
-    const plannedExercises = session.plannedExercises.map((item, index) => index === activeIndex ? deferredExercise : item);
-    const nextIndex = getNextSessionExerciseIndex({ ...session, plannedExercises });
-    if (nextIndex === undefined) {
-      setToast('No hay otro ejercicio pendiente. Puedes pausar la sesión y volver más tarde.');
-      return;
-    }
-    setLastSessionChange({ sessionId: session.id, snapshot: session });
-    updateSession(session.id, (current) => ({
-      ...current,
-      activeExerciseIndex: nextIndex,
-      status: 'in_progress',
-      completedAt: undefined,
-      plannedExercises: current.plannedExercises.map((item, index) => index === activeIndex ? deferredExercise : item),
-    }));
-    setToast(`${exercise.name} aplazado; volverás al terminar los pendientes.`);
-  };
-
-  const swapSessionExercise = (sessionId: string, plannedExerciseId: string, replacement: ExerciseDefinition, reason: 'discomfort' | 'equipment' = 'discomfort'): void => {
-    const session = data.sessions.find((item) => item.id === sessionId);
-    if (!session) return;
-    setLastSessionChange({ sessionId, snapshot: session });
-    updateSession(sessionId, (current) => ({
-      ...current,
-      plannedExercises: current.plannedExercises.map((item) => item.plannedExerciseId === plannedExerciseId ? {
-        ...item,
-        exerciseId: replacement.id,
-        name: replacement.name,
-        imageUrl: replacement.imageUrl,
-        imagePosition: replacement.imagePosition,
-        completed: false,
-        difficulty: undefined,
-        completedAt: undefined,
-        deferredAt: undefined,
-        discomfort: reason === 'discomfort' ? false : item.discomfort,
-        discomfortNote: reason === 'discomfort'
-          ? item.discomfortNote
-            ? 'Sustituido desde ' + item.name + ': ' + item.discomfortNote
-            : 'Sustituido desde ' + item.name + ' por una molestia'
-          : item.discomfortNote,
-        setLogs: createSetLogs(item.sets, item.repMin, undefined, undefined, { warmupSets: item.warmupSets }),
-      } : item),
-    }));
-    setToast(reason === 'equipment' ? 'Alternativa solo para hoy: ' + replacement.name : 'Cambio guardado: ' + replacement.name);
-  };
-
-  const completeExercise = (session: WorkoutSession, exercise: ExerciseSession, patch: Partial<ExerciseSession>, shouldStartRest: boolean): void => {
-    const updated = { ...exercise, ...patch, completedAt: new Date().toISOString(), deferredAt: undefined };
-    const personalRecord = detectPersonalRecord(updated, data.sessions);
-    const nextProgress = getNextSessionProgress(session, updated);
-    setLastSessionChange({ sessionId: session.id, snapshot: session });
-    updateSession(session.id, (current) => ({
-      ...current,
-      ...nextProgress,
-      plannedExercises: current.plannedExercises.map((item, index) => index === current.activeExerciseIndex ? updated : item),
-    }));
-    if (shouldStartRest && nextProgress.status !== 'completed') startRest(exercise.restSeconds, exercise.name);
-    setToast(personalRecord ? personalRecord.kind === 'first' ? `Primera marca: ${formatWeight(personalRecord.weightKg)}` : personalRecord.kind === 'weight' ? `Nuevo récord: ${formatWeight(personalRecord.weightKg)}` : `Nuevo récord de volumen: ${formatWeight(personalRecord.weightKg)}` : nextProgress.status === 'completed' ? 'Sesión completada' : patch.difficulty === 'incomplete' ? 'Ejercicio saltado' : 'Guardado automáticamente');
-  };
-
-  const undoLastSessionChange = (): void => {
-    if (!lastSessionChange) return;
-    updateData((current) => ({ ...current, sessions: current.sessions.map((session) => session.id === lastSessionChange.sessionId ? lastSessionChange.snapshot : session) }));
-    setLastSessionChange(undefined);
-    setToast('Último ejercicio restaurado');
-  };
-
   const leaveSession = (): void => setExitDialogOpen(true);
   const confirmLeaveSession = (): void => {
     setExitDialogOpen(false);
-    setRestUntil(null);
-    setRestRemaining(0);
-    setRestPaused(false);
+    rest.stopRest();
     setView('routine');
     setToast('Sesión guardada para retomarla cuando quieras');
   };
-
-  const updateRoutineDay = (dayId: string, updater: (day: WorkoutDay) => WorkoutDay): void => {
-    updateData((current) => ({ ...current, plan: { ...current.plan, version: current.plan.version + 1, days: current.plan.days.map((day) => day.id === dayId ? updater(day) : day) } }));
-  };
-
-  const addRoutineExercise = (dayId: string, definition: ExerciseDefinition): void => {
-    updateRoutineDay(dayId, (day) => ({
-      ...day,
-      exercises: [...day.exercises, {
-        id: `${dayId}-${definition.id}-${Date.now()}`,
-        exerciseId: definition.id,
-        name: definition.name,
-        sets: 3,
-        repMin: 8,
-        repMax: 12,
-        restSeconds: 90,
-        active: true,
-        warmupSets: 0,
-        progressionPolicy: 'double',
-        progressionIncrementKg: 2.5,
-        imageUrl: definition.imageUrl,
-        imagePosition: definition.imagePosition,
-      }],
-    }));
-    setToast(`${definition.name} añadido a la rutina`);
-  };
-
-  const removeRoutineExercise = (dayId: string, exerciseId: string): void => {
-    const day = data.plan.days.find((item) => item.id === dayId);
-    const exercise = day?.exercises.find((item) => item.id === exerciseId);
-    if (!day || !exercise) return;
-    updateRoutineDay(dayId, (current) => ({ ...current, exercises: current.exercises.filter((item) => item.id !== exerciseId) }));
-    setToast('Ejercicio quitado de la rutina');
-  };
-
-  const addProgress = (entry: Omit<ProgressEntry, 'id' | 'date'>): void => {
-    updateData((current) => {
-      const nextEntry = { ...entry, id: `progress-${Date.now()}`, date: dateKey() };
-      return { ...current, progress: [...current.progress, nextEntry], profile: entry.weightKg === undefined ? current.profile : { ...current.profile, currentWeightKg: entry.weightKg } };
-    });
-    setToast('Medida guardada');
-  };
-
-  const addCheckin = (checkin: Omit<WeeklyCheckin, 'id' | 'createdAt' | 'weekKey'>): void => {
-    updateData((current) => ({ ...current, checkins: [...current.checkins.filter((item) => item.weekKey !== weekKey()), { ...checkin, id: `checkin-${Date.now()}`, createdAt: new Date().toISOString(), weekKey: weekKey() }] }));
-    setToast('Check-in guardado');
-  };
-
   const changeTheme = (nextTheme: Theme): void => {
     setTheme(nextTheme);
     updateData((current) => ({ ...current, profile: { ...current.profile, theme: nextTheme } }));
   };
-
-  const saveSyncState = (next: SyncState): void => {
-    syncStateRef.current = next;
-    setSyncState(next);
-  };
-  const reportSyncError = (error: unknown, fallback: string): void => {
-    const syncErrorValue = error instanceof SyncApiError ? error : new SyncApiError(fallback, 0);
-    if (syncErrorValue.status === 409 && syncErrorValue.remote?.data) setSyncConflict(syncErrorValue.remote);
-    if (syncErrorValue.status === 409 && syncErrorValue.remote?.updatedAt) saveSyncState({ ...syncStateRef.current, remoteUpdatedAt: syncErrorValue.remote.updatedAt });
-    setSyncStatus(syncErrorValue.status === 409 ? 'conflict' : syncErrorValue.status === 503 ? 'unavailable' : 'error');
-    setSyncError(syncErrorValue.message);
-  };
-  const connectSync = async (input: string): Promise<void> => {
-    const key = normalizeSyncKey(input);
-    if (!/^[A-Z0-9]{4}(?:-[A-Z0-9]{4}){2}$/.test(key)) {
-      setSyncStatus('error');
-      setSyncError('El código debe tener este formato: XXXX-XXXX-XXXX.');
-      return;
-    }
-    setSyncStatus('checking');
-    setSyncError(undefined);
-    try {
-      const remote = await pullSyncData(key);
-      const nextState = { key, remoteUpdatedAt: remote.updatedAt };
-      saveSyncState(nextState);
-      if (remote.data) {
-        setSyncConflict(remote);
-        setSyncReady(false);
-        setSyncStatus('remote');
-        setToast('Hay una copia remota disponible');
-        return;
-      }
-      setSyncConflict(undefined);
-      setSyncStatus('syncing');
-      const result = await pushSyncData(data, nextState);
-      saveSyncState({ ...nextState, remoteUpdatedAt: result.updatedAt });
-      setSyncReady(true);
-      setSyncStatus('synced');
-      setToast('Copia remota creada');
-    } catch (error: unknown) {
-      reportSyncError(error, 'No se pudo conectar con la sincronización.');
-    }
-  };
-  const uploadSync = async (): Promise<void> => {
-    if (!syncStateRef.current.key) return;
-    setSyncStatus('syncing');
-    setSyncError(undefined);
-    try {
-      const result = await pushSyncData(data, syncStateRef.current);
-      saveSyncState({ ...syncStateRef.current, remoteUpdatedAt: result.updatedAt });
-      setSyncConflict(undefined);
-      setSyncReady(true);
-      setSyncStatus('synced');
-      setToast('Copia subida');
-    } catch (error: unknown) {
-      reportSyncError(error, 'No se pudo subir la copia.');
-    }
-  };
-  const downloadSync = async (): Promise<void> => {
-    if (!syncStateRef.current.key) return;
-    setSyncStatus('syncing');
-    setSyncError(undefined);
-    try {
-      const remote = await pullSyncData(syncStateRef.current.key);
-      if (!remote.data) throw new SyncApiError('No hay una copia remota con este código.', 404);
-      applyRemoteSync(remote, 'Copia descargada');
-    } catch (error: unknown) {
-      reportSyncError(error, 'No se pudo descargar la copia.');
-    }
-  };
-  const applyRemoteSync = (remote: RemoteSyncData, message: string): boolean => {
-    if (!remote.data) return false;
-    try {
-      setRecovery(preserveRecovery(dataRef.current));
-    } catch {
-      setSyncStatus('conflict');
-      setSyncError('No hay espacio para guardar la copia local recuperable. Exporta tus datos antes de sustituirlos.');
-      return false;
-    }
-    setData(migrateData(remote.data));
-    saveSyncState({ ...syncStateRef.current, remoteUpdatedAt: remote.updatedAt });
-    setSyncConflict(undefined);
-    setSyncReady(true);
-    setSyncStatus('synced');
-    setSyncError(undefined);
-    setToast(message);
-    return true;
-  };
-  const useRemoteSync = (): void => {
-    const remote = syncConflict;
-    if (!remote?.data) return;
-    applyRemoteSync(remote, 'Copia remota conservada');
-  };
-  const keepLocalSync = async (): Promise<void> => {
-    if (!syncConflict?.data || !syncConflict.updatedAt) return;
-    try {
-      setRecovery(preserveRecovery(syncConflict.data));
-    } catch {
-      setSyncStatus('conflict');
-      setSyncError('No hay espacio para guardar la copia remota recuperable. Exporta tus datos antes de conservar el dispositivo.');
-      return;
-    }
-    saveSyncState({ ...syncStateRef.current, remoteUpdatedAt: syncConflict.updatedAt });
-    await uploadSync();
-  };
-  const disconnectSync = (): void => {
-    saveSyncState({});
-    setSyncConflict(undefined);
-    setSyncReady(false);
-    setSyncStatus('idle');
-    setSyncError(undefined);
-    setToast('Sincronización desconectada');
-  };
-
-  const revokeSync = async (): Promise<void> => {
-    if (!syncStateRef.current.key || !await showConfirm({ title: '¿Revocar código de sincronización?', message: 'Se borrará la copia remota y este código dejará de funcionar.', confirmLabel: 'Revocar', danger: true })) return;
-    try {
-      await deleteSyncData(syncStateRef.current.key);
-      disconnectSync();
-      setToast('Copia remota revocada');
-    } catch (error: unknown) {
-      reportSyncError(error, 'No se pudo revocar la copia remota.');
-    }
-  };
-
   const installApp = async (): Promise<void> => {
     if (!installPrompt) return;
     await installPrompt.prompt();
     await installPrompt.userChoice;
     setInstallPrompt(null);
   };
-
-  const completeOnboarding = (profile: Partial<UserProfile>): void => {
-    updateData((current) => {
-      const nextProfile = { ...current.profile, ...profile, trainingDays: normalizeTrainingDays(profile.trainingDays ?? current.profile.trainingDays).slice(0, current.plan.days.length) };
-      return {
-        ...current,
-        onboardingComplete: true,
-        profile: nextProfile,
-        plan: current.sessions.length === 0 ? adaptPlanToEquipment(current.plan, current.exercises, nextProfile.availableEquipment) : current.plan,
-      };
-    });
-    setToast('Perfil inicial guardado');
-  };
-
   const repeatOnboarding = (): void => {
     setView('today');
     updateData((current) => ({ ...current, onboardingComplete: false }));
   };
-
-  const updateProfile = (profile: Partial<UserProfile>, adaptEquipmentPlan = false): void => {
-    updateData((current) => ({
-      ...current,
-      profile: { ...current.profile, ...profile },
-      plan: adaptEquipmentPlan
-        ? adaptPlanToEquipment(current.plan, current.exercises, profile.availableEquipment ?? current.profile.availableEquipment)
-        : current.plan,
-    }));
+  const handleApplyUpdate = (): void => {
+    if (persistData(dataRef.current)) applyAppUpdate();
+    else sync.setStorageWarning('No se pudo guardar antes de actualizar.');
   };
-
-  const hydrateAccount = async (user: AuthUser, localSnapshot: AppData): Promise<void> => {
-    if (cloudBusyRef.current) return;
-    cloudBusyRef.current = true;
-    if (authUserRef.current?.id !== user.id) {
-      setCloudUpdatedAt(undefined);
-      setCloudConflict(undefined);
-    }
-    try {
-    authUserRef.current = user;
-    setAuthUser(user);
-    setAuthStatus('syncing');
-    setAuthError(undefined);
-    cloudSyncReadyRef.current = false;
-    const remote = await pullCloudData();
-    localSnapshot = dataRef.current;
-    const localVersion = buildDataVersion(localSnapshot, dataRevisionRef.current);
-    if (remote.data) {
-      setAccountUploadPending(false);
-      const normalized = migrateData(remote.data);
-      const decision = syncDecision(localSnapshot, normalized, remote.updatedAt, readCheckpoint(), user.id);
-      if (decision === 'conflict') {
-        setCloudConflict(remote);
-        setAuthStatus('error');
-        setAuthError('Hay cambios en ambas copias. Revisa cuál conservar.');
-        return;
-      }
-      if (decision === 'upload') {
-        const saved = await pushCloudData(localSnapshot, remote.updatedAt);
-        acknowledge(localSnapshot, saved.updatedAt, localVersion);
-      } else {
-        if (decision === 'download') {
-          setRecovery(preserveRecovery(localSnapshot));
-          setData(normalized);
-        }
-        acknowledge(decision === 'download' ? normalized : localSnapshot, remote.updatedAt, decision === 'download' ? buildDataVersion(normalized, dataRevisionRef.current) : localVersion);
-      }
-    } else {
-      if (readCheckpoint()?.userId === user.id) {
-        setAccountUploadPending(false);
-        setAuthStatus('error');
-        setAuthError('La copia remota se ha borrado. Tus datos locales siguen guardados; revisa las revisiones del MCP antes de volver a subirlos.');
-        return;
-      }
-      if (accountUploadPending) {
-        setAuthStatus('signed_in');
-        return;
-      }
-      const confirmed = await showConfirm({
-        title: '¿Subir la copia local a tu cuenta?',
-        message: 'Se enviará a D1 la copia completa: perfil, rutinas, sesiones, medidas y seguimiento. Esa copia no usa cifrado de extremo a extremo. Puedes cancelar y seguir usando Radian solo en este dispositivo.',
-        confirmLabel: 'Subir copia',
-        danger: false,
-      });
-      if (!confirmed) {
-        setAccountUploadPending(true);
-        setAuthStatus('signed_in');
-        setAuthError(undefined);
-        return;
-      }
-      const saved = await pushCloudData(localSnapshot);
-      acknowledge(localSnapshot, saved.updatedAt, localVersion);
-    }
-    cloudSyncReadyRef.current = true;
-    setAuthStatus('signed_in');
-    listPasskeys().then(setPasskeys).catch(() => undefined);
-    setToast(`Cuenta conectada como ${user.displayName}`);
-    } finally {
-      cloudBusyRef.current = false;
-      setSyncAttempt((value) => value + 1);
-    }
-  };
-
-  const uploadLocalToAccount = async (): Promise<void> => {
-    const user = authUserRef.current;
-    if (!user || !online || cloudBusyRef.current) return;
-    cloudBusyRef.current = true;
-    setAuthStatus('syncing');
-    setAuthError(undefined);
-    cloudSyncReadyRef.current = false;
-    try {
-      const remote = await pullCloudData();
-      if (remote.data) {
-        setCloudConflict(remote);
-        setAccountUploadPending(false);
-        setAuthStatus('error');
-        setAuthError('Ya hay una copia remota. Elige qué copia conservar antes de continuar.');
-        return;
-      }
-      const localSnapshot = dataRef.current;
-      const localVersion = buildDataVersion(localSnapshot, dataRevisionRef.current);
-      const saved = await pushCloudData(localSnapshot);
-      acknowledge(localSnapshot, saved.updatedAt, localVersion);
-      cloudSyncReadyRef.current = true;
-      setAccountUploadPending(false);
-      setAuthStatus('signed_in');
-      setToast('Copia local subida a tu cuenta');
-    } catch (error: unknown) {
-      const value = error instanceof AuthApiError ? error : new AuthApiError('No se pudo subir la copia a D1.', 0);
-      if (value.status === 401) {
-        clearAuthenticatedState();
-        setAuthError(value.message);
-        return;
-      }
-      if (value.status === 409 && value.remote?.data) {
-        setCloudConflict(value.remote);
-        setAccountUploadPending(false);
-      }
-      setAuthStatus('error');
-      reportAuthError(value, 'No se pudo subir la copia a D1.');
-    } finally {
-      cloudBusyRef.current = false;
-      setSyncAttempt((current) => current + 1);
-    }
-  };
-
-  const resolveCloudConflict = async (choice: 'local' | 'remote'): Promise<void> => {
-    const conflict = cloudConflict;
-    if (!conflict?.data || !authUserRef.current) return;
-    try {
-      setRecovery(preserveRecovery(choice === 'remote' ? data : migrateData(conflict.data)));
-    } catch {
-      setAuthError('No hay espacio para guardar la copia recuperable. Exporta tus datos antes de resolver el conflicto.');
-      return;
-    }
-    if (choice === 'remote') {
-      const next = migrateData(conflict.data);
-      setData(next);
-      acknowledge(next, conflict.updatedAt, buildDataVersion(next, dataRevisionRef.current));
-      setCloudConflict(undefined);
-      setAuthError(undefined);
-      cloudSyncReadyRef.current = true;
-      setAuthStatus('signed_in');
-      setToast('Copia de la nube restaurada');
-      return;
-    }
-    setAuthStatus('syncing');
-    try {
-      const localVersion = dataVersion;
-      const localSnapshot = data;
-      const saved = await pushCloudData(localSnapshot, conflict.updatedAt);
-      acknowledge(localSnapshot, saved.updatedAt, localVersion);
-      setCloudConflict(undefined);
-      setAuthError(undefined);
-      cloudSyncReadyRef.current = true;
-      setAuthStatus('signed_in');
-      setToast('Copia local subida a la nube');
-    } catch (error: unknown) {
-      setAuthStatus('error');
-      reportAuthError(error, 'No se pudo resolver el conflicto de nube.');
-    }
-  };
-
-  const handleRegisterPasskey = async (displayName: string, passkeyLabel: string): Promise<void> => {
-    setAuthStatus('registering');
-    setAuthError(undefined);
-    try {
-      const user = await registerPasskey(displayName, passkeyLabel);
-      await hydrateAccount(user, data);
-    } catch (error: unknown) {
-      cloudSyncReadyRef.current = false;
-      const value = error instanceof AuthApiError ? error : new AuthApiError('No se pudo crear la cuenta con passkey.', 0);
-      setAuthStatus(value.status === 409 && value.remote?.data ? 'error' : 'signed_out');
-      reportAuthError(value, 'No se pudo crear la cuenta con passkey.');
-    }
-  };
-
-  const clearAuthenticatedState = (): void => {
-    cloudSyncReadyRef.current = false;
-    authUserRef.current = undefined;
-    setAccountUploadPending(false);
-    setAuthUser(undefined);
-    setPasskeys([]);
-    setCloudUpdatedAt(undefined);
-    setCloudConflict(undefined);
-    setAuthStatus('signed_out');
-  };
-
-  const handleLoginPasskey = async (): Promise<void> => {
-    setAuthStatus('signing_in');
-    setAuthError(undefined);
-    try {
-      const user = await loginWithPasskey();
-      await hydrateAccount(user, data);
-    } catch (error: unknown) {
-      cloudSyncReadyRef.current = false;
-      const value = error instanceof AuthApiError ? error : new AuthApiError('No se pudo iniciar sesión con passkey.', 0);
-      setAuthStatus(value.status === 409 && value.remote?.data ? 'error' : 'signed_out');
-      reportAuthError(value, 'No se pudo iniciar sesión con passkey.');
-    }
-  };
-
-  const handleAddPasskey = async (passkeyLabel: string): Promise<void> => {
-    setAuthStatus('registering');
-    setAuthError(undefined);
-    try {
-      await addPasskey(passkeyLabel);
-      listPasskeys().then(setPasskeys).catch(() => undefined);
-      setAuthStatus('signed_in');
-      setToast('Nueva passkey añadida');
-    } catch (error: unknown) {
-      if (error instanceof AuthApiError && error.status === 401) clearAuthenticatedState();
-      else setAuthStatus(authUserRef.current ? 'signed_in' : 'signed_out');
-      setAuthError(error instanceof AuthApiError ? error.message : 'No se pudo añadir la passkey.');
-    }
-  };
-
-  const handleRenamePasskey = async (credentialId: string, label: string): Promise<void> => {
-    try {
-      await renamePasskey(credentialId, label);
-      setPasskeys(await listPasskeys());
-      setToast('Nombre de passkey actualizado');
-    } catch (error: unknown) {
-      if (error instanceof AuthApiError && error.status === 401) clearAuthenticatedState();
-      setAuthError(error instanceof AuthApiError ? error.message : 'No se pudo renombrar la passkey.');
-    }
-  };
-
-  const handleRevokePasskey = async (credentialId: string): Promise<void> => {
-    if (!await showConfirm({ title: '¿Revocar esta passkey?', message: 'Tendrás que usar otra para volver a entrar.', confirmLabel: 'Revocar', danger: true })) return;
-    try {
-      await revokePasskey(credentialId);
-      setPasskeys(await listPasskeys());
-      setToast('Passkey revocada');
-    } catch (error: unknown) {
-      if (error instanceof AuthApiError && error.status === 401) clearAuthenticatedState();
-      setAuthError(error instanceof AuthApiError ? error.message : 'No se pudo revocar la passkey.');
-    }
-  };
-
-  const handleLogout = async (): Promise<void> => {
-    let remoteLogoutConfirmed = false;
-    try { remoteLogoutConfirmed = await logout(); } catch { /* The local session can still be closed if the network fails. */ }
-    clearAuthenticatedState();
-    setAuthError(undefined);
-    setToast(remoteLogoutConfirmed ? 'Sesión cerrada; tus datos siguen en este dispositivo' : 'Sesión local cerrada; no se pudo confirmar el cierre remoto');
-  };
-
-  const handleLogoutEverywhere = async (): Promise<void> => {
-    if (!await showConfirm({ title: '¿Cerrar sesión en todos los dispositivos?', message: 'Se cerrará la sesión en los dispositivos conectados.', confirmLabel: 'Cerrar sesión', danger: false })) return;
-    try {
-      await logoutEverywhere();
-      clearAuthenticatedState();
-      setToast('Sesión cerrada en todos los dispositivos');
-    } catch (error: unknown) {
-      setAuthError(error instanceof AuthApiError ? error.message : 'No se pudo cerrar la sesión en todos los dispositivos.');
-    }
-  };
-
-  const refreshCloud = async (): Promise<void> => {
-    try {
-      const user = authUserRef.current ?? await currentUser();
-      if (user) await hydrateAccount(user, dataRef.current);
-      else setAuthStatus('signed_out');
-    } catch (error) {
-      setAuthStatus('error');
-      reportAuthError(error, 'No se pudo sincronizar. Los cambios siguen en este dispositivo.');
-    }
-  };
-
-  useEffect(() => {
-    const refreshOnReturn = (): void => {
-      if (document.visibilityState !== 'visible' || !online || !authUserRef.current || cloudBusyRef.current || cloudConflict) return;
-      const now = Date.now();
-      if (now - cloudRefreshRef.current < 5000) return;
-      cloudRefreshRef.current = now;
-      void refreshCloud();
-    };
-    document.addEventListener('visibilitychange', refreshOnReturn);
-    window.addEventListener('focus', refreshOnReturn);
-    return () => {
-      document.removeEventListener('visibilitychange', refreshOnReturn);
-      window.removeEventListener('focus', refreshOnReturn);
-    };
-  }, [online, cloudConflict]);
-
-  const restoreLocalRecovery = async (): Promise<void> => {
-    if (!recovery || !await showConfirm({ title: '¿Restaurar esta copia?', message: 'Se guardará la versión actual para poder volver atrás.', confirmLabel: 'Restaurar', danger: false })) return;
-    try {
-      const next = parseBackup(recovery.backup);
-      setRecovery(preserveRecovery(data));
-      setData(next);
-      setToast('Copia recuperada en este dispositivo');
-    } catch { setAuthError('No se pudo restaurar la copia. Comprueba el espacio disponible.'); }
-  };
-  const pendingChanges = dataVersion !== acknowledged;
+  const pendingChanges = dataVersion !== sync.acknowledged;
   const updateCopy = updateActionCopy(Boolean(activeSession));
-  const connectionLabel = !online ? 'sin conexión' : cloudConflict ? 'conflicto' : authStatus === 'syncing' ? 'sincronizando' : accountUploadPending ? 'copia local pendiente de subir' : authUser ? pendingChanges ? 'cambios pendientes' : 'sincronizado' : 'guardado local';
+  const connectionLabel = !sync.online ? 'sin conexión'
+    : sync.cloudConflict ? 'conflicto'
+      : sync.authStatus === 'syncing' ? 'sincronizando'
+        : sync.accountUploadPending ? 'copia local pendiente de subir'
+          : sync.authUser ? pendingChanges ? 'cambios pendientes' : 'sincronizado'
+            : 'guardado local';
 
   return (
     <div className={activeSession && view === 'today' ? 'app-shell session-active-app' : 'app-shell'}>
@@ -1053,7 +172,17 @@ function App() {
         <div className="brand-lockup"><span className="brand-mark">R</span><span>radian</span></div>
         <nav className="desktop-nav" aria-label="Secciones">
           <p className="eyebrow">Entrena</p>
-          {navItems.map(({ id, label, icon: Icon }) => <button key={id} type="button" className={view === id ? 'desktop-nav-item is-active' : 'desktop-nav-item'} aria-current={view === id ? 'page' : undefined} onClick={() => setView(id)}><Icon size={19} /><span>{id === 'today' ? 'Inicio' : id === 'routine' ? 'Rutinas' : label}</span></button>)}
+          {navItems.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              type="button"
+              className={view === id ? 'desktop-nav-item is-active' : 'desktop-nav-item'}
+              aria-current={view === id ? 'page' : undefined}
+              onClick={() => setView(id)}
+            >
+              <Icon size={19} /><span>{id === 'today' ? 'Inicio' : id === 'routine' ? 'Rutinas' : label}</span>
+            </button>
+          ))}
         </nav>
         <div className="desktop-sidebar-footer">
           <div className="sidebar-sync-state" role="status"><span className="status-dot" /><span>{connectionLabel}</span></div>
@@ -1062,7 +191,15 @@ function App() {
       </aside>
       <header className="topbar">
         <div className="brand-lockup"><span className="brand-mark">R</span><span>radian</span></div>
-        <form className="topbar-search" role="search" onSubmit={(event) => { event.preventDefault(); setExerciseSearchRequest({ query: topbarSearch.trim() }); setView('routine'); }}>
+        <form
+          className="topbar-search"
+          role="search"
+          onSubmit={(event) => {
+            event.preventDefault();
+            setExerciseSearchRequest({ query: topbarSearch.trim() });
+            setView('routine');
+          }}
+        >
           <Search size={18} aria-hidden="true" />
           <input aria-label="Buscar ejercicios" placeholder="Buscar ejercicios…" value={topbarSearch} onChange={(event) => setTopbarSearch(event.target.value)} />
         </form>
@@ -1072,1128 +209,155 @@ function App() {
         </div>
       </header>
       <main className="app-main" id="main-content">
-        {!online && <section className="profile-section" role="status">Sin conexión. Puedes seguir registrando el entrenamiento; los cambios quedan en este dispositivo.</section>}
-        {updateAvailable && <section className="update-banner" role="status"><div className="update-mark"><RotateCcw size={22} aria-hidden="true" /></div><div className="update-copy"><strong>Hay una actualización disponible</strong><p>{activeSession ? 'Puedes actualizar al terminar el entrenamiento.' : 'Tus datos guardados se conservarán al actualizar.'}</p></div>{updateCopy.available ? <button className="primary-button update-button" disabled={Boolean(storageWarning) || authStatus === 'syncing'} onClick={() => { if (persistData(dataRef.current)) applyAppUpdate(); else setStorageWarning('No se pudo guardar antes de actualizar.'); }}>{updateCopy.label}<ChevronRight size={19} /></button> : <span className="update-locked"><Timer size={15} aria-hidden="true" />{updateCopy.label}</span>}</section>}
-        {view === 'profile' && <section className="profile-section data-status-section"><div className="section-heading compact"><div><p className="eyebrow">datos</p><h2>Estado de tus datos</h2></div><span className="data-state-pill">{accountUploadPending ? 'Solo este dispositivo · pendiente de subir' : dataStateCopy({ authenticated: Boolean(authUser), pendingChanges, cloudConflict: Boolean(cloudConflict), codeConnected: Boolean(syncState.key) })}</span></div><p>{accountUploadPending ? 'La cuenta está conectada, pero la copia local todavía no se ha enviado.' : authUser ? pendingChanges ? 'Hay cambios locales pendientes de sincronizar.' : 'Tu copia local coincide con la última sincronización.' : 'Los datos están guardados en este dispositivo.'}</p><p>{cloudUpdatedAt ? `Última versión sincronizada: ${new Date(cloudUpdatedAt).toLocaleString('es-ES')}` : 'Todavía no se ha confirmado una sincronización en esta sesión.'}</p><button className="secondary-button small" disabled={!online || authStatus === 'syncing'} onClick={() => void refreshCloud()}>Comprobar sincronización</button>{recovery && <div><p>Copia anterior conservada: {new Date(recovery.savedAt).toLocaleString('es-ES')}</p><button className="secondary-button small" disabled={authStatus === 'syncing'} onClick={restoreLocalRecovery}>Restaurar copia anterior</button><button className="text-button" onClick={() => downloadFile('radian-recovery.json', recovery.backup, 'application/json')}>Exportar copia anterior</button></div>}</section>}
-        {view === 'profile' && <AccountPanel user={authUser} passkeys={passkeys} status={authStatus} error={authError} cloudUpdatedAt={cloudUpdatedAt} uploadPending={accountUploadPending} uploadDisabled={!online} onUploadLocal={() => void uploadLocalToAccount()} onRegister={handleRegisterPasskey} onLogin={handleLoginPasskey} onAddPasskey={handleAddPasskey} onRenamePasskey={handleRenamePasskey} onRevokePasskey={handleRevokePasskey} onLogout={handleLogout} onLogoutEverywhere={handleLogoutEverywhere} />}
-        {cloudConflict?.data && <SyncConflictCard local={data} remote={cloudConflict} remoteLabel="Copia de la nube" intro="La nube cambió desde la última sincronización. Elige qué copia conservar." onKeepLocal={() => void resolveCloudConflict('local')} onUseRemote={() => void resolveCloudConflict('remote')} />}
+        {!sync.online && <section className="profile-section" role="status">Sin conexión. Puedes seguir registrando el entrenamiento; los cambios quedan en este dispositivo.</section>}
+        {sync.updateAvailable && (
+          <UpdateBanner
+            updateCopy={updateCopy}
+            hasActiveSession={hasActiveSession}
+            storageWarning={Boolean(sync.storageWarning)}
+            syncing={sync.authStatus === 'syncing'}
+            onApply={handleApplyUpdate}
+          />
+        )}
+        {view === 'profile' && (
+          <DataStatusPanel
+            accountUploadPending={sync.accountUploadPending}
+            pendingChanges={pendingChanges}
+            authenticated={Boolean(sync.authUser)}
+            busy={sync.authStatus === 'syncing'}
+            hasCloudConflict={Boolean(sync.cloudConflict)}
+            codeConnected={Boolean(sync.syncState.key)}
+            online={sync.online}
+            cloudUpdatedAt={sync.cloudUpdatedAt}
+            recovery={sync.recovery}
+            onRefresh={() => void sync.refreshCloud()}
+            onRestore={sync.restoreLocalRecovery}
+          />
+        )}
+        {view === 'profile' && (
+          <AccountPanel
+            user={sync.authUser}
+            passkeys={sync.passkeys}
+            status={sync.authStatus}
+            error={sync.authError}
+            cloudUpdatedAt={sync.cloudUpdatedAt}
+            uploadPending={sync.accountUploadPending}
+            uploadDisabled={!sync.online}
+            onUploadLocal={() => void sync.uploadLocalToAccount()}
+            onRegister={sync.handleRegisterPasskey}
+            onLogin={sync.handleLoginPasskey}
+            onAddPasskey={sync.handleAddPasskey}
+            onRenamePasskey={sync.handleRenamePasskey}
+            onRevokePasskey={sync.handleRevokePasskey}
+            onLogout={sync.handleLogout}
+            onLogoutEverywhere={sync.handleLogoutEverywhere}
+          />
+        )}
+        {sync.cloudConflict?.data && <SyncConflictCard local={data} remote={sync.cloudConflict} remoteLabel="Copia de la nube" intro="La nube cambió desde la última sincronización. Elige qué copia conservar." onKeepLocal={() => void sync.resolveCloudConflict('local')} onUseRemote={() => void sync.resolveCloudConflict('remote')} />}
         {activeSession && view !== 'today' && <ResumeSessionBanner session={activeSession} onResume={() => setView('today')} />}
-        {view === 'today' && <TodayView
-          data={data}
-          todayDay={todayDay}
-          activeSession={activeSession}
-          onSelectExercise={selectSessionExercise}
-          onDeferExercise={deferSessionExercise}
-          restRemaining={restRemaining}
-          restUntil={restUntil}
-          restExerciseName={restContext?.exerciseName}
-          onRestartRest={restartRest}
-          screenWakeLockActive={screenWakeLockActive}
-          onStart={startSession}
-          onDismissRestEnded={dismissRestEnded}
-          onComplete={completeExercise}
-          onDraft={updateExerciseDraft}
-          onSwapExercise={swapSessionExercise}
-          onQueueRecovery={queueSkippedExercises}
-          onRemoveRecoveryExercise={removeQueuedRecoveryExercise}
-          onRest={() => { const exercise = activeSession?.plannedExercises[activeSession.activeExerciseIndex]; startRest(exercise?.restSeconds ?? 90, exercise?.name ?? 'Ejercicio'); }}
-          onNavigate={setView}
-          onUndo={undoLastSessionChange}
-          canUndo={Boolean(lastSessionChange)}
-          onExit={leaveSession}
-          onHelp={() => setToast('Marca las series y cómo te ha ido; el resto queda guardado automáticamente.')}
-        />}
-        {view === 'routine' && <RoutineView data={data} days={scheduledDays} activeDay={activeDay} onDayChange={setActiveDayId} onUpdateDay={updateRoutineDay} onAddExercise={addRoutineExercise} onRemoveExercise={removeRoutineExercise} onStart={startSession} searchRequest={exerciseSearchRequest} onSearchRequestHandled={clearExerciseSearchRequest} />}
-        {view === 'progress' && <ProgressView data={data} onAddProgress={addProgress} onAddCheckin={addCheckin} onInfo={() => setToast('Las métricas se calculan solo con sesiones y medidas guardadas en Radian.')} onToast={setToast} />}
-        {view === 'profile' && <ProfileView data={data} authUser={authUser} theme={theme} onThemeChange={changeTheme} onUpdateProfile={updateProfile} onRepeatOnboarding={repeatOnboarding} onImport={(next) => { setData(next); setToast('Copia restaurada'); }} onConfirmImport={() => showConfirm({ title: '¿Importar esta copia?', message: 'Esto sustituirá los datos locales actuales.', confirmLabel: 'Importar', danger: false })} onConfirmEquipment={(message) => showConfirm({ title: '¿Adaptar la rutina?', message, confirmLabel: 'Adaptar ejercicios', danger: false })} syncState={syncState} syncStatus={syncStatus} syncError={syncError} syncConflict={syncConflict} onKeepLocalSync={keepLocalSync} onUseRemoteSync={useRemoteSync} onConnectSync={connectSync} onUploadSync={uploadSync} onDownloadSync={downloadSync} onDisconnectSync={disconnectSync} onRevokeSync={revokeSync} onInstall={installPrompt ? installApp : undefined} isInstalled={isInstalled} />}
+        {view === 'today' && (
+          <TodayView
+            data={data}
+            todayDay={todayDay}
+            activeSession={activeSession}
+            onSelectExercise={session.selectSessionExercise}
+            onDeferExercise={session.deferSessionExercise}
+            restRemaining={rest.restRemaining}
+            restUntil={rest.restUntil}
+            restExerciseName={rest.restContext?.exerciseName}
+            onRestartRest={rest.restartRest}
+            screenWakeLockActive={screenWakeLockActive}
+            onStart={session.startSession}
+            onDismissRestEnded={rest.dismissRestEnded}
+            onComplete={session.completeExercise}
+            onDraft={session.updateExerciseDraft}
+            onSwapExercise={session.swapSessionExercise}
+            onQueueRecovery={session.queueSkippedExercises}
+            onRemoveRecoveryExercise={session.removeQueuedRecoveryExercise}
+            onRest={() => {
+              const exercise = activeSession?.plannedExercises[activeSession.activeExerciseIndex];
+              rest.startRest(exercise?.restSeconds ?? 90, exercise?.name ?? 'Ejercicio');
+            }}
+            onNavigate={setView}
+            onUndo={session.undoLastSessionChange}
+            canUndo={Boolean(session.lastSessionChange)}
+            onExit={leaveSession}
+            onHelp={() => setToast('Marca las series y cómo te ha ido; el resto queda guardado automáticamente.')}
+          />
+        )}
+        {view === 'routine' && (
+          <RoutineView
+            data={data}
+            days={scheduledDays}
+            activeDay={activeDay}
+            onDayChange={setActiveDayId}
+            onUpdateDay={routine.updateRoutineDay}
+            onAddExercise={routine.addRoutineExercise}
+            onRemoveExercise={routine.removeRoutineExercise}
+            onStart={session.startSession}
+            searchRequest={exerciseSearchRequest}
+            onSearchRequestHandled={clearExerciseSearchRequest}
+          />
+        )}
+        {view === 'progress' && (
+          <ProgressView data={data} onAddProgress={routine.addProgress} onAddCheckin={routine.addCheckin} onInfo={() => setToast('Las métricas se calculan solo con sesiones y medidas guardadas en Radian.')} onToast={setToast} />
+        )}
+        {view === 'profile' && (
+          <ProfileView
+            data={data}
+            authUser={sync.authUser}
+            theme={theme}
+            onThemeChange={changeTheme}
+            onUpdateProfile={routine.updateProfile}
+            onRepeatOnboarding={repeatOnboarding}
+            onImport={(next) => { setData(next); setToast('Copia restaurada'); }}
+            onConfirmImport={() => showConfirm({ title: '¿Importar esta copia?', message: 'Esto sustituirá los datos locales actuales.', confirmLabel: 'Importar', danger: false })}
+            onConfirmEquipment={(message) => showConfirm({ title: '¿Adaptar la rutina?', message, confirmLabel: 'Adaptar ejercicios', danger: false })}
+            syncState={sync.syncState}
+            syncStatus={sync.syncStatus}
+            syncError={sync.syncError}
+            syncConflict={sync.syncConflict}
+            onKeepLocalSync={sync.keepLocalSync}
+            onUseRemoteSync={sync.useRemoteSync}
+            onConnectSync={sync.connectSync}
+            onUploadSync={sync.uploadSync}
+            onDownloadSync={sync.downloadSync}
+            onDisconnectSync={sync.disconnectSync}
+            onRevokeSync={sync.revokeSync}
+            onInstall={installPrompt ? installApp : undefined}
+            isInstalled={isInstalled}
+          />
+        )}
       </main>
       <BottomNav view={view} onChange={setView} />
       {exitDialogOpen && <SessionExitDialog onCancel={() => setExitDialogOpen(false)} onConfirm={confirmLeaveSession} />}
       {confirmDialog && <ConfirmDialog {...confirmDialog} />}
-      {restEnded && <RestEndedOverlay nextExerciseName={activeSession?.plannedExercises[activeSession.activeExerciseIndex]?.name} onDismiss={dismissRestEnded} />}
-      {(restRemaining > 0 || toast || storageWarning) && <div className="floating-feedback" aria-live="polite">
-        {toast && <div className="toast" role="status"><Check size={16} />{toast}</div>}
-        {storageWarning && <div className="storage-warning" role="alert"><CloudOff size={16} />{storageWarning}</div>}
-        <RestFloating restUntil={restUntil} restRemaining={restRemaining} exerciseName={restContext?.exerciseName} paused={restPaused} onAdjust={adjustRest} onPause={pauseRest} onResume={resumeRest} onClose={() => { setRestUntil(null); setRestRemaining(0); setRestContext(undefined); setRestPaused(false); }} />
-      </div>}
-      {!data.onboardingComplete && <OnboardingDialog profile={data.profile} onComplete={completeOnboarding} />}
+      {rest.restEnded && <RestEndedOverlay nextExerciseName={activeSession?.plannedExercises[activeSession.activeExerciseIndex]?.name} onDismiss={rest.dismissRestEnded} />}
+      {(rest.restRemaining > 0 || toast || sync.storageWarning) && (
+        <div className="floating-feedback" aria-live="polite">
+          {toast && <div className="toast" role="status"><Check size={16} />{toast}</div>}
+          {sync.storageWarning && <div className="storage-warning" role="alert"><CloudOff size={16} />{sync.storageWarning}</div>}
+          <RestFloating
+            restUntil={rest.restUntil}
+            restRemaining={rest.restRemaining}
+            exerciseName={rest.restContext?.exerciseName}
+            paused={rest.restPaused}
+            onAdjust={rest.adjustRest}
+            onPause={rest.pauseRest}
+            onResume={rest.resumeRest}
+            onClose={rest.resetRest}
+          />
+        </div>
+      )}
+      {!data.onboardingComplete && <OnboardingDialog profile={data.profile} onComplete={routine.completeOnboarding} />}
     </div>
   );
 }
 
-function useRestCountdown(restUntil: number | null, pausedRemaining: number): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (restUntil === null) return undefined;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [restUntil]);
-  return restUntil === null ? pausedRemaining : Math.max(0, Math.ceil((restUntil - now) / 1000));
-}
-
-function RestFloating({ restUntil, restRemaining, exerciseName, paused, onAdjust, onPause, onResume, onClose }: { restUntil: number | null; restRemaining: number; exerciseName?: string; paused: boolean; onAdjust: (seconds: number) => void; onPause: () => void; onResume: () => void; onClose: () => void }) {
-  const remaining = useRestCountdown(restUntil, restRemaining);
-  if (remaining <= 0) return null;
-  return <div className="rest-float"><Timer size={17} /><div><strong>{formatDuration(remaining)}</strong><span>{exerciseName ? `Tras ${exerciseName} · ${paused ? 'pausado' : 'en curso'}` : paused ? 'descanso pausado' : 'descanso en curso'}</span></div><div className="rest-controls"><button type="button" aria-label="Restar 15 segundos" onClick={() => onAdjust(-15)}><Minus size={14} /></button><button type="button" aria-label={paused ? 'Reanudar descanso' : 'Pausar descanso'} onClick={paused ? onResume : onPause}>{paused ? <Play size={14} fill="currentColor" /> : <Pause size={14} />}</button><button type="button" aria-label="Añadir 30 segundos" onClick={() => onAdjust(30)}><Plus size={14} /></button><button type="button" aria-label="Cerrar temporizador" onClick={onClose}><X size={17} /></button></div></div>;
-}
-
-const BottomNav = memo(function BottomNav({ view, onChange }: { view: View; onChange: (view: View) => void }) {
-  return <nav className="bottom-nav" aria-label="Navegación principal">{navItems.map(({ id, label, icon: Icon }) => <button key={id} className={view === id ? 'nav-item is-active' : 'nav-item'} aria-current={view === id ? 'page' : undefined} onClick={() => onChange(id)}><Icon size={20} strokeWidth={view === id ? 2.6 : 1.8} /><span>{label}</span></button>)}</nav>;
-});
-
-const PageHeader = memo(function PageHeader({ eyebrow, title, action }: { eyebrow: string; title: React.ReactNode; action?: React.ReactNode }) {
-  return <div className="page-header"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1></div>{action}</div>;
-});
-
-function ResumeSessionBanner({ session, onResume }: { session: WorkoutSession; onResume: () => void }) {
-  const exercise = session.plannedExercises[session.activeExerciseIndex];
-  const completed = session.plannedExercises.filter((item) => item.completed).length;
-  return <section className="resume-banner" aria-label="Sesión pendiente"><div><p className="eyebrow">sesión pendiente</p><strong>Continúa {exercise?.name ?? 'tu sesión'}</strong><span>{completed} de {session.plannedExercises.length} ejercicios · guardado en este dispositivo</span></div><button className="primary-button small" type="button" onClick={onResume}><Play size={15} fill="currentColor" /> Continuar</button></section>;
-}
-
-function SessionExitDialog({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: () => void }) {
-  const dialogRef = useRef<HTMLElement | null>(null);
-  useFocusTrap(dialogRef, true, onCancel);
-  return <div className="session-exit-backdrop" role="presentation" onMouseDown={onCancel}><section ref={dialogRef} className="session-exit-dialog" role="dialog" aria-modal="true" aria-labelledby="session-exit-title" onMouseDown={(event) => event.stopPropagation()}><div className="session-exit-heading"><p className="eyebrow">salir de la sesión</p><button className="icon-button subtle" type="button" aria-label="Cerrar aviso" onClick={onCancel}><X size={18} /></button></div><h2 id="session-exit-title">¿Pausar aquí?</h2><p>Tu progreso se ha guardado en este dispositivo. Podrás continuar desde Hoy cuando quieras.</p><div className="session-exit-actions"><button className="secondary-button" type="button" onClick={onCancel}>Seguir entrenando</button><button className="primary-button" type="button" onClick={onConfirm}>Pausar y salir</button></div></section></div>;
-}
-
-function ConfirmDialog({ title, message, confirmLabel = 'Confirmar', danger = false, onConfirm, onCancel }: { title: string; message: string; confirmLabel?: string; danger?: boolean; onConfirm: () => void; onCancel: () => void }) {
-  const dialogRef = useRef<HTMLElement | null>(null);
-  useFocusTrap(dialogRef, true, onCancel);
-  const content = <div className="session-exit-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}><section ref={dialogRef} className="session-exit-dialog confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title" aria-describedby="confirm-dialog-message" onMouseDown={(event) => event.stopPropagation()}><h2 id="confirm-dialog-title">{title}</h2><p id="confirm-dialog-message">{message}</p><div className="session-exit-actions"><button className="secondary-button" type="button" onClick={onCancel}>Cancelar</button><button className={danger ? 'primary-button danger-button' : 'primary-button'} type="button" onClick={onConfirm}>{confirmLabel}</button></div></section></div>;
-  return createPortal(content, document.body);
-}
-
-function RestEndedOverlay({ nextExerciseName, onDismiss }: { nextExerciseName?: string; onDismiss: () => void }) {
-  const dialogRef = useRef<HTMLElement | null>(null);
-  useFocusTrap(dialogRef, true, onDismiss);
-  useEffect(() => {
-    const timer = window.setTimeout(onDismiss, 10_000);
-    return () => { window.clearTimeout(timer); };
-  }, [onDismiss]);
-  const content = <div className="rest-ended-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onDismiss(); }}><section ref={dialogRef} className="rest-ended-dialog" role="dialog" aria-modal="true" aria-labelledby="rest-ended-title" onMouseDown={(event) => event.stopPropagation()}><Check className="rest-ended-check" size={52} aria-hidden="true" /><p className="eyebrow">temporizador</p><h2 id="rest-ended-title">¡Descanso terminado!</h2><p>{nextExerciseName ? `Siguiente: ${nextExerciseName}` : 'Cuando quieras, puedes continuar.'}</p><button className="primary-button" type="button" onClick={onDismiss}>Continuar</button></section></div>;
-  return createPortal(content, document.body);
-}
-
-function TodayView({ data, todayDay, activeSession, onSelectExercise, onDeferExercise, restRemaining, restUntil, restExerciseName, onRestartRest, screenWakeLockActive, onStart, onDismissRestEnded, onComplete, onDraft, onSwapExercise, onQueueRecovery, onRemoveRecoveryExercise, onRest, onNavigate, onUndo, canUndo, onExit, onHelp }: {
-  data: AppData;
-  todayDay?: WorkoutDay;
-  activeSession?: WorkoutSession;
-  onSelectExercise: (sessionId: string, index: number) => void;
-  onDeferExercise: (session: WorkoutSession) => void;
-  restRemaining: number;
-  restUntil: number | null;
-  restExerciseName?: string;
-  onRestartRest: () => void;
-  screenWakeLockActive: boolean;
-  onStart: (day: WorkoutDay, readiness?: SessionReadiness) => void;
-  onDismissRestEnded: () => void;
-  onComplete: (session: WorkoutSession, exercise: ExerciseSession, patch: Partial<ExerciseSession>, startRest: boolean) => void;
-  onDraft: (sessionId: string, plannedExerciseId: string, patch: Partial<ExerciseSession>) => void;
-  onSwapExercise: (sessionId: string, plannedExerciseId: string, replacement: ExerciseDefinition, reason: 'discomfort' | 'equipment') => void;
-  onQueueRecovery: (sessionId: string) => void;
-  onRemoveRecoveryExercise: (sessionId: string, recoveryExerciseId: string) => void;
-  onRest: () => void;
-  onNavigate: (view: View) => void;
-  onUndo: () => void;
-  canUndo: boolean;
-  onExit: () => void;
-  onHelp: () => void;
-}) {
-  const [detailExercise, setDetailExercise] = useState<PlannedExercise>();
-  const [readinessOpen, setReadinessOpen] = useState(false);
-  const [readiness, setReadiness] = useState<SessionReadiness>({ energy: 'normal', soreness: 'none' });
-  const [selectedWorkoutDayId, setSelectedWorkoutDayId] = useState<string>();
-  const activeExerciseNumber = activeSession ? Math.min(activeSession.activeExerciseIndex + 1, activeSession.plannedExercises.length) : 0;
-  const scheduledDays = scheduledWorkoutDays(data.plan.days, data.profile.trainingDays);
-  const defaultWorkoutDay = todayDay ?? scheduledDays.find((item) => item.weekday > currentWeekday()) ?? scheduledDays[0];
-  const selectedWorkoutDay = scheduledDays.find((item) => item.id === selectedWorkoutDayId);
-  const workoutDay = activeSession
-    ? data.plan.days.find((item) => item.id === activeSession.workoutDayId) ?? defaultWorkoutDay
-    : selectedWorkoutDay ?? defaultWorkoutDay;
-  const isAlternativeWorkout = !activeSession && workoutDay.id !== defaultWorkoutDay.id;
-  const plannedExercises = workoutDay.exercises.filter((exercise) => exercise.active);
-  const plannedSets = plannedExercises.reduce((total, exercise) => total + exercise.sets, 0);
-  const displayedExerciseCount = activeSession?.plannedExercises.length ?? plannedExercises.length;
-  const doneToday = data.sessions.some((session) => session.dateKey === dateKey() && session.status === 'completed');
-  const latestCompletedToday = data.sessions.filter((session) => session.dateKey === dateKey() && session.status === 'completed').sort((a, b) => (b.completedAt ?? '').localeCompare(a.completedAt ?? ''))[0];
-  const completedSummary = latestCompletedToday ? summarizeSession(latestCompletedToday, data.sessions) : undefined;
-  const completedExerciseComparisons = useMemo(() => latestCompletedToday ? sessionExerciseComparisons(latestCompletedToday, data.sessions) : [], [data.sessions, workoutDay]);
-  const pendingRecoveryItems = data.sessions.flatMap((session) => (session.recoveryExercises ?? []).map((exercise) => ({ sessionId: session.id, exercise })));
-  const primaryAction = todayPrimaryAction(doneToday);
-
-  const previousExercise = activeSession ? latestExercise(data.sessions, activeSession.plannedExercises[activeSession.activeExerciseIndex]?.exerciseId) : undefined;
-  const currentRecommendation = activeSession ? recommendationFor(activeSession.plannedExercises[activeSession.activeExerciseIndex]?.exerciseId ?? '', data.sessions) : undefined;
-  const currentExercise = activeSession?.plannedExercises[activeSession.activeExerciseIndex];
-  const currentProgressionCue = activeSession && currentExercise ? progressionCue(currentExercise.exerciseId, data.sessions, currentExercise) : undefined;
-  const currentProgressionAction = activeSession && currentExercise ? progressionAction(currentExercise.exerciseId, data.sessions, currentExercise) : undefined;
-  const activeExerciseId = activeSession?.plannedExercises[activeSession.activeExerciseIndex]?.exerciseId ?? '';
-  const activeExerciseEquipment = data.exercises.find((exercise) => exercise.id === activeExerciseId)?.equipment;
-  const currentAlternatives = activeSession ? alternativeExercises(data, activeExerciseId) : [];
-  const equipmentAlternatives = activeSession ? alternativeExercises(data, activeExerciseId, true) : [];
-
-  return <><section className={activeSession ? 'view-section today-view session-active-view' : 'view-section today-view'}>
-    <PageHeader eyebrow={formatDate(new Date(), { weekday: 'long', day: 'numeric', month: 'long' })} title={activeSession ? 'Sigue a tu ritmo.' : <><span>Lo que toca </span><em>hoy.</em></>} />
-    {!activeSession && <TodayStats sessions={data.sessions} exerciseCount={plannedExercises.length} setCount={plannedSets} sessionMinutes={data.profile.sessionMinutes} />}
-    <section className={activeSession ? 'today-hero session-active-hero' : 'today-hero'}>
-      <div className="hero-art" aria-hidden="true"><img src={workoutDay.exercises[0]?.imageUrl ?? '/exercises/atlas-push.webp'} alt="" /></div>
-      <div className="hero-orbit"><span>{data.profile.gym || 'TU GIMNASIO'}</span><Dumbbell size={29} /></div>
-      <div className="hero-copy">
-        <p className="eyebrow light">{activeSession ? 'sesión en curso' : isAlternativeWorkout ? 'sesión elegida para hoy' : doneToday ? 'hecho por hoy' : workoutDay.weekday === currentWeekday() ? 'entrenamiento de hoy' : 'siguiente sesión'}</p>
-        <h2>{displayWorkoutName(workoutDay.name)}</h2>
-        {!activeSession && <label className="today-workout-picker"><span>Entrenamiento para hoy</span><select value={workoutDay.id} onChange={(event) => setSelectedWorkoutDayId(event.currentTarget.value)}>{scheduledDays.map((dayOption) => <option key={dayOption.id} value={dayOption.id}>{displayWorkoutName(dayOption.name)}</option>)}</select></label>}
-        <p>{workoutDay.focus} · {displayedExerciseCount} ejercicios / ~{data.profile.sessionMinutes} min</p>
-      </div>
-      <div className="hero-progress"><strong>{activeSession ? `${activeExerciseNumber}/${activeSession.plannedExercises.length}` : doneToday ? '✓' : String(plannedExercises.length)}</strong><span>{activeSession ? 'ejercicio actual' : doneToday ? 'sesión guardada' : 'bloques'}</span></div>
-      <div className="hero-actions">{!activeSession && <button className="primary-button start-button" type="button" onClick={() => setReadinessOpen(true)}><Play size={18} fill="currentColor" /> {primaryAction.label}</button>}<button className="hero-icon-button" type="button" aria-label="Ver rutina" onClick={() => onNavigate('routine')}><Clipboard size={19} /></button><button className="hero-icon-button" type="button" aria-label="Ayuda" onClick={onHelp}><MoreHorizontal size={21} /></button></div>
-    </section>
-    {activeSession ? <><SessionAdaptationNotice readiness={activeSession.readiness} /><ActiveSession session={activeSession} restRemaining={restRemaining} restUntil={restUntil} restExerciseName={restExerciseName} onRestartRest={onRestartRest} screenWakeLockActive={screenWakeLockActive} previousExercise={previousExercise} bestRecord={bestRecordForExercise(data.sessions, activeSession.plannedExercises[activeSession.activeExerciseIndex]?.exerciseId ?? '')} recommendation={currentRecommendation} progression={currentProgressionCue} progressionAction={currentProgressionAction} alternatives={currentAlternatives} equipmentAlternatives={equipmentAlternatives} exerciseEquipment={activeExerciseEquipment} onSelectExercise={(index) => onSelectExercise(activeSession.id, index)} onDefer={() => onDeferExercise(activeSession)} onComplete={onComplete} onDraft={onDraft} onSwap={(replacement, reason) => onSwapExercise(activeSession.id, activeSession.plannedExercises[activeSession.activeExerciseIndex].plannedExerciseId, replacement, reason)} onRest={onRest} onUndo={onUndo} canUndo={canUndo} onExit={onExit} /> </> : <>
-      {completedSummary && latestCompletedToday && <CompletedSessionSummary session={latestCompletedToday} summary={completedSummary} comparisons={completedExerciseComparisons} onQueueRecovery={onQueueRecovery} onViewProgress={() => onNavigate('progress')} />}
-      {pendingRecoveryItems.length > 0 && <RecoveryQueueCard items={pendingRecoveryItems} onRemove={onRemoveRecoveryExercise} />}
-      <section className="training-plan" aria-labelledby="training-plan-title">
-        <div className="section-heading plan-heading"><div><p className="eyebrow">el plan</p><h2 id="training-plan-title">{isAlternativeWorkout ? 'Sesión elegida para hoy' : workoutDay.weekday === currentWeekday() ? 'Tu sesión' : 'Próximo entrenamiento'}</h2><div className="plan-summary" aria-label="Resumen del entrenamiento"><span><Dumbbell size={16} aria-hidden="true" /> {plannedExercises.length} ejercicios</span><span className="plan-summary-separator" aria-hidden="true">·</span><span><Layers3 size={16} aria-hidden="true" /> {plannedSets} series</span><span className="plan-summary-separator" aria-hidden="true">·</span><span><Timer size={16} aria-hidden="true" /> ~{data.profile.sessionMinutes} min</span></div></div><button className="text-button plan-edit-button" type="button" onClick={() => onNavigate('routine')}><Pencil size={17} aria-hidden="true" /> Editar rutina <ChevronRight size={16} aria-hidden="true" /></button></div>
-        <p className="today-start-hint plan-info"><Info size={17} aria-hidden="true" /><span>{primaryAction.hint}</span></p>
-        {readinessOpen && <ReadinessPrompt value={readiness} onChange={setReadiness} onSkip={() => { setReadinessOpen(false); onDismissRestEnded(); onStart(workoutDay); }} onStart={() => { setReadinessOpen(false); onDismissRestEnded(); onStart(workoutDay, readiness); }} />}
-        <div className="exercise-list plan-exercise-list">{plannedExercises.map((exercise, index) => <ExercisePreview key={exercise.id} exercise={exercise} index={index} muscleGroup={data.exercises.find((item) => item.id === exercise.exerciseId)?.muscleGroup} onOpenDetails={() => setDetailExercise(exercise)} />)}</div>
-      </section>
-      <TodayDashboardAside data={data} onNavigate={onNavigate} />
-
-    </>}
-  </section>{detailExercise && <ExerciseDetailSheet exercise={detailExercise} muscleGroup={data.exercises.find((item) => item.id === detailExercise.exerciseId)?.muscleGroup} guidance={exerciseGuidance[detailExercise.exerciseId]} recommendation={recommendationFor(detailExercise.exerciseId, data.sessions)} progressionAction={progressionAction(detailExercise.exerciseId, data.sessions, detailExercise)} lastSession={latestExercise(data.sessions, detailExercise.exerciseId)} onClose={() => setDetailExercise(undefined)} />}</>;
-}
-
-function TodayStats({ sessions, exerciseCount, setCount, sessionMinutes }: { sessions: WorkoutSession[]; exerciseCount: number; setCount: number; sessionMinutes: number }) {
-  const monthKey = dateKey().slice(0, 7);
-  const monthSessions = sessions.filter((session) => session.status === 'completed' && session.dateKey.startsWith(monthKey));
-  return <section className="dashboard-stats" aria-label="Resumen de actividad">
-    <div className="stat-card"><span className="stat-icon"><Dumbbell size={19} /></span><strong>{exerciseCount}</strong><span>ejercicios hoy</span></div>
-    <div className="stat-card"><span className="stat-icon"><Layers3 size={19} /></span><strong>{setCount}</strong><span>series en total</span></div>
-    <div className="stat-card"><span className="stat-icon"><Timer size={19} /></span><strong>~{sessionMinutes} min</strong><span>tiempo estimado</span></div>
-    <div className="stat-card"><span className="stat-icon"><BarChart3 size={19} /></span><strong>{monthSessions.length}</strong><span>entrenamientos este mes</span></div>
-  </section>;
-}
-
-const TodayDashboardAside = memo(function TodayDashboardAside({ data, onNavigate }: { data: AppData; onNavigate: (view: View) => void }) {
-  const monthSessions = useMemo(() => {
-    const monthKey = dateKey().slice(0, 7);
-    return data.sessions.filter((session) => session.status === 'completed' && session.dateKey.startsWith(monthKey));
-  }, [data.sessions]);
-  const monthSummary = useMemo(() => monthSessions.reduce((total, session) => {
-    const summary = summarizeSession(session);
-    return { volumeKg: total.volumeKg + summary.volumeKg, durationSeconds: total.durationSeconds + summary.durationSeconds };
-  }, { volumeKg: 0, durationSeconds: 0 }), [monthSessions]);
-  const weekDays = useMemo(() => buildWeekDays(data.profile.trainingDays, data.sessions), [data.sessions, data.plan.days, data.profile.trainingDays]);
-  const streak = useMemo(() => getLatestWorkoutStreak(data.profile.trainingDays, data.sessions), [data.sessions, data.profile.trainingDays]);
-  const completedWeekdays = weekDays.filter((day) => day.completed).map((day) => dayNames[new Date(`${day.key}T12:00:00`).getDay()]);
-  const completedWeekdayLabel = completedWeekdays.length === 0
-    ? 'ningún entrenamiento completado'
-    : `${completedWeekdays.length > 1 ? `${completedWeekdays.slice(0, -1).join(', ')} y ${completedWeekdays.at(-1)}` : completedWeekdays[0]} completado${completedWeekdays.length === 1 ? '' : 's'}`;
-  const plannedDaysCount = weekDays.filter((day) => day.planned).length;
-  return <aside className="today-dashboard-aside" aria-label="Resumen y calendario">
-    <section className="progress-card home-streak-card">
-      <div className="section-heading compact"><div><p className="eyebrow">constancia</p><h2>Racha de sesiones</h2></div><Activity size={19} /></div>
-      <div className="home-streak-reading"><strong>{streak}</strong><span>sesiones seguidas</span></div>
-      <div className="home-week-dots" role="img" aria-label={`Semana: ${completedWeekdayLabel} de ${plannedDaysCount} planificados`}>{weekDays.map((day) => <span key={day.key} className={`${day.completed ? 'is-complete' : ''}${day.planned ? ' is-planned' : ''}`} title={`${day.label}: ${day.completed ? 'completado' : day.planned ? 'previsto' : 'descanso'}`} />)}</div>
-      <div className="home-week-labels" aria-hidden="true">{weekDays.map((day) => <span key={day.key}>{day.label}</span>)}</div>
-    </section>
-    <section className="progress-card home-month-card">
-      <div className="section-heading compact"><div><p className="eyebrow">este mes</p><h2>Progreso del mes</h2></div><button type="button" className="text-button" onClick={() => onNavigate('progress')}>Ver detalle <ChevronRight size={15} /></button></div>
-      <div className="home-month-metrics"><div><span>Entrenamientos</span><strong>{monthSessions.length}</strong></div><div><span>Volumen total</span><strong>{formatVolume(monthSummary.volumeKg)}</strong></div><div><span>Tiempo total</span><strong>{monthSummary.durationSeconds ? formatSessionDuration(monthSummary.durationSeconds) : '0 min'}</strong></div></div>
-    </section>
-    <HomeMuscleGroupsCard data={data} onNavigate={onNavigate} />
-    <section className="progress-card home-calendar-card"><div className="section-heading compact"><div><p className="eyebrow">historial</p><h2>Calendario</h2></div><CalendarDays size={19} /></div><SessionCalendar sessions={data.sessions} trainingDays={data.profile.trainingDays} exercises={data.exercises} workoutDays={data.plan.days} /></section>
-    <blockquote className="home-quote-card"><span aria-hidden="true">“</span><p>La disciplina de hoy<br />es la libertad de mañana.</p></blockquote>
-  </aside>;
-});
-
-function HomeMuscleGroupsCard({ data, onNavigate }: { data: AppData; onNavigate: (view: View) => void }) {
-  const muscleGroups = useMemo(() => muscleGroupVolumes(data).slice(0, 3), [data.sessions, data.exercises]);
-  return <section className="progress-card home-muscle-card"><div className="section-heading compact"><div><p className="eyebrow">actividad</p><h2>Grupos musculares</h2></div><button type="button" className="text-button" onClick={() => onNavigate('progress')}>Ver más <ChevronRight size={15} /></button></div>{muscleGroups.length ? <div className="home-muscle-grid">{muscleGroups.map((group) => { const image = data.exercises.find((exercise) => exercise.muscleGroup === group.muscleGroup)?.imageUrl; return <article className="home-muscle-tile" key={group.muscleGroup}>{image && <img src={image} alt="" loading="lazy" />}<strong>{group.muscleGroup}</strong><span>{formatVolume(group.volume)}</span></article>; })}</div> : <p className="home-muscle-empty">Completa sesiones para ver el volumen por grupo.</p>}</section>;
-}
-
-function ReadinessPrompt({ value, onChange, onSkip, onStart }: { value: SessionReadiness; onChange: (value: SessionReadiness) => void; onSkip: () => void; onStart: () => void }) {
-  const energyOptions: Array<{ value: Energy; label: string }> = [
-    { value: 'low', label: 'Baja' }, { value: 'normal', label: 'Normal' }, { value: 'high', label: 'Alta' },
-  ];
-  const sorenessOptions: Array<{ value: Soreness; label: string }> = [
-    { value: 'none', label: 'Ninguna' }, { value: 'some', label: 'Algo' }, { value: 'high', label: 'Mucha' },
-  ];
-  const choices = (options: Array<{ value: Energy | Soreness; label: string }>, selected: Energy | Soreness, update: (value: Energy | Soreness) => void) => options.map((option) => <button key={option.value} className={selected === option.value ? 'readiness-choice selected' : 'readiness-choice'} type="button" aria-pressed={selected === option.value} onClick={() => update(option.value)}>{option.label}</button>);
-  return <section className="readiness-panel" aria-labelledby="readiness-title"><div><p className="eyebrow">check-in rápido · opcional</p><h3 id="readiness-title">¿Cómo llegas hoy?</h3><p>Radian usará estas sensaciones para ajustar el volumen y el descanso de esta sesión.</p></div><div className="readiness-group"><span>Energía</span><div className="readiness-choices">{choices(energyOptions, value.energy, (next) => onChange({ ...value, energy: next as Energy }))}</div></div><div className="readiness-group"><span>Molestias musculares</span><div className="readiness-choices">{choices(sorenessOptions, value.soreness, (next) => onChange({ ...value, soreness: next as Soreness }))}</div></div><div className="readiness-actions"><button className="secondary-button small" type="button" onClick={onSkip}>Empezar sin responder</button><button className="primary-button small" type="button" onClick={onStart}>Guardar y empezar</button></div></section>;
-}
-
-function SessionAdaptationNotice({ readiness }: { readiness?: SessionReadiness }) {
-  const adaptation = sessionAdaptation(readiness);
-  if (adaptation.mode === 'normal') return null;
-  return <section className={`session-adaptation-notice ${adaptation.mode}`} role="status"><Gauge size={17} /><div><strong>{adaptation.label}</strong><span>{adaptation.detail}</span></div></section>;
-}
-
-export function ExercisePreview({ exercise, index, muscleGroup, onOpenDetails }: { exercise: PlannedExercise; index: number; muscleGroup?: string; onOpenDetails: () => void }) {
-  return <button type="button" className="exercise-card preview-card" aria-label={`Abrir detalles de ${exercise.name}`} onClick={onOpenDetails}>
-    <div className="exercise-index">{String(index + 1).padStart(2, '0')}</div>
-    <ExerciseThumb src={exercise.imageUrl} position={exercise.imagePosition} alt={`Referencia de ${exercise.name}`} />
-    <div className="exercise-main">
-      <div className="exercise-preview-heading">
-        <strong className="exercise-preview-name">{exercise.name}</strong>
-      </div>
-      <div className="exercise-meta" aria-label="Detalles del ejercicio"><span className="exercise-muscle-pill"><span className="exercise-muscle-dot" aria-hidden="true" />{muscleGroup ?? 'Ejercicio'}</span><span className="exercise-meta-value"><Layers3 size={15} aria-hidden="true" /> {exercise.sets} series</span><span className="exercise-meta-separator" aria-hidden="true">·</span><span className="exercise-meta-value">{exercise.repMin}–{exercise.repMax} reps</span><span className="exercise-meta-separator" aria-hidden="true">·</span><span className="exercise-meta-value"><Timer size={15} aria-hidden="true" /> {formatDuration(exercise.restSeconds)}</span></div>
-    </div>
-    <ChevronRight className="exercise-card-chevron" size={23} aria-hidden="true" />
-  </button>;
-}
-
-interface SessionExerciseComparison {
-  plannedExerciseId: string;
-  exerciseId: string;
-  name: string;
-  previous?: { dateKey: string; result: string };
-  currentResult: string;
-  nextAction?: ReturnType<typeof progressionAction>;
-}
-
-interface RecoveryQueueItem { sessionId: string; exercise: PlannedExercise }
-
-function RecoveryQueueCard({ items, onRemove }: { items: RecoveryQueueItem[]; onRemove: (sessionId: string, exerciseId: string) => void }) {
-  return <section className="recovery-queue" aria-labelledby="recovery-queue-title">
-    <div className="recovery-queue-heading"><div><p className="eyebrow">para tu próxima sesión</p><h2 id="recovery-queue-title">Ejercicios pendientes</h2></div><span>{items.length}</span></div>
-    <p>Se añadirán al siguiente entrenamiento que empieces.</p>
-    <ul>{items.map(({ sessionId, exercise }) => <li key={`${sessionId}-${exercise.id}`}><span>{exercise.name}</span><button className="text-button" type="button" onClick={() => onRemove(sessionId, exercise.id)}>Quitar</button></li>)}</ul>
-  </section>;
-}
-
-function CompletedSessionSummary({ session, summary, comparisons, onQueueRecovery, onViewProgress }: { session: WorkoutSession; summary: SessionSummary; comparisons: SessionExerciseComparison[]; onQueueRecovery: (sessionId: string) => void; onViewProgress: () => void }) {
-  const allExercisesCompleted = summary.completedExercises === summary.totalExercises;
-  const pendingExercises = summary.totalExercises - summary.completedExercises - summary.skippedExercises.length;
-  const skippedLabel = summary.skippedExercises.length === 1 ? '1 ejercicio saltado' : `${summary.skippedExercises.length} ejercicios saltados`;
-  const statusMessage = allExercisesCompleted
-    ? 'Sesión completa. Ya tienes una referencia para la próxima.'
-    : summary.skippedExercises.length > 0
-      ? `Sesión cerrada con ${skippedLabel}${pendingExercises > 0 ? ` y ${pendingExercises} pendiente${pendingExercises === 1 ? '' : 's'}` : ''}.`
-      : `Sesión cerrada con ${pendingExercises} ejercicio${pendingExercises === 1 ? '' : 's'} pendiente${pendingExercises === 1 ? '' : 's'}.`;
-  return <section className="completed-summary" aria-labelledby="completed-summary-title">
-    <div className="completed-summary-heading"><div><p className="eyebrow">sesión guardada</p><h2 id="completed-summary-title">Buen trabajo.</h2></div><span className="completed-summary-mark"><Check size={18} /></span></div>
-    <div className="session-summary-grid"><div><Timer size={16} /><strong>{formatSessionDuration(summary.durationSeconds)}</strong><span>duración</span></div><div><Dumbbell size={16} /><strong>{summary.completedExercises}/{summary.totalExercises}</strong><span>ejercicios</span></div><div><Check size={16} /><strong>{summary.completedWorkSets}</strong><span>series de trabajo</span></div><div><Layers3 size={16} /><strong>{summary.volumeKg > 0 ? formatVolume(summary.volumeKg) : 'Sin carga'}</strong><span>volumen estimado</span></div></div>
-    {summary.skippedExercises.length > 0 && <div className="summary-skipped"><p className="eyebrow">ejercicios saltados</p><ul>{summary.skippedExercises.map((exercise) => <li key={exercise.exerciseId}>{exercise.name}</li>)}</ul></div>}
-    {summary.skippedExercises.length > 0 && <div className="summary-recovery-action">{session.recoveryExercises?.length ? <p role="status">Guardados para la próxima sesión.</p> : <><p>¿Quieres recuperarlos en tu próximo entrenamiento?</p><button className="secondary-button small" type="button" onClick={() => onQueueRecovery(session.id)}><RotateCcw size={15} /> Añadir a próxima sesión</button></>}</div>}
-    {summary.records.length > 0 && <div className="summary-records"><p className="eyebrow">marcas de hoy</p>{summary.records.map((record) => <div className="summary-record" key={record.exerciseId}><Trophy size={15} /><span><strong>{record.name}</strong>{record.event.kind === 'first' ? `Primera marca · ${formatWeight(record.event.weightKg)}` : record.event.kind === 'weight' ? `Nuevo peso · ${formatWeight(record.event.weightKg)}` : `Nuevo volumen · ${formatWeight(record.event.weightKg)}`}</span></div>)}</div>}
-    {comparisons.length > 0 && <div className="summary-exercise-comparisons"><p className="eyebrow">comparación por ejercicio</p><ul>{comparisons.map((comparison) => <li className="summary-exercise-comparison" key={comparison.plannedExerciseId}><strong className="summary-exercise-name">{comparison.name}</strong><div className="summary-exercise-values"><p><span>Última vez{comparison.previous ? ` · ${formatDate(comparison.previous.dateKey, { day: 'numeric', month: 'short' })}` : ''}</span><strong>{comparison.previous?.result ?? 'Sin sesión previa'}</strong></p><p><span>Hoy</span><strong>{comparison.currentResult}</strong></p></div><div className="summary-exercise-next"><Gauge size={14} aria-hidden="true" /><span><small>Próxima sesión</small><strong>{comparison.nextAction?.title.replace(/^Próxima vez:\s*/, '') ?? 'Repite el rango previsto'}</strong>{comparison.nextAction && <span>{comparison.nextAction.detail}</span>}</span></div></li>)}</ul></div>}
-    <div className="completed-summary-footer"><span>{statusMessage}</span><button className="text-button" type="button" onClick={onViewProgress}>Ver progreso <ChevronRight size={15} /></button></div>
-  </section>;
-}
-
-function ActiveSession({ session, restRemaining, restUntil, restExerciseName, onRestartRest, screenWakeLockActive, previousExercise, bestRecord, recommendation, progression, progressionAction: action, alternatives, equipmentAlternatives, exerciseEquipment, onSelectExercise, onDefer, onComplete, onDraft, onSwap, onRest, onUndo, canUndo, onExit }: { session: WorkoutSession; restRemaining: number; restUntil: number | null; restExerciseName?: string; onRestartRest: () => void; screenWakeLockActive: boolean; previousExercise?: ExerciseSession; bestRecord?: ExerciseRecord; recommendation?: ReturnType<typeof recommendationFor>; progression?: string; progressionAction?: ReturnType<typeof progressionAction>; alternatives: ExerciseDefinition[]; equipmentAlternatives: ExerciseDefinition[]; exerciseEquipment?: ExerciseEquipment; onSelectExercise: (index: number) => void; onDefer: () => void; onComplete: (session: WorkoutSession, exercise: ExerciseSession, patch: Partial<ExerciseSession>, startRest: boolean) => void; onDraft: (sessionId: string, plannedExerciseId: string, patch: Partial<ExerciseSession>) => void; onSwap: (replacement: ExerciseDefinition, reason: 'discomfort' | 'equipment') => void; onRest: () => void; onUndo: () => void; canUndo: boolean; onExit: () => void }) {
-  const visibleRestRemaining = useRestCountdown(restUntil, restRemaining);
-  const exercise = session.plannedExercises[session.activeExerciseIndex];
-  const [setLogs, setSetLogs] = useState<SetLog[]>([]);
-  const [discomfort, setDiscomfort] = useState(false);
-  const [note, setNote] = useState('');
-  const [detailsOpen, setDetailsOpen] = useState(false);
-  const [pendingDifficulty, setPendingDifficulty] = useState<Difficulty>();
-  const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
-  const [equipmentAlternativesOpen, setEquipmentAlternativesOpen] = useState(false);
-  const previousActiveIndex = useRef(session.activeExerciseIndex);
-
-  useEffect(() => {
-    if (!exercise) return;
-    const hasRecordedInputs = exercise.setLogs.some((set) => set.completed || set.weightKg !== undefined || set.actualReps !== undefined);
-    const source = hasRecordedInputs ? exercise.setLogs : previousExercise?.setLogs;
-    const legacy = hasRecordedInputs ? exercise : previousExercise;
-    setSetLogs(createSetLogs(exercise.sets, exercise.repMin, source, legacy, { warmupSets: exercise.warmupSets, defaultActualReps: previousExercise?.setLogs.map((set) => set.actualReps), copyCompleted: !previousExercise || hasRecordedInputs }));
-    setDiscomfort(exercise?.discomfort ?? false);
-    setNote(exercise?.discomfortNote ?? '');
-    setPendingDifficulty(exercise?.difficulty);
-    setDetailsOpen(Boolean(exercise?.discomfort || exercise?.discomfortNote));
-    setEquipmentAlternativesOpen(false);
-  }, [exercise?.plannedExerciseId, exercise?.exerciseId, exercise?.sets, exercise?.repMin, previousExercise?.plannedExerciseId]);
-
-  useEffect(() => {
-    if (previousActiveIndex.current === session.activeExerciseIndex) return;
-    previousActiveIndex.current = session.activeExerciseIndex;
-    document.getElementById('active-exercise-title')?.focus();
-  }, [session.activeExerciseIndex]);
-
-  if (!exercise) return null;
-  const completed = session.plannedExercises.filter((item) => item.completed).length;
-  const currentExerciseNumber = Math.min(session.activeExerciseIndex + 1, session.plannedExercises.length);
-  const progress = Math.round((completed / session.plannedExercises.length) * 100);
-  const nextExerciseIndex = getNextSessionExerciseIndex(session);
-  const updateSet = (setNumber: number, patch: Partial<SetLog>): void => {
-    const nextLogs = setLogs.map((set) => set.setNumber === setNumber ? { ...set, ...patch } : set);
-    setSetLogs(nextLogs);
-    onDraft(session.id, exercise.plannedExerciseId, { setLogs: nextLogs });
-    if (patch.completed === true) onRest();
-  };
-  const copyPrevious = (): void => {
-    if (!previousExercise) return;
-    const nextLogs = createSetLogs(exercise.sets, exercise.repMin, previousExercise.setLogs, previousExercise, { warmupSets: exercise.warmupSets, copyCompleted: false });
-    setSetLogs(nextLogs);
-    onDraft(session.id, exercise.plannedExerciseId, { setLogs: nextLogs });
-  };
-  const saveExercise = (difficulty: Difficulty): void => {
-    setPendingDifficulty(difficulty);
-    const completedSets = setLogs.filter((set) => isWorkSet(set) && set.completed);
-    const lastSet = completedSets[completedSets.length - 1];
-    onComplete(session, exercise, {
-      completed: difficulty !== 'incomplete',
-      difficulty,
-      setLogs,
-      actualWeightKg: lastSet?.weightKg,
-      actualReps: lastSet?.actualReps,
-      discomfort,
-      discomfortNote: note || undefined,
-    }, true);
-  };
-  const skipExercise = (): void => onComplete(session, exercise, { completed: false, difficulty: 'incomplete', setLogs, discomfort, discomfortNote: note || undefined }, false);
-
-  return <div className="session-wrap"><SessionExerciseNavigator session={session} onSelect={onSelectExercise} /><div className="session-topline"><div><p className="eyebrow">sesión en curso</p><strong>Ejercicio {currentExerciseNumber} de {session.plannedExercises.length}</strong><span className="session-completed-count">{completed} completados</span></div><div className="session-progress"><span style={{ width: `${progress}%` }} /></div><div className="session-menu-wrap"><button className="icon-button subtle" aria-label="Opciones de la sesión" aria-expanded={sessionMenuOpen} onClick={() => setSessionMenuOpen((value) => !value)}><MoreHorizontal size={19} /></button>{sessionMenuOpen && <div className="session-menu"><button type="button" onClick={() => { onUndo(); setSessionMenuOpen(false); }} disabled={!canUndo}><RotateCcw size={15} /> Deshacer último</button><button type="button" onClick={() => { skipExercise(); setSessionMenuOpen(false); }}><SkipForward size={15} /> Saltar definitivamente</button><button type="button" className="danger-action" onClick={() => { setSessionMenuOpen(false); onExit(); }}><X size={15} /> Salir de la sesión</button></div>}</div></div>
-    {visibleRestRemaining > 0 && <div className="rest-inline"><Timer size={16} /><span>{restExerciseName ? <>Descanso tras <strong>{restExerciseName}</strong>: {formatDuration(visibleRestRemaining)}.</> : <>Descansa {formatDuration(visibleRestRemaining)} antes del siguiente ejercicio.</>}</span><button onClick={onRestartRest}>Reiniciar</button></div>}
-    <article className="active-exercise-card"><div className="active-card-header"><span className="exercise-kicker">ejercicio {session.activeExerciseIndex + 1} / {session.plannedExercises.length}</span><span className="active-status"><span className="status-dot" /> {screenWakeLockActive ? 'pantalla activa' : 'guardado en este dispositivo'}</span></div><div className="active-exercise-overview"><ExerciseThumb src={exercise.imageUrl} position={exercise.imagePosition} alt={`Referencia de ${exercise.name}`} large /><div className="active-exercise-summary"><h2 id="active-exercise-title" tabIndex={-1}>{exercise.name}</h2><div className="target-row"><div><strong>{exercise.sets}</strong><span>series de trabajo</span></div>{exercise.warmupSets > 0 && <div><strong>{exercise.warmupSets}</strong><span>calentamiento</span></div>}<div><strong>{exercise.repMin}-{exercise.repMax}</strong><span>repeticiones</span></div><div><strong>{formatDuration(exercise.restSeconds)}</strong><span>descanso</span></div></div></div></div><div className="session-equipment-actions"><button className="secondary-button small" type="button" onClick={onDefer}><Pause size={15} /> Aplazar ejercicio</button><button className="secondary-button small" type="button" aria-expanded={equipmentAlternativesOpen} aria-controls="session-equipment-alternatives" onClick={() => setEquipmentAlternativesOpen((open) => !open)}><Dumbbell size={15} /> {equipmentAlternativesOpen ? 'Ocultar alternativas' : 'Equipo ocupado · ver alternativas'}</button></div><section className="session-equipment-alternative-panel" hidden={!equipmentAlternativesOpen} id="session-equipment-alternatives" aria-label="Alternativas por equipo ocupado"><strong>Alternativas para esta sesión</strong><p>El cambio solo afecta a esta sesión; tu rutina queda igual.</p>{equipmentAlternatives.length > 0 ? <div className="alternative-actions">{equipmentAlternatives.map((replacement) => <button type="button" className="secondary-button small" key={replacement.id} onClick={() => { onSwap(replacement, 'equipment'); setEquipmentAlternativesOpen(false); }}>{replacement.name}</button>)}</div> : <p>No hay otra variante de este grupo con el equipo disponible. Puedes aplazarlo y volver más tarde.</p>}</section><div className="difficulty-prompt"><p>¿Cómo ha ido?<span>{completionActionHint}</span></p><div className="difficulty-grid">{difficultyOptions.map((option) => <button type="button" key={option.value} aria-label={`${option.label}: ${completionActionHint.toLowerCase()}`} className={pendingDifficulty === option.value ? `difficulty-button ${option.value} selected` : `difficulty-button ${option.value}`} onClick={() => saveExercise(option.value)}><span>{option.label}</span><small>{option.hint}</small></button>)}</div></div><details className="active-insights"><summary><Gauge size={15} /> Ver consejo, historial y marcas</summary><div className="active-insights-body">{previousExercise && <p className="last-session-summary"><History size={14} /> Última vez: {previousExercise.sets} series · {formatExerciseSummary(previousExercise)}</p>}{bestRecord && <p className="personal-record-note"><Trophy size={14} /> Mejor marca: {formatWeight(bestRecord.maxWeightKg)}{bestRecord.maxWeightReps ? ` · ${bestRecord.maxWeightReps} reps` : ''}</p>}{action && <div className={`progression-note ${action.tone}`}><Gauge size={16} /><div><strong>{action.title}</strong><span>{action.detail}</span></div></div>}{progression && !action && <div className={`progression-note ${recommendation?.tone ?? 'neutral'}`}><Gauge size={16} /><span>{progression}</span></div>}</div></details><SetLogEditor logs={setLogs} repMin={exercise.repMin} repMax={exercise.repMax} exerciseEquipment={exerciseEquipment} hasPrevious={Boolean(previousExercise)} prefilled={Boolean(previousExercise && setLogs.some((set) => set.actualReps !== undefined || set.weightKg !== undefined))} onChange={updateSet} onCopy={copyPrevious} /><button type="button" className="details-toggle" onClick={() => setDetailsOpen((value) => !value)}><Plus size={17} /> {detailsOpen ? 'Ocultar molestias y nota' : 'Añadir molestias o nota'}</button>{detailsOpen && <div className="optional-fields"><label className="toggle-field"><span>¿Alguna molestia?</span><button type="button" className={discomfort ? 'toggle on' : 'toggle'} aria-pressed={discomfort} onClick={() => { const next = !discomfort; setDiscomfort(next); onDraft(session.id, exercise.plannedExerciseId, { discomfort: next }); }}><span /></button></label><label className="full-field">Nota breve <textarea value={note} onChange={(event) => { setNote(event.target.value); onDraft(session.id, exercise.plannedExerciseId, { discomfortNote: event.target.value || undefined }); }} placeholder="¿Qué has notado?" rows={2} /></label>{discomfort && <div className="discomfort-panel"><strong>Prueba otra variante</strong><span>La rutina original no cambia. Elige una opción del mismo grupo para continuar con menos dudas.</span>{alternatives.length > 0 ? <div className="alternative-actions">{alternatives.map((replacement) => <button type="button" className="secondary-button small" key={replacement.id} onClick={() => onSwap(replacement, 'discomfort')}>{replacement.name}</button>)}</div> : <p>No hay otra variante guardada para este grupo. Puedes bajar la carga o parar y anotar lo ocurrido.</p>}</div>}</div>}</article><div className="session-next"><span>Después</span><strong>{nextExerciseIndex === undefined ? 'Fin de la sesión' : session.plannedExercises[nextExerciseIndex].name}</strong><ArrowDown size={17} /></div><p className="session-note"><Info size={14} /> Solo necesitas marcar cómo ha ido. El registro por series es opcional.</p></div>;
-}
-
-function SessionExerciseNavigator({ session, onSelect }: { session: WorkoutSession; onSelect: (index: number) => void }) {
-  const activeStepRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false;
-    activeStepRef.current?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: reduceMotion ? 'auto' : 'smooth' });
-  }, [session.activeExerciseIndex]);
-  const resolved = session.plannedExercises.filter((exercise) => exercise.completed || Boolean(exercise.completedAt)).length;
-  const deferredExercises = session.plannedExercises
-    .map((exercise, index) => ({ exercise, index }))
-    .filter(({ exercise, index }) => index !== session.activeExerciseIndex && isSessionExerciseDeferred(exercise))
-    .sort((a, b) => (a.exercise.deferredAt ?? '').localeCompare(b.exercise.deferredAt ?? ''));
-  return <nav className="session-exercise-navigator" aria-label="Ejercicios de la sesión">
-    <div className="session-exercise-navigator-heading"><div><strong>Ejercicios de la sesión</strong><span>{resolved} de {session.plannedExercises.length} con resultado</span></div>{deferredExercises.length > 0 && <button type="button" className="session-deferred-return" aria-label={'Volver a ' + deferredExercises[0].exercise.name + '. Hay ' + deferredExercises.length + ' ejercicios aplazados'} onClick={() => onSelect(deferredExercises[0].index)}><RotateCcw size={14} aria-hidden="true" /> Volver a aplazados · {deferredExercises.length}</button>}</div>
-    <ol className="session-exercise-steps">{session.plannedExercises.map((exercise, index) => {
-      const skipped = !exercise.completed && exercise.difficulty === 'incomplete' && Boolean(exercise.completedAt);
-      const completed = exercise.completed && !skipped;
-      const deferred = isSessionExerciseDeferred(exercise);
-      const current = index === session.activeExerciseIndex;
-      const status = current ? 'Ahora' : deferred ? 'Aplazado' : skipped ? 'Saltado' : completed ? 'Hecho' : 'Pendiente';
-      return <li key={exercise.plannedExerciseId}>
-        <button ref={current ? activeStepRef : undefined} type="button" className={`session-exercise-step${current ? ' is-active' : ''}${completed ? ' is-complete' : ''}${skipped ? ' is-skipped' : ''}${deferred ? ' is-deferred' : ''}`} aria-current={current ? 'step' : undefined} aria-setsize={session.plannedExercises.length} aria-posinset={index + 1} aria-label={`${exercise.name}: ${status}${current ? ', ejercicio actual' : ', seleccionar ejercicio'}`} onClick={() => onSelect(index)}>
-          <span className="session-exercise-step-index">{completed ? <Check size={14} /> : skipped ? <SkipForward size={14} /> : deferred ? <Pause size={14} /> : index + 1}</span>
-          <span className="session-exercise-step-copy"><span className="session-exercise-step-name">{exercise.name}</span><small>{status}</small></span>
-        </button>
-      </li>;
-    })}</ol>
-  </nav>;
-}
-
-function SetLogEditor({ logs, repMin, repMax, exerciseEquipment, hasPrevious, prefilled, onChange, onCopy }: { logs: SetLog[]; repMin: number; repMax: number; exerciseEquipment?: ExerciseEquipment; hasPrevious: boolean; prefilled: boolean; onChange: (setNumber: number, patch: Partial<SetLog>) => void; onCopy: () => void }) {
-  const nextSet = logs.find((set) => !set.completed);
-  const completeNext = (): void => {
-    if (!nextSet) return;
-    onChange(nextSet.setNumber, { completed: true, actualReps: nextSet.actualReps ?? (nextSet.phase === 'warmup' ? repMin : repMax) });
-  };
-  const focusNextSetInput = (input: HTMLInputElement): void => {
-    const row = input.closest('.set-log-row');
-    const nextInput = input.dataset.setField === 'weight'
-      ? row?.querySelector<HTMLInputElement>('[data-set-field="reps"]')
-      : row?.nextElementSibling?.querySelector<HTMLInputElement>('[data-set-field="weight"]');
-    if (nextInput) nextInput.focus();
-    else input.blur();
-  };
-  return <section className="set-log-card"><div className="set-log-heading"><div><p className="eyebrow">registro de hoy</p><strong>Calentamiento y series de trabajo</strong>{prefilled && <span className="prefill-note"><History size={13} /> Último registro cargado</span>}</div><div className="set-log-heading-actions">{nextSet && <button className="set-quick-action" type="button" onClick={completeNext}><Check size={14} /> Completar siguiente</button>}{hasPrevious && <button className="text-button" type="button" onClick={onCopy}>Repetir último</button>}</div></div>{exerciseEquipment === 'dumbbell' && <p className="set-weight-convention"><Info size={14} aria-hidden="true" />En mancuernas, registra el peso de una sola mancuerna.</p>}<div className="set-log-list">{logs.map((set, index) => { const warmup = set.phase === 'warmup'; return <div className={`${set.completed ? 'set-log-row is-complete' : 'set-log-row'}${warmup ? ' is-warmup' : ''}`} key={set.setNumber}><span className="set-log-number">{String(set.setNumber).padStart(2, '0')}</span><span className="set-log-target">{warmup ? 'Calentamiento' : 'Objetivo'}<strong>{warmup ? `${repMin} reps` : `${repMin}-${repMax}`}</strong></span><div className="set-weight-input-group" role="group" aria-label={`Peso de la serie ${set.setNumber}`}><label>Peso<input aria-label={`Peso serie ${set.setNumber}${warmup ? ' calentamiento' : ''}`} inputMode="decimal" enterKeyHint="next" data-set-field="weight" onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); focusNextSetInput(event.currentTarget); } }} value={set.weightKg ?? ''} onChange={(event) => onChange(set.setNumber, { weightKg: numberOrUndefined(event.target.value) })} placeholder="kg" /></label><div className="set-weight-stepper"><button type="button" aria-label={`Restar 2,5 kg al peso de la serie ${set.setNumber}`} disabled={(set.weightKg ?? 0) <= 0} onClick={() => onChange(set.setNumber, { weightKg: Math.max(0, (set.weightKg ?? 0) - 2.5) })}>−</button><button type="button" aria-label={`Sumar 2,5 kg al peso de la serie ${set.setNumber}`} onClick={() => onChange(set.setNumber, { weightKg: (set.weightKg ?? 0) + 2.5 })}>+</button></div></div><label>Reps<input aria-label={`Repeticiones serie ${set.setNumber}${warmup ? ' calentamiento' : ''}`} inputMode="numeric" enterKeyHint={index === logs.length - 1 ? 'done' : 'next'} data-set-field="reps" onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); focusNextSetInput(event.currentTarget); } }} value={set.actualReps ?? ''} onChange={(event) => onChange(set.setNumber, { actualReps: numberOrUndefined(event.target.value) })} placeholder="reps" /></label><button type="button" className={set.completed ? 'set-complete selected' : 'set-complete'} aria-label={set.completed ? `Desmarcar serie ${set.setNumber}` : `Marcar serie ${set.setNumber}`} aria-pressed={set.completed} onClick={() => onChange(set.setNumber, { completed: !set.completed })}><Check size={16} /></button></div>; })}</div></section>;
-}
-
-function ExerciseDetailSheet({ exercise, muscleGroup, guidance, recommendation, progressionAction: action, lastSession, onClose }: { exercise: PlannedExercise; muscleGroup?: string; guidance?: ExerciseGuidance; recommendation?: ReturnType<typeof recommendationFor>; progressionAction?: ReturnType<typeof progressionAction>; lastSession?: ExerciseSession; onClose: () => void }) {
-  const dialogRef = useRef<HTMLElement | null>(null);
-  const detail = guidance ?? { setup: 'Ajusta el asiento y la carga para que puedas moverte con control.', cues: ['Mantén una postura estable.', 'Mueve la carga sin impulso.', 'Detén el recorrido si pierdes el control.'], commonMistake: 'Usar más carga de la que permite una ejecución limpia.' };
-  const alternatives = detail.alternatives ?? ['Reduce la carga y acorta el recorrido.', 'Prueba una variante que no provoque molestias.', 'Si persiste, anótalo para revisarlo con tu entrenador.'];
-  const discomfortAdvice = detail.discomfortAdvice ?? 'Una molestia articular no es una señal para forzar. Para, registra lo que has notado y revisa el ajuste.';
-  useFocusTrap(dialogRef, true, onClose);
-  return <div className="exercise-detail-backdrop" role="presentation" onMouseDown={onClose}><section ref={dialogRef} className="exercise-detail-sheet" role="dialog" aria-modal="true" aria-labelledby="exercise-detail-title" onMouseDown={(event) => event.stopPropagation()}><div className="detail-sheet-topline"><p className="eyebrow">referencia de máquina</p><button className="icon-button subtle" type="button" aria-label="Cerrar ficha" onClick={onClose}><X size={19} /></button></div><ExerciseThumb src={exercise.imageUrl} position={exercise.imagePosition} alt={`Referencia de ${exercise.name}`} large /><h2 id="exercise-detail-title">{exercise.name}</h2><div className="detail-facts"><span>{muscleGroup ?? 'Ejercicio'}</span><span>{exercise.sets} series</span><span>{exercise.repMin}-{exercise.repMax} reps</span></div><div className="detail-section"><p className="eyebrow">ajuste inicial</p><p>{detail.setup}</p></div><div className="detail-section"><p className="eyebrow">claves de ejecución</p><ol className="detail-steps">{detail.cues.map((cue) => <li key={cue}>{cue}</li>)}</ol></div><div className="detail-warning"><strong>Error habitual</strong><span>{detail.commonMistake}</span></div><div className="detail-section"><p className="eyebrow">si hay molestias</p><p>{discomfortAdvice}</p><ul className="detail-alternatives">{alternatives.map((alternative) => <li key={alternative}>{alternative}</li>)}</ul></div>{lastSession && <p className="detail-history">Último registro: {formatExerciseSummary(lastSession)}</p>}{action && <div className={`detail-action ${action.tone}`}><strong>{action.title}</strong><span>{action.detail}</span></div>}{recommendation && <p className={`detail-recommendation ${recommendation.tone}`}><Gauge size={15} /> {recommendation.label}: {recommendation.message}</p>}</section></div>;
-}
-
-function latestExercise(sessions: WorkoutSession[], exerciseId: string): ExerciseSession | undefined {
-  return sessions.filter((session) => session.status === 'completed').sort((a, b) => (b.completedAt ?? '').localeCompare(a.completedAt ?? '')).flatMap((session) => session.plannedExercises.filter((item) => item.exerciseId === exerciseId && item.difficulty))[0];
-}
-
-function sessionExerciseComparisons(session: WorkoutSession, history: WorkoutSession[]): SessionExerciseComparison[] {
-  const completedHistory = history.filter((item) => item.id !== session.id && item.status === 'completed').sort((a, b) => (b.completedAt ?? b.startedAt).localeCompare(a.completedAt ?? a.startedAt));
-  return session.plannedExercises.filter((exercise) => exercise.completed).map((exercise) => {
-    const previousSession = completedHistory.find((item) => item.plannedExercises.some((previous) => previous.exerciseId === exercise.exerciseId && previous.completed));
-    const previousExercise = previousSession?.plannedExercises.find((previous) => previous.exerciseId === exercise.exerciseId && previous.completed);
-    return {
-      plannedExerciseId: exercise.plannedExerciseId,
-      exerciseId: exercise.exerciseId,
-      name: exercise.name,
-      previous: previousSession && previousExercise ? { dateKey: previousSession.dateKey, result: formatExerciseSummary(previousExercise) } : undefined,
-      currentResult: formatExerciseSummary(exercise),
-      nextAction: progressionAction(exercise.exerciseId, history, exercise),
-    };
-  });
-}
-
-function alternativeExercises(data: AppData, exerciseId: string, differentEquipment = false): ExerciseDefinition[] {
-  const current = data.exercises.find((exercise) => exercise.id === exerciseId);
-  if (!current) return [];
-  const availableEquipment = differentEquipment
-    ? data.profile.availableEquipment.filter((equipment) => equipment !== current.equipment)
-    : data.profile.availableEquipment;
-  return compatibleAlternatives(data.exercises, exerciseId, availableEquipment).slice(0, 3);
-}
-
-const ExerciseThumb = memo(function ExerciseThumb({ src, position, alt, large = false }: { src?: string; position?: string; alt: string; large?: boolean }) {
-  const [failed, setFailed] = useState(false);
-  const usesAtlas = Boolean(src?.includes('/atlas-') && position);
-  const atlasStyle = usesAtlas ? { backgroundImage: `url(${src})`, backgroundPosition: position } : undefined;
-  return <div className={large ? 'exercise-thumb large' : 'exercise-thumb'}>{src && !failed ? usesAtlas ? <div className="exercise-thumb-image" style={atlasStyle} role="img" aria-label={alt} /> : <img src={src} alt={alt} loading="lazy" onError={() => setFailed(true)} /> : <div className="exercise-thumb-fallback" aria-label={alt}><Dumbbell size={large ? 30 : 20} /></div>}</div>;
-});
-
-function RoutineView({ data, days, activeDay, onDayChange, onUpdateDay, onAddExercise, onRemoveExercise, onStart, searchRequest, onSearchRequestHandled }: { data: AppData; days: WorkoutDay[]; activeDay: WorkoutDay; onDayChange: (id: string) => void; onUpdateDay: (dayId: string, updater: (day: WorkoutDay) => WorkoutDay) => void; onAddExercise: (dayId: string, exercise: ExerciseDefinition) => void; onRemoveExercise: (dayId: string, exerciseId: string) => void; onStart: (day: WorkoutDay) => void; searchRequest?: { query: string }; onSearchRequestHandled: () => void }) {
-  const [editingRoutine, setEditingRoutine] = useState(false);
-  const [planSection, setPlanSection] = useState<'next' | 'all'>('next');
-  const [selectedPlanDayId, setSelectedPlanDayId] = useState<string>();
-  const [detailExercise, setDetailExercise] = useState<PlannedExercise>();
-  const [editingName, setEditingName] = useState(false);
-  const [expandedExerciseId, setExpandedExerciseId] = useState<string | undefined>(() => activeDay.exercises.find((exercise) => exercise.active)?.id);
-  const [libraryOpen, setLibraryOpen] = useState(false);
-  const [libraryInitialQuery, setLibraryInitialQuery] = useState<string>();
-  const [libraryTargetId, setLibraryTargetId] = useState<string>();
-  useEffect(() => {
-    setExpandedExerciseId(activeDay.exercises.find((exercise) => exercise.active)?.id);
-  }, [activeDay.id]);
-  useEffect(() => {
-    if (!searchRequest) return;
-    setEditingRoutine(true);
-    setLibraryTargetId(activeDay.exercises.find((exercise) => exercise.active)?.id);
-    setLibraryInitialQuery(searchRequest.query);
-    setLibraryOpen(true);
-    onSearchRequestHandled();
-  }, [searchRequest, activeDay.exercises, onSearchRequestHandled]);
-  const openLibrary = (targetId = activeDay.exercises.find((exercise) => exercise.active)?.id): void => {
-    setLibraryInitialQuery(undefined);
-    setLibraryTargetId(targetId);
-    setLibraryOpen(true);
-  };
-  const replaceFromLibrary = (targetId: string, replacement: ExerciseDefinition): void => {
-    onUpdateDay(activeDay.id, (day) => ({ ...day, exercises: day.exercises.map((item) => item.id === targetId ? { ...item, exerciseId: replacement.id, name: replacement.name, imageUrl: replacement.imageUrl, imagePosition: replacement.imagePosition } : item) }));
-    setLibraryOpen(false);
-  };
-  const manualGaps = unresolvedPlanEquipmentGaps(data.plan, data.exercises, data.profile.availableEquipment).filter((gap) => gap.dayId === activeDay.id);
-  const nextPlanDay = days.find((day) => day.weekday === currentWeekday()) ?? days.find((day) => day.weekday > currentWeekday()) ?? days[0] ?? activeDay;
-  const planDay = days.find((day) => day.id === selectedPlanDayId) ?? nextPlanDay;
-  const planExercises = planDay.exercises.filter((exercise) => exercise.active);
-  const planSets = planExercises.reduce((total, exercise) => total + exercise.sets, 0);
-  const planDayNumber = days.findIndex((day) => day.id === planDay.id) + 1;
-  if (!editingRoutine) return <>
-    <section className="view-section routine-plan-view">
-      <div className="page-header routine-plan-header"><h1>El plan</h1><button type="button" className="plan-edit-button" onClick={() => { onDayChange(planDay.id); setEditingRoutine(true); }}><Pencil size={16} aria-hidden="true" /> Editar</button></div>
-      <div className="routine-plan-tabs" role="group" aria-label="Vista del plan">
-        <button type="button" aria-pressed={planSection === 'next'} className={planSection === 'next' ? 'is-active' : ''} onClick={() => setPlanSection('next')}>Próximo entrenamiento</button>
-        <button type="button" aria-pressed={planSection === 'all'} className={planSection === 'all' ? 'is-active' : ''} onClick={() => setPlanSection('all')}>Todas las rutinas</button>
-      </div>
-      <section className="routine-plan-content" aria-label={planSection === 'next' ? 'Próximo entrenamiento' : 'Todas las rutinas'}>
-        {planSection === 'next' ? <>
-          <section className="routine-plan-feature" aria-labelledby="routine-plan-title">
-            <div className="routine-plan-art" aria-hidden="true"><img src={planExercises[0]?.imageUrl ?? '/exercises/atlas-push.webp'} alt="" /></div>
-            <div className="routine-plan-copy"><span className="routine-plan-day">Día {planDayNumber}</span><h2 id="routine-plan-title">{displayWorkoutName(planDay.name)}</h2><div className="plan-summary" aria-label="Resumen del entrenamiento"><span><Dumbbell size={16} aria-hidden="true" /> {planExercises.length} ejercicios</span><span><Layers3 size={16} aria-hidden="true" /> {planSets} series</span><span><Timer size={16} aria-hidden="true" /> ~{data.profile.sessionMinutes} min</span></div></div>
-            <button className="primary-button routine-plan-start" type="button" onClick={() => onStart(planDay)}><Play size={17} fill="currentColor" aria-hidden="true" /> Empezar entrenamiento</button>
-          </section>
-          <div className="exercise-list plan-exercise-list">{planExercises.map((exercise, index) => <ExercisePreview key={exercise.id} exercise={exercise} index={index} muscleGroup={data.exercises.find((item) => item.id === exercise.exerciseId)?.muscleGroup} onOpenDetails={() => setDetailExercise(exercise)} />)}</div>
-        </> : <div className="routine-all-days">{days.map((day, index) => {
-          const exercises = day.exercises.filter((exercise) => exercise.active);
-          const sets = exercises.reduce((total, exercise) => total + exercise.sets, 0);
-          return <button type="button" className="routine-day-card" key={day.id} onClick={() => { setSelectedPlanDayId(day.id); setPlanSection('next'); }}><span className="routine-plan-day">Día {index + 1}</span><strong>{displayWorkoutName(day.name)}</strong><span>{exercises.length} ejercicios · {sets} series · ~{data.profile.sessionMinutes} min</span><ChevronRight size={19} aria-hidden="true" /></button>;
-        })}</div>}
-      </section>
-    </section>
-    {detailExercise && <ExerciseDetailSheet exercise={detailExercise} muscleGroup={data.exercises.find((item) => item.id === detailExercise.exerciseId)?.muscleGroup} guidance={exerciseGuidance[detailExercise.exerciseId]} recommendation={recommendationFor(detailExercise.exerciseId, data.sessions)} progressionAction={progressionAction(detailExercise.exerciseId, data.sessions, detailExercise)} lastSession={latestExercise(data.sessions, detailExercise.exerciseId)} onClose={() => setDetailExercise(undefined)} />}
-  </>;
-  return <section className="view-section"><PageHeader eyebrow="programación" title="Editar rutina" action={<button className="icon-button subtle" aria-label="Abrir biblioteca de ejercicios" onClick={() => openLibrary()}><Search size={19} /></button>} /><button type="button" className="text-button routine-back-button" onClick={() => setEditingRoutine(false)}><ChevronLeft size={16} aria-hidden="true" /> Volver al plan</button><div className="day-tabs" role="tablist" aria-label="Días programados">{days.map((day) => <button key={day.id} id={`routine-tab-${day.id}`} role="tab" aria-selected={activeDay.id === day.id} aria-controls="routine-panel" tabIndex={activeDay.id === day.id ? 0 : -1} className={activeDay.id === day.id ? 'day-tab selected' : 'day-tab'} onClick={() => { onDayChange(day.id); setEditingName(false); }} onKeyDown={(event) => { const index = days.findIndex((item) => item.id === day.id); const delta = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1 : event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : event.key === 'Home' ? -index : event.key === 'End' ? days.length - 1 - index : 0; if (!delta) return; event.preventDefault(); const next = days[(index + delta + days.length) % days.length]; onDayChange(next.id); window.requestAnimationFrame(() => document.getElementById(`routine-tab-${next.id}`)?.focus()); }}><span>{day.shortLabel}</span><small>{displayWorkoutName(day.name).split(',')[0]}</small></button>)}</div><section className="routine-intro" id="routine-panel" role="tabpanel" aria-labelledby={`routine-tab-${activeDay.id}`}><div>{editingName ? <input className="title-input" value={activeDay.name} onChange={(event) => onUpdateDay(activeDay.id, (day) => ({ ...day, name: event.target.value }))} onBlur={() => setEditingName(false)} autoFocus /> : <h2>{displayWorkoutName(activeDay.name)}</h2>}<p>{activeDay.focus} · ~{data.profile.sessionMinutes} min</p></div><button className="icon-button subtle" aria-label="Editar nombre del entrenamiento" onClick={() => setEditingName(true)}><MoreHorizontal size={19} /></button></section>{manualGaps.length > 0 && <EquipmentReviewCard gaps={manualGaps} onReview={(gap) => { const planned = activeDay.exercises.find((exercise) => exercise.exerciseId === gap.exerciseId); if (planned) openLibrary(planned.id); }} />}{libraryOpen && <ExerciseLibrary exercises={data.exercises} availableEquipment={data.profile.availableEquipment} plannedExercises={activeDay.exercises} targetId={libraryTargetId} onTargetChange={setLibraryTargetId} onSelect={replaceFromLibrary} onAdd={(exercise) => { onAddExercise(activeDay.id, exercise); setLibraryOpen(false); }} onClose={() => setLibraryOpen(false)} initialQuery={libraryInitialQuery} />}<div className="routine-list">{activeDay.exercises.map((exercise, index) => <RoutineExercise key={exercise.id} exercise={exercise} index={index} canMoveDown={index < activeDay.exercises.length - 1} exerciseOptions={data.exercises} alternatives={compatibleAlternatives(data.exercises, exercise.exerciseId, data.profile.availableEquipment)} guidance={exerciseGuidance[exercise.exerciseId]} lastSession={latestExercise(data.sessions, exercise.exerciseId)} progressionAction={progressionAction(exercise.exerciseId, data.sessions, exercise)} expanded={expandedExerciseId === exercise.id} onOpenLibrary={() => openLibrary(exercise.id)} onToggle={() => setExpandedExerciseId((current) => current === exercise.id ? undefined : exercise.id)} onChange={(patch) => onUpdateDay(activeDay.id, (day) => ({ ...day, exercises: day.exercises.map((item) => item.id === exercise.id ? { ...item, ...patch } : item) }))} onMove={(direction) => onUpdateDay(activeDay.id, (day) => ({ ...day, exercises: moveExercise(day.exercises, index, direction) }))} onRemove={() => onRemoveExercise(activeDay.id, exercise.id)} />)}</div><button type="button" className="secondary-button routine-add-button" onClick={() => openLibrary()}><Plus size={16} /> Añadir ejercicio</button><p className="history-note"><History size={15} /> Las sesiones guardadas conservan la rutina que tenían al empezar.</p></section>;
-}
-
-function EquipmentReviewCard({ gaps, onReview }: { gaps: PlanEquipmentGap[]; onReview: (gap: PlanEquipmentGap) => void }) {
-  return <aside className="routine-equipment-review" aria-labelledby="routine-equipment-review-title"><div className="routine-equipment-review-heading"><div><p className="eyebrow">revisión pendiente</p><h3 id="routine-equipment-review-title">Hay ejercicios por ajustar</h3></div><span>{gaps.length}</span></div><p>Estos ejercicios necesitan material que ya no figura como disponible. Elige una variante para dejar la sesión lista.</p><ul>{gaps.map((gap) => <li key={`${gap.dayId}-${gap.exerciseId}`}><div><strong>{gap.exerciseName}</strong><span>Necesita {equipmentLabel(gap.equipment)}</span></div><button type="button" className="secondary-button small" aria-label={`Elegir sustitución para ${gap.exerciseName}`} onClick={() => onReview(gap)}><Search size={14} /> Elegir sustitución</button></li>)}</ul></aside>;
-}
-
-function ExerciseLibrary({ exercises, availableEquipment, plannedExercises, targetId, onTargetChange, onSelect, onAdd, onClose, initialQuery }: { exercises: ExerciseDefinition[]; availableEquipment: ExerciseEquipment[]; plannedExercises: PlannedExercise[]; targetId?: string; onTargetChange: (id: string) => void; onSelect: (targetId: string, replacement: ExerciseDefinition) => void; onAdd: (exercise: ExerciseDefinition) => void; onClose: () => void; initialQuery?: string }) {
-  const [query, setQuery] = useState(initialQuery ?? '');
-  useEffect(() => { if (initialQuery !== undefined) setQuery(initialQuery); }, [initialQuery]);
-  const [muscleGroup, setMuscleGroup] = useState('');
-  const [equipment, setEquipment] = useState('');
-  const target = targetId ?? plannedExercises[0]?.id;
-  const muscles = Array.from(new Set(exercises.map((exercise) => exercise.muscleGroup))).sort((a, b) => a.localeCompare(b, 'es'));
-  const equipmentOptions = Array.from(new Set(exercises.map((exercise) => exercise.equipment))).sort();
-  const results = exercises.filter((exercise) => availableEquipment.includes(exercise.equipment) && exerciseMatches(exercise, query, muscleGroup, equipment)).sort((a, b) => a.name.localeCompare(b.name, 'es'));
-  const hasActiveFilters = Boolean(query || muscleGroup || equipment);
-  return <section className="exercise-library" aria-label="Biblioteca de ejercicios"><div className="exercise-library-header"><div><p className="eyebrow">biblioteca personal</p><h2>Encuentra una variante</h2><p>Filtra por zona o material. Puedes sustituir un bloque o añadir uno nuevo.</p></div><button className="icon-button subtle" type="button" aria-label="Cerrar biblioteca" onClick={onClose}><X size={19} /></button></div>{plannedExercises.length > 0 && <label className="library-target">Cambiar ejercicio de<select value={target ?? ''} onChange={(event) => onTargetChange(event.target.value)}>{plannedExercises.map((exercise) => <option key={exercise.id} value={exercise.id}>{exercise.name}</option>)}</select></label>}<div className="library-filters"><label className="library-search"><Search size={16} /><span className="sr-only">Buscar ejercicio</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar press, polea, dorsal…" /></label><label><span className="sr-only">Filtrar por músculo</span><select value={muscleGroup} onChange={(event) => setMuscleGroup(event.target.value)}><option value="">Todos los músculos</option>{muscles.map((muscle) => <option key={muscle} value={muscle}>{muscle}</option>)}</select></label><label><span className="sr-only">Filtrar por material</span><select value={equipment} onChange={(event) => setEquipment(event.target.value)}><option value="">Todo el material</option>{equipmentOptions.map((item) => <option key={item} value={item}>{equipmentLabel(item as ExerciseDefinition['equipment'])}</option>)}</select></label></div><p className="library-results-count">{results.length} ejercicios disponibles</p><div className="library-results">{results.map((exercise) => <div className="library-result-row" key={exercise.id}><button type="button" className="library-result" disabled={!target} onClick={() => target && onSelect(target, exercise)}><ExerciseThumb src={exercise.imageUrl} position={exercise.imagePosition} alt={`Referencia de ${exercise.name}`} /><span><strong>{exercise.name}</strong><small>{equipmentLabel(exercise.equipment)} · {target ? 'sustituir' : 'seleccionar'}</small></span></button><button type="button" className="library-add-button" onClick={() => onAdd(exercise)}><Plus size={14} /> Añadir</button></div>)}</div>{results.length === 0 && <div className="library-empty-state"><p className="library-empty">No hay ejercicios con estos filtros.</p>{hasActiveFilters && <button className="text-button" type="button" onClick={() => { setQuery(''); setMuscleGroup(''); setEquipment(''); }}>Limpiar búsqueda y filtros</button>}</div>}</section>;
-}
-
-function RoutineExercise({ exercise, index, canMoveDown, exerciseOptions, alternatives, guidance, lastSession, progressionAction: action, expanded, onOpenLibrary, onToggle, onChange, onMove, onRemove }: { exercise: PlannedExercise; index: number; canMoveDown: boolean; exerciseOptions: ExerciseDefinition[]; alternatives: ExerciseDefinition[]; guidance?: ExerciseGuidance; lastSession?: ExerciseSession; progressionAction?: ReturnType<typeof progressionAction>; expanded: boolean; onOpenLibrary: () => void; onToggle: () => void; onChange: (patch: Partial<PlannedExercise>) => void; onMove: (direction: -1 | 1) => void; onRemove: () => void }) {
-  const detail = guidance ?? { cues: ['Mantén una postura estable.', 'Mueve la carga sin impulso.', 'Controla el regreso.'] };
-  const [editOpen, setEditOpen] = useState(false);
-  const [confirmRemove, setConfirmRemove] = useState(false);
-  const [draft, setDraft] = useState<RoutineEditDraft>(() => routineEditDraftFrom(exercise));
-
-  const updateDraft = (patch: Partial<RoutineEditDraft>): void => {
-    setDraft((current) => ({ ...current, ...patch }));
-  };
-  const cancelEdit = (): void => {
-    setDraft(routineEditDraftFrom(exercise));
-    setEditOpen(false);
-  };
-  const saveEdit = (): void => {
-    onChange(routineEditPatch(draft));
-    setEditOpen(false);
-  };
-
-  return <article className={exercise.active ? 'routine-exercise' : 'routine-exercise is-off'}>
-    <div className="routine-number">{String(index + 1).padStart(2, '0')}</div>
-    <button type="button" className="routine-thumb-button" onClick={onToggle} aria-label={`${expanded ? 'Ocultar' : 'Ver'} imagen grande de ${exercise.name}`} aria-expanded={expanded}><ExerciseThumb src={exercise.imageUrl} position={exercise.imagePosition} alt={`Referencia de ${exercise.name}`} /></button>
-    <div className="routine-exercise-content">
-      <div className="routine-exercise-title">
-        <div className="routine-exercise-name">
-          <select className="exercise-select" value={exercise.exerciseId} aria-label={`Cambiar ${exercise.name}`} onChange={(event) => { const replacement = exerciseOptions.find((item) => item.id === event.target.value); if (replacement) onChange({ exerciseId: replacement.id, name: replacement.name, imageUrl: replacement.imageUrl, imagePosition: replacement.imagePosition }); }}>
-            <option value={exercise.exerciseId}>{exercise.name}</option>
-            {exerciseOptions.filter((item) => item.id !== exercise.exerciseId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-          </select>
-          <p>{exercise.active ? 'Activo en la sesión' : 'Pausado'}</p>
-          <button type="button" className="routine-library-button" onClick={onOpenLibrary}><Search size={13} /> Buscar en biblioteca</button>
-        </div>
-        <div className="routine-title-actions">
-          <button type="button" className="routine-image-trigger" onClick={onToggle} aria-expanded={expanded}>{expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}<span>{expanded ? 'Ocultar imagen' : 'Ver imagen'}</span></button>
-          <button type="button" className={exercise.active ? 'toggle on' : 'toggle'} aria-label={exercise.active ? `Desactivar ${exercise.name}` : `Activar ${exercise.name}`} aria-pressed={exercise.active} onClick={() => onChange({ active: !exercise.active })}><span /></button>
-        </div>
-      </div>
-      <div className="routine-order-actions" role="group" aria-label={`Orden de ${exercise.name}`}>
-        <button type="button" onClick={() => { if (editOpen) saveEdit(); onMove(-1); }} disabled={index === 0} aria-label={`Subir ${exercise.name}`}><ArrowUp size={14} /> Subir</button>
-        <button type="button" onClick={() => { if (editOpen) saveEdit(); onMove(1); }} disabled={!canMoveDown} aria-label={`Bajar ${exercise.name}`}><ArrowDown size={14} /> Bajar</button>
-      </div>
-      {expanded && <div className="routine-visual-guide"><ExerciseThumb src={exercise.imageUrl} position={exercise.imagePosition} alt={`Imagen ampliada de ${exercise.name}`} large /><div className="routine-cues"><p className="eyebrow">cómo hacerlo</p><ol>{detail.cues.map((cue, cueIndex) => <li key={cue}><span>{cueIndex + 1}</span>{cue}</li>)}</ol></div></div>}
-      <details className="routine-edit-details" open={editOpen} onToggle={(event) => { const nextOpen = event.currentTarget.open; setEditOpen(nextOpen); if (nextOpen) setDraft(routineEditDraftFrom(exercise)); }}>
-        <summary>Editar parámetros del ejercicio</summary>
-        <p className="routine-edit-note"><Check size={13} /> Edita sin tocar la rutina hasta guardar los cambios.</p>
-        <div className="routine-fields">
-          <label>Series<input inputMode="numeric" value={draft.sets} onChange={(event) => updateDraft({ sets: clampNumber(event.target.value, 1, 8) })} /></label>
-          <label>Reps<input inputMode="numeric" value={`${draft.repMin}-${draft.repMax}`} onChange={(event) => { const [min, max] = event.target.value.split(/[–-]/).map(Number); if (Number.isFinite(min) && Number.isFinite(max)) updateDraft({ repMin: min, repMax: max }); }} /></label>
-          <label>Descanso<input inputMode="numeric" value={draft.restSeconds / 60} onChange={(event) => updateDraft({ restSeconds: clampNumber(event.target.value, 0.5, 4) * 60 })} /></label>
-        </div>
-        <div className="routine-progression-fields">
-          <label>Calentamiento<select value={draft.warmupSets} onChange={(event) => updateDraft({ warmupSets: clampNumber(event.target.value, 0, 3) })}><option value="0">Ninguno</option><option value="1">1 serie</option><option value="2">2 series</option><option value="3">3 series</option></select></label>
-          <label>Regla de progresión<select value={draft.progressionPolicy} onChange={(event) => updateDraft({ progressionPolicy: event.target.value as RoutineEditDraft['progressionPolicy'] })}><option value="double">Doble progresión</option><option value="linear">Lineal</option><option value="off">Manual</option></select></label>
-          <label>Salto de carga<input inputMode="decimal" value={draft.progressionIncrementKg} onChange={(event) => updateDraft({ progressionIncrementKg: clampNumber(event.target.value, 0.5, 10) })} /></label>
-        </div>
-        {alternatives.length > 0 && <div className="routine-alternatives"><span>Alternativas compatibles</span><div>{alternatives.slice(0, 3).map((replacement) => <button type="button" key={replacement.id} onClick={() => updateDraft({ exerciseId: replacement.id, name: replacement.name, imageUrl: replacement.imageUrl, imagePosition: replacement.imagePosition })}>{replacement.name}</button>)}</div></div>}
-        {lastSession && <p className="routine-history"><History size={14} /> Última vez: {formatExerciseSummary(lastSession)}</p>}
-        {action && <div className={`routine-next-action ${action.tone}`}><Gauge size={14} /><div><strong>{action.title}</strong><span>{action.detail}</span></div></div>}
-        <div className="routine-remove-actions">{confirmRemove ? <div className="routine-remove-confirm" role="group" aria-label={`Confirmar que quieres quitar ${exercise.name}`}><p>¿Quitar {exercise.name} de esta rutina?</p><div><button type="button" className="secondary-button small" onClick={() => setConfirmRemove(false)}>Cancelar</button><button type="button" className="routine-remove-confirm-button" onClick={onRemove}>Quitar</button></div></div> : <button type="button" className="routine-remove-button" onClick={() => setConfirmRemove(true)}><Trash2 size={14} /> Quitar ejercicio</button>}</div>
-        <div className="routine-edit-actions"><button type="button" className="secondary-button small" onClick={cancelEdit}>Cancelar</button><button type="button" className="primary-button small" onClick={saveEdit}><Save size={15} /> Guardar cambios</button></div>
-      </details>
-    </div>
-  </article>;
-}
-function ProgressView({ data, onAddProgress, onAddCheckin, onInfo, onToast }: { data: AppData; onAddProgress: (entry: Omit<ProgressEntry, 'id' | 'date'>) => void; onAddCheckin: (checkin: Omit<WeeklyCheckin, 'id' | 'createdAt' | 'weekKey'>) => void; onInfo: () => void; onToast: (message: string) => void }) {
-  const [measureOpen, setMeasureOpen] = useState(false);
-  const [checkinOpen, setCheckinOpen] = useState(false);
-  const [selectedExerciseId, setSelectedExerciseId] = useState('');
-  const [progressRange, setProgressRange] = useState<ProgressRange>('month');
-  const [form, setForm] = useState({ weightKg: '', waistCm: '', chestCm: '', armCm: '', hipCm: '' });
-  const currentCheckin = data.checkins.find((item) => item.weekKey === weekKey());
-  const weeklySummary = buildWeeklySummary(data);
-  const scheduledTrainingDays = normalizeTrainingDays(data.profile.trainingDays).slice(0, data.plan.days.length);
-  const weekDays = buildWeekDays(scheduledTrainingDays, data.sessions);
-  const completedThisWeek = weekDays.filter((day) => day.completed).length;
-  const weeklyTarget = Math.max(scheduledTrainingDays.length, 1);
-  const performance = useMemo(() => performanceRows(data.sessions), [data.sessions]);
-  const availableExercises = useMemo(() => exerciseTrendOptions(data), [data.sessions]);
-  const sortedProgress = useMemo(() => [...data.progress].sort((a, b) => a.date.localeCompare(b.date)), [data.progress]);
-  const weightEntries = useMemo(() => sortedProgress.filter((entry) => entry.weightKg !== undefined), [sortedProgress]);
-  const waistEntries = useMemo(() => sortedProgress.filter((entry) => entry.waistCm !== undefined), [sortedProgress]);
-  const lastWeight = weightEntries.at(-1);
-  const previousWeight = weightEntries.at(-2);
-  const lastWaist = waistEntries.at(-1);
-  const previousWaist = waistEntries.at(-2);
-  const saveMeasure = (event: React.FormEvent): void => { event.preventDefault(); onAddProgress(Object.fromEntries(Object.entries(form).filter(([, value]) => value !== '').map(([key, value]) => [key, Number(value)])) as Omit<ProgressEntry, 'id' | 'date'>); setForm({ weightKg: '', waistCm: '', chestCm: '', armCm: '', hipCm: '' }); setMeasureOpen(false); };
-  return <section className="view-section progress-view"><PageHeader eyebrow="señales, no ruido" title="Progreso" action={<button className="icon-button subtle" type="button" aria-label="Información sobre las métricas" onClick={onInfo}><Info size={19} /></button>} /><ProgressOverview data={data} range={progressRange} onRangeChange={setProgressRange} /><div className="metric-grid"><MetricCard label="Peso actual" value={lastWeight?.weightKg !== undefined ? formatWeight(lastWeight.weightKg) : formatWeight(data.profile.currentWeightKg)} change={changeLabel(lastWeight?.weightKg, previousWeight?.weightKg)} icon={<Activity size={17} />} /><MetricCard label="Cintura" value={lastWaist?.waistCm !== undefined ? `${lastWaist.waistCm.toLocaleString('es-ES', { maximumFractionDigits: 1 })} cm` : 'Sin registro'} change={changeLabel(lastWaist?.waistCm, previousWaist?.waistCm, ' cm')} icon={<Gauge size={17} />} /><MetricCard label="Adherencia" value={`${Math.min(completedThisWeek, weeklyTarget)}/${weeklyTarget}`} change="esta semana" icon={<Check size={17} />} /></div><section className="progress-card weekly-adherence-card"><div className="section-heading compact"><div><p className="eyebrow">esta semana</p><h2>Tu constancia</h2></div><strong className="weekly-score">{completedThisWeek}/{weeklyTarget}</strong></div><div className="week-strip" aria-label="Entrenamientos de la semana">{weekDays.map((day) => <div className={day.completed ? 'week-day completed' : day.planned ? 'week-day planned' : 'week-day'} key={day.key}><span>{day.label}</span><i aria-hidden="true">{day.completed ? '✓' : day.planned ? '·' : ''}</i></div>)}</div><p className="history-caption">{completedThisWeek === 0 ? 'Todavía no hay entrenamientos guardados esta semana.' : `${completedThisWeek} de ${weeklyTarget} sesiones previstas ya están guardadas.`}</p></section><section className="progress-card"><div className="section-heading compact"><div><p className="eyebrow">historial</p><h2>Calendario</h2></div></div><SessionCalendar sessions={data.sessions} trainingDays={data.profile.trainingDays} exercises={data.exercises} workoutDays={data.plan.days} /></section><section className="progress-card"><div className="section-heading compact"><div><p className="eyebrow">evolución corporal</p><h2>Medidas en el tiempo</h2></div><button className="text-button" onClick={() => setMeasureOpen((value) => !value)}><Plus size={16} /> Añadir</button></div>{measureOpen && <form className="measurement-form" onSubmit={saveMeasure}><NumberField label="Peso" unit="kg" value={form.weightKg} onChange={(value) => setForm((current) => ({ ...current, weightKg: value }))} /><NumberField label="Cintura" unit="cm" value={form.waistCm} onChange={(value) => setForm((current) => ({ ...current, waistCm: value }))} /><NumberField label="Pecho" unit="cm" value={form.chestCm} onChange={(value) => setForm((current) => ({ ...current, chestCm: value }))} /><NumberField label="Brazo" unit="cm" value={form.armCm} onChange={(value) => setForm((current) => ({ ...current, armCm: value }))} /><NumberField label="Cadera" unit="cm · opcional" value={form.hipCm} onChange={(value) => setForm((current) => ({ ...current, hipCm: value }))} /><button className="primary-button small" type="submit">Guardar medidas</button></form>}<WeightChart entries={sortedProgress} /><div className="trend-list"><TrendRow label="Cintura" values={sortedProgress.map((item) => item.waistCm)} unit="cm" /></div>{data.progress.length === 0 && <div className="empty-state"><span className="empty-icon"><Activity size={19} /></span><strong>Aún no hay medidas</strong><p>Registra solo lo que te apetezca comparar. No hace falta hacerlo cada día.</p></div>}</section>{performance.length > 0 && <section className="progress-card performance-card"><div className="section-heading compact"><div><p className="eyebrow">señal de entrenamiento</p><h2>Rendimiento reciente</h2></div><Gauge size={19} /></div><div className="performance-list">{performance.map((item) => <div className="performance-row" key={item.exerciseId}><div><strong>{item.name}</strong><span>{item.load !== undefined ? `${formatWeight(item.load)} · ${item.reps ?? '-'} reps` : 'Sin carga registrada'}</span></div><b>{formatVolume(item.volume)}</b></div>)}</div></section>}<section className="checkin-card"><div className="checkin-mark"><Sun size={21} /></div><div className="checkin-copy"><p className="eyebrow">cierre semanal</p><h2>{currentCheckin ? 'Check-in guardado' : '¿Cómo ha ido la semana?'}</h2><p>{currentCheckin ? 'Puedes editarlo cuando quieras.' : 'Dos minutos para poner contexto a tus datos.'}</p></div><button className="text-button" onClick={() => setCheckinOpen((value) => !value)}>{currentCheckin ? 'Editar' : 'Hacer check-in'} <ChevronRight size={16} /></button></section>{checkinOpen && <CheckinForm existing={currentCheckin} onSave={(value) => { onAddCheckin(value); setCheckinOpen(false); }} />}
-    <details id="progress-details" className="progress-details"><summary>Ver histórico detallado</summary><div className="progress-details-body"><ExerciseTrendCard data={data} /><HistoryPanel data={data} /><WeeklyTrends summary={weeklySummary} /><TrainingSignalsCard signals={weeklySummary.signals} /></div></details><WeeklyReviewCard summary={weeklySummary} data={data} onToast={onToast} /><section className="progress-card"><div className="section-heading compact"><div><p className="eyebrow">por ejercicio</p><h2>Progresión de carga</h2></div></div><label className="exercise-progress-select-label">Ejercicio<select value={selectedExerciseId} onChange={(event) => setSelectedExerciseId(event.target.value)}><option value="">Elige un ejercicio…</option>{availableExercises.map((exercise) => <option key={exercise.id} value={exercise.id}>{exercise.name}</option>)}</select></label>{selectedExerciseId && <ExerciseProgressChart exerciseId={selectedExerciseId} sessions={data.sessions} />}</section></section>;
-}
-
-function ProgressOverview({ data, range, onRangeChange }: { data: AppData; range: ProgressRange; onRangeChange: (range: ProgressRange) => void }) {
-  const buckets = useMemo(() => buildProgressBuckets(data.sessions, range), [data.sessions, range]);
-  const totals = buckets.reduce((sum, bucket) => ({ sessions: sum.sessions + bucket.sessions, volumeKg: sum.volumeKg + bucket.volumeKg, durationSeconds: sum.durationSeconds + bucket.durationSeconds }), { sessions: 0, volumeKg: 0, durationSeconds: 0 });
-  const muscleGroups = useMemo(() => muscleGroupVolumes(data).slice(0, 3), [data.sessions, data.exercises]);
-  const weekDays = buildWeekDays(data.profile.trainingDays, data.sessions);
-  const streak = getLatestWorkoutStreak(data.profile.trainingDays, data.sessions);
-  const labels: Record<ProgressRange, string> = { week: 'Semana', month: 'Mes', year: 'Año', all: 'Todo' };
-
-  return <section className="progress-overview" aria-label="Resumen de actividad">
-    <div className="progress-range-tabs" role="group" aria-label="Periodo del resumen">{(Object.keys(labels) as ProgressRange[]).map((item) => <button type="button" key={item} aria-pressed={range === item} className={range === item ? 'is-active' : ''} onClick={() => onRangeChange(item)}>{labels[item]}</button>)}</div>
-    <div className="progress-overview-grid">
-      <article className="progress-overview-card progress-training-card"><div className="progress-overview-heading"><h2>Entrenamientos</h2><ChevronRight size={17} aria-hidden="true" /></div><strong>{totals.sessions}</strong><span className="progress-overview-caption">{labels[range].toLowerCase()}</span><ProgressOverviewBars buckets={buckets} metric="sessions" tone="green" /></article>
-      <ProgressOverviewMetric label="Volumen total" value={formatVolume(totals.volumeKg)} buckets={buckets} metric="volumeKg" tone="blue" />
-      <ProgressOverviewMetric label="Tiempo total" value={totals.durationSeconds ? formatSessionDuration(totals.durationSeconds) : '0 min'} buckets={buckets} metric="durationSeconds" tone="purple" />
-      <section className="progress-overview-card progress-muscle-card"><div className="progress-overview-heading"><h2>Grupos musculares</h2><a className="text-button" href="#progress-details">Ver más <ChevronRight size={15} aria-hidden="true" /></a></div>{muscleGroups.length ? <div className="progress-muscle-grid">{muscleGroups.map((group) => { const image = data.exercises.find((exercise) => exercise.muscleGroup === group.muscleGroup)?.imageUrl; return <article className="progress-muscle-tile" key={group.muscleGroup}>{image && <img src={image} alt="" loading="lazy" />}<strong>{group.muscleGroup}</strong><span>{formatVolume(group.volume)}</span></article>; })}</div> : <p className="progress-overview-empty">Completa sesiones para ver el volumen por grupo.</p>}</section>
-      <article className="progress-overview-card progress-streak-card"><div className="progress-overview-heading"><h2>Racha de días</h2><Activity size={17} aria-hidden="true" /></div><strong>{streak}</strong><span className="progress-overview-caption">sesiones seguidas</span><div className="progress-overview-week" aria-label="Actividad de esta semana">{weekDays.map((day) => <span key={day.key} className={`${day.completed ? 'is-complete' : ''}${day.planned ? ' is-planned' : ''}`} title={`${day.label}: ${day.completed ? 'completado' : day.planned ? 'previsto' : 'descanso'}`} />)}</div></article>
-    </div>
-  </section>;
-}
-
-function ProgressOverviewMetric({ label, value, buckets, metric, tone }: { label: string; value: string; buckets: ProgressBucket[]; metric: 'volumeKg' | 'durationSeconds'; tone: 'blue' | 'purple' }) {
-  return <article className={`progress-overview-card progress-metric-card ${tone}`}><div className="progress-overview-heading"><h2>{label}</h2></div><strong>{value}</strong><ProgressOverviewBars buckets={buckets} metric={metric} tone={tone} /></article>;
-}
-
-function ProgressOverviewBars({ buckets, metric, tone }: { buckets: ProgressBucket[]; metric: keyof Pick<ProgressBucket, 'sessions' | 'volumeKg' | 'durationSeconds'>; tone: 'green' | 'blue' | 'purple' }) {
-  const max = Math.max(...buckets.map((bucket) => bucket[metric]), 0);
-  const labelStep = Math.max(1, Math.ceil(buckets.length / 6));
-  return <div className={`progress-overview-bars ${tone}`} role="img" aria-label={`${buckets.reduce((total, bucket) => total + bucket[metric], 0)} ${metric === 'sessions' ? 'entrenamientos' : metric === 'volumeKg' ? 'kilogramos de volumen' : 'segundos de entrenamiento'}`}>
-    {buckets.map((bucket, index) => <span key={bucket.key} title={`${bucket.label}: ${bucket[metric]}`}>{bucket[metric] > 0 && <i style={{ height: `${Math.max(8, bucket[metric] / max * 100)}%` }} />}{index % labelStep === 0 || index === buckets.length - 1 ? <small>{bucket.label}</small> : <small aria-hidden="true">&nbsp;</small>}</span>)}
-  </div>;
-}
-
-function SessionCalendar({ sessions, trainingDays, exercises, workoutDays }: { sessions: WorkoutSession[]; trainingDays: number[]; exercises: ExerciseDefinition[]; workoutDays: WorkoutDay[] }) {
-  const [viewMonth, setViewMonth] = useState(() => new Date());
-  const [sessionDetail, setSessionDetail] = useState<WorkoutSession>();
-  const cells = useMemo(() => buildCalendarCells(viewMonth), [viewMonth]);
-  const completedByDate = useMemo(() => new Map(sessions.filter((session) => session.status === 'completed').sort((a, b) => (a.completedAt ?? a.startedAt).localeCompare(b.completedAt ?? b.startedAt)).map((session) => [session.dateKey, session])), [sessions]);
-  const plannedWeekdays = new Set(normalizeTrainingDays(trainingDays));
-  const exerciseNames = new Map(exercises.map((exercise) => [exercise.id, exercise.name]));
-  const today = dateKey();
-  const monthIndex = viewMonth.getFullYear() * 12 + viewMonth.getMonth();
-  const currentDate = new Date();
-  const currentMonthIndex = currentDate.getFullYear() * 12 + currentDate.getMonth();
-  const monthLabel = new Intl.DateTimeFormat('es-ES', { month: 'long', year: 'numeric' }).format(viewMonth);
-  const changeMonth = (delta: number): void => {
-    setSessionDetail(undefined);
-    setViewMonth((current) => new Date(current.getFullYear(), current.getMonth() + delta, 1, 12));
-  };
-  const detailDay = sessionDetail && workoutDays.find((day) => day.id === sessionDetail.workoutDayId);
-  const completedExercises = sessionDetail?.plannedExercises.filter((exercise) => exercise.completed) ?? [];
-
-  return <div className="session-calendar"><div className="calendar-header"><h3 aria-live="polite">{monthLabel}</h3><div className="calendar-nav"><button type="button" aria-label="Mes anterior" disabled={monthIndex <= currentMonthIndex - 12} onClick={() => changeMonth(-1)}><ChevronLeft size={16} aria-hidden="true" /></button><button type="button" aria-label="Mes siguiente" disabled={monthIndex >= currentMonthIndex} onClick={() => changeMonth(1)}><ChevronRight size={16} aria-hidden="true" /></button></div></div><div className="calendar-grid" role="group" aria-label={`Calendario de ${monthLabel}`}>{shortDayNames.map((day, index) => <span className="calendar-weekday" key={`${day}-${index}`}>{day}</span>)}{cells.map((cell) => {
-    const session = cell.inMonth ? completedByDate.get(cell.dateKey) : undefined;
-    const isToday = cell.inMonth && cell.dateKey === today;
-    const isPlanned = cell.inMonth && !session && cell.dateKey < today && plannedWeekdays.has(cell.date.getDay());
-    const classes = ['calendar-day', !cell.inMonth && 'calendar-day--other-month', session && 'calendar-day--completed', isPlanned && 'calendar-day--planned', isToday && 'calendar-day--today'].filter(Boolean).join(' ');
-    return session ? <button type="button" className={classes} key={cell.dateKey} aria-label={`${formatDate(cell.dateKey, { weekday: 'long', day: 'numeric', month: 'long' })}: entrenamiento completado`} aria-pressed={sessionDetail?.id === session.id} onClick={() => setSessionDetail(session)}>{cell.date.getDate()}</button> : <span className={classes} key={cell.dateKey}>{cell.date.getDate()}</span>;
-  })}</div>{sessionDetail && <aside className="calendar-detail" aria-live="polite"><strong>{displayWorkoutName(detailDay?.name ?? sessionDetail.workoutDayId)}</strong><span>{formatDate(sessionDetail.dateKey, { day: 'numeric', month: 'long', year: 'numeric' })} · {formatSessionDuration(summarizeSession(sessionDetail, sessions).durationSeconds)}</span>{completedExercises.length > 0 && <ul>{completedExercises.map((exercise) => <li key={exercise.plannedExerciseId}>{exercise.name || exerciseNames.get(exercise.exerciseId)}</li>)}</ul>}</aside>}</div>;
-}
-
-interface ExerciseTrendOption { id: string; name: string }
-
-function exerciseTrendOptions(data: AppData): ExerciseTrendOption[] {
-  const options = new Map<string, ExerciseTrendOption>();
-  data.sessions.filter((session) => session.status === 'completed').forEach((session) => session.plannedExercises.forEach((exercise) => {
-    if (!options.has(exercise.exerciseId)) options.set(exercise.exerciseId, { id: exercise.exerciseId, name: exercise.name });
-  }));
-
-  return Array.from(options.values()).sort((a, b) => a.name.localeCompare(b.name, 'es'));
-}
-
-type SvgLineChartProps = {
-  points: SvgChartPoint[];
-  linePath: string;
-  areaPath: string;
-  width?: number;
-  height?: number;
-  gradientId: string;
-  accentColor?: string;
-  className?: string;
-  areaClassName?: string;
-  gridlines?: number[] | false;
-  title: string;
-  description: string;
-  role?: 'group' | 'img';
-  selectedIndex?: number;
-  pointLabels?: string[];
-  onSelectPoint?: (index: number) => void;
-};
-
-const SvgLineChart = memo(function SvgLineChart({ points, linePath, areaPath, width = 320, height = 140, gradientId, accentColor = 'var(--accent)', className = 'weight-chart-svg', areaClassName, gridlines = [14, 68, 122], title, description, role = 'img', selectedIndex, pointLabels, onSelectPoint }: SvgLineChartProps) {
-  const titleId = `${gradientId}-title`;
-  const descriptionId = `${gradientId}-description`;
-  return <svg className={className} viewBox={`0 0 ${width} ${height}`} role={role} aria-labelledby={`${titleId} ${descriptionId}`} preserveAspectRatio="none">
-    <title id={titleId}>{title}</title>
-    <desc id={descriptionId}>{description}</desc>
-    <defs><linearGradient id={gradientId} x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor={accentColor} stopOpacity=".32" /><stop offset="100%" stopColor={accentColor} stopOpacity="0" /></linearGradient></defs>
-    {gridlines && gridlines.map((y) => <line className="weight-chart-gridline" key={y} x1="0" x2={width} y1={y} y2={y} />)}
-    {points.length > 1 && <path className={`weight-chart-area${areaClassName ? ` ${areaClassName}` : ''}`} d={areaPath} />}
-    <path className="weight-chart-line" d={linePath} />
-    {points.map((point, index) => <g key={`${point.date}-${index}`}>
-      {onSelectPoint && <circle className="weight-chart-hit-area" cx={point.x} cy={point.y} r="12" fill="transparent" pointerEvents="all" role="button" tabIndex={0} aria-pressed={index === selectedIndex} aria-label={pointLabels?.[index] ?? `Seleccionar registro ${index + 1}`} onClick={() => onSelectPoint(index)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelectPoint(index); } }} />}
-      <circle className={`weight-chart-point${index === points.length - 1 ? ' is-latest' : ''}${index === selectedIndex ? ' is-selected' : ''}`} cx={point.x} cy={point.y} r={index === points.length - 1 ? 4.5 : 3} pointerEvents="none" />
-    </g>)}
-  </svg>;
-});
-
-function ExerciseTrendCard({ data }: { data: AppData }) {
-  const [selectedExerciseId, setSelectedExerciseId] = useState('');
-  const [selectedPointIndex, setSelectedPointIndex] = useState<number>();
-  const options = exerciseTrendOptions(data);
-  const selected = options.find((option) => option.id === selectedExerciseId) ?? options[0];
-  if (!selected) return null;
-  const trend = exerciseTrend(selected.id, data.sessions);
-  const weighted = trend.some((point) => point.maxWeightKg !== undefined);
-  const chartPoints = trend.filter((point) => weighted ? point.maxWeightKg !== undefined : true);
-  if (chartPoints.length === 0) return null;
-  const latest = chartPoints.at(-1)!;
-  const values = chartPoints.map((point) => weighted ? point.maxWeightKg! : point.volumeKg);
-  const activeIndex = Math.min(selectedPointIndex ?? chartPoints.length - 1, chartPoints.length - 1);
-  const selectedPoint = chartPoints[activeIndex]!;
-  const minimum = Math.min(...values);
-  const maximum = Math.max(...values);
-  const range = Math.max(maximum - minimum, 1);
-  const width = 320;
-  const plotTop = 14;
-  const plotBottom = 122;
-  const points = chartPoints.map((point, index) => ({
-    x: chartPoints.length === 1 ? width / 2 : 12 + (index / (chartPoints.length - 1)) * (width - 24),
-    y: plotBottom - ((values[index] - minimum) / range) * (plotBottom - plotTop),
-    date: point.date,
-  }));
-  const linePath = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(' ');
-  const areaPath = `${linePath} L ${points.at(-1)!.x.toFixed(2)} ${plotBottom} L ${points[0].x.toFixed(2)} ${plotBottom} Z`;
-  const scaleValues = [maximum, minimum + range / 2, minimum];
-  const numberFormat = { maximumFractionDigits: 1 } as const;
-  const displayValue = (value: number): string => weighted ? `${value.toLocaleString('es-ES', numberFormat)} kg` : formatVolume(value);
-  const metricLabel = weighted ? 'carga máxima' : 'volumen';
-  return <section className="progress-card exercise-trend-card" aria-labelledby="exercise-trend-heading">
-    <div className="section-heading compact"><div><p className="eyebrow">histórico por ejercicio</p><h2 id="exercise-trend-heading">Tu evolución</h2></div><History size={19} /></div>
-    <label className="exercise-trend-select" htmlFor="exercise-trend-picker"><span>Ejercicio</span><select id="exercise-trend-picker" value={selected.id} onChange={(event) => { setSelectedExerciseId(event.target.value); setSelectedPointIndex(undefined); }}>{options.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label>
-    <div className="weight-chart-reading exercise-trend-reading" aria-live="polite"><strong>{displayValue(values[activeIndex])}</strong><span>{metricLabel} · {formatDate(selectedPoint.date, { day: 'numeric', month: 'short', year: 'numeric' })}</span></div>
-    <div className="weight-chart-body">
-      <div className="weight-chart-scale" aria-hidden="true">{scaleValues.map((value, index) => <span key={`${value}-${index}`}>{weighted ? `${value.toLocaleString('es-ES', numberFormat)} kg` : formatVolume(value)}</span>)}</div>
-      <SvgLineChart points={points} linePath={linePath} areaPath={areaPath} gradientId="exercise-trend-fill" areaClassName="exercise-trend-area" role="group" gridlines={[plotTop, (plotTop + plotBottom) / 2, plotBottom]} title={`Evolución de ${selected.name}`} description={`${metricLabel} registrado entre ${formatDate(chartPoints[0].date, { day: 'numeric', month: 'long', year: 'numeric' })} y ${formatDate(latest.date, { day: 'numeric', month: 'long', year: 'numeric' })}. Selecciona un punto para consultar su valor.`} selectedIndex={activeIndex} pointLabels={chartPoints.map((point, index) => `${formatDate(point.date, { day: 'numeric', month: 'long', year: 'numeric' })}: ${displayValue(values[index])}`)} onSelectPoint={setSelectedPointIndex} />
-    </div>
-    <div className="weight-chart-footer"><span>{formatDate(chartPoints[0].date, { month: 'short', year: 'numeric' })}</span><span>{chartPoints.length} {chartPoints.length === 1 ? 'registro' : 'registros'}</span><span>{formatDate(latest.date, { month: 'short', year: 'numeric' })}</span></div>
-    {chartPoints.length === 1 ? <p className="weight-chart-note">Añade otra sesión con este ejercicio para ver la tendencia.</p> : <p className="weight-chart-note">Selecciona un punto para consultar esa sesión. La línea muestra {weighted ? 'la carga máxima registrada en una serie' : 'el volumen de trabajo registrado'}.</p>}
-    {selectedPoint.discomfort && <p className="weight-chart-note exercise-trend-warning">Esta sesión incluye molestias; prioriza control y comodidad antes de progresar.</p>}
-  </section>;
-}
-
-function WeeklyTrends({ summary }: { summary: ReturnType<typeof buildWeeklySummary> }) {
-  return <section className="progress-card"><h2>Últimas cuatro semanas</h2><p>La semana actual está en curso. La adherencia usa el objetivo de tu rutina actual.</p><div className="weekly-trends-table"><table><thead><tr><th>Desde</th><th>Sesiones</th><th>Adherencia</th><th>Volumen</th></tr></thead><tbody>{summary.trends.map((week) => <tr key={week.week}><td>{formatDate(week.week, { day: 'numeric', month: 'short' })}</td><td>{week.sessions}</td><td>{week.adherencePercent}%</td><td>{formatVolume(week.volumeKg)}</td></tr>)}</tbody></table></div><h3>Fuerza respecto a la semana anterior</h3><p>Carga comparada en el mismo ejercicio y con las mismas repeticiones.</p>{summary.strengthChanges.length ? <ul>{summary.strengthChanges.map((entry) => <li key={entry.exerciseId}>{entry.name}: {entry.previousKg} → {entry.currentKg} kg ({entry.changePercent > 0 ? '+' : ''}{entry.changePercent}%)</li>)}</ul> : <p>Aún no hay series comparables entre ambas semanas.</p>}</section>;
-}
-
-function WeeklyReviewCard({ summary, data, onToast }: { summary: ReturnType<typeof buildWeeklySummary>; data: AppData; onToast: (message: string) => void }) {
-  const focusLabel = summary.focusTone === 'positive' ? 'Hay margen' : summary.focusTone === 'caution' ? 'Punto a revisar' : 'Siguiente paso';
-  const share = (): void => {
-    const text = weeklySummaryText(data);
-    if (typeof navigator.share === 'function') {
-      void navigator.share({ text }).catch(() => undefined);
-      return;
-    }
-    const copy = navigator.clipboard?.writeText(text);
-    if (!copy) {
-      onToast('No se pudo copiar el resumen');
-      return;
-    }
-    void copy.then(() => onToast('Resumen copiado')).catch(() => onToast('No se pudo copiar el resumen'));
-  };
-  return <section className="coach-card weekly-review-card"><div className="weekly-review-topline"><div><p className="eyebrow light">para revisar juntos</p><h2>Tu semana, en claro</h2></div><span className="weekly-review-period">{summary.periodLabel}</span></div><p className="weekly-review-feedback">{summary.feedback}</p><div className="weekly-review-facts" aria-label="Resumen de la semana"><div><strong>{summary.completedSessions}/{summary.targetSessions}</strong><span>sesiones</span></div><div><strong>{summary.completedExercises}</strong><span>ejercicios</span></div><div><strong>{formatVolume(summary.volumeKg)}</strong><span>volumen</span></div></div><div className={`weekly-review-focus ${summary.focusTone}`}><Gauge size={17} /><div><strong>{focusLabel}</strong><p>{summary.focus}</p></div></div>{summary.recommendations.length > 0 && <div className="weekly-review-recommendations" aria-label="Recomendaciones para la próxima semana"><p className="eyebrow light">recomendación por ejercicio</p><ul>{summary.recommendations.slice(0, 3).map((recommendation) => <li key={recommendation.exerciseId}><strong>{recommendation.name}</strong><span>{recommendation.title}. {recommendation.detail}</span></li>)}</ul></div>}{summary.energy && <p className="weekly-review-checkin"><Sun size={15} /> Energía {summary.energy === 'high' ? 'alta' : summary.energy === 'low' ? 'baja' : 'normal'}{summary.feeling ? ` · ${summary.feeling}` : ''}</p>}<button type="button" className="text-button" onClick={share}><Share2 size={15} /> Compartir</button></section>;
-}
-
-function TrainingSignalsCard({ signals }: { signals: ReturnType<typeof buildWeeklySummary>['signals'] }) {
-  if (signals.length === 0) return null;
-  return <section className="progress-card signal-card" aria-labelledby="training-signals-title"><div className="section-heading compact"><div><p className="eyebrow">detección temprana</p><h2 id="training-signals-title">Señales a revisar</h2></div><Gauge size={19} /></div><p className="section-description">No son diagnósticos: son patrones del historial para decidir el siguiente ajuste con calma.</p><div className="signal-list">{signals.slice(0, 4).map((signal) => <article className="signal-row" key={`${signal.kind}-${signal.exerciseId}`}><div><strong>{signal.name}</strong><span>{signal.title}</span></div><p>{signal.detail}</p><small>{signal.evidence.sessionCount} sesiones · {signal.evidence.latestDate}</small></article>)}</div></section>;
-}
-
-interface WeekDaySummary { key: string; label: string; planned: boolean; completed: boolean }
-interface PerformanceSummary { exerciseId: string; name: string; load?: number; reps?: number; volume: number }
-interface RecordSummary { exerciseId: string; name: string; load: number; reps?: number }
-interface MuscleVolumeSummary { muscleGroup: string; volume: number }
-interface HistorySummary { sessions30: number; currentMonth: number; previousMonth: number; volume30: number }
-
-function buildWeekDays(trainingDays: number[], sessions: WorkoutSession[]): WeekDaySummary[] {
-  const monday = new Date();
-  const weekday = monday.getDay() || 7;
-  monday.setHours(12, 0, 0, 0);
-  monday.setDate(monday.getDate() - weekday + 1);
-  return Array.from({ length: 7 }, (_, index) => {
-    const current = new Date(monday);
-    current.setDate(monday.getDate() + index);
-    const key = dateKey(current);
-    const day = current.getDay();
-    return {
-      key,
-      label: shortDayNames[day],
-      planned: trainingDays.includes(day),
-      completed: sessions.some((session) => session.status === 'completed' && session.dateKey === key),
-    };
-  });
-}
-
-function performanceRows(sessions: WorkoutSession[]): PerformanceSummary[] {
-  const recentSessions = sessions.filter((session) => session.status === 'completed').sort((a, b) => a.dateKey.localeCompare(b.dateKey) || (a.completedAt ?? a.startedAt).localeCompare(b.completedAt ?? b.startedAt)).slice(-6);
-  const rows = new Map<string, PerformanceSummary>();
-  recentSessions.forEach((session) => session.plannedExercises.forEach((exercise) => {
-    const recordedSets = exercise.setLogs.filter((set) => isWorkSet(set) && set.completed && set.weightKg !== undefined && set.actualReps !== undefined);
-    if (recordedSets.length === 0) return;
-    const best = recordedSets.reduce((current, set) => (set.weightKg ?? 0) > (current.weightKg ?? 0) ? set : current, recordedSets[0]);
-    const volume = recordedSets.reduce((total, set) => total + (set.weightKg ?? 0) * (set.actualReps ?? 0), 0);
-    const previous = rows.get(exercise.exerciseId);
-    rows.set(exercise.exerciseId, {
-      exerciseId: exercise.exerciseId,
-      name: exercise.name,
-      load: Math.max(previous?.load ?? 0, best.weightKg ?? 0) || undefined,
-      reps: best.actualReps ?? previous?.reps,
-      volume: (previous?.volume ?? 0) + volume,
-    });
-  }));
-  return Array.from(rows.values()).sort((a, b) => b.volume - a.volume).slice(0, 3);
-}
-
-function formatVolume(value: number): string {
-  if (value >= 1000) return `${(value / 1000).toLocaleString('es-ES', { maximumFractionDigits: 1 })}k kg`;
-  return `${Math.round(value).toLocaleString('es-ES')} kg`;
-}
-
-function HistoryPanel({ data }: { data: AppData }) {
-  const records = useMemo(() => personalRecords(data.sessions).slice(0, 3), [data.sessions]);
-  const muscleVolumes = useMemo(() => muscleGroupVolumes(data).slice(0, 3), [data.sessions, data.exercises]);
-  const summary = historySummary(data.sessions);
-  return <section className="progress-card history-card"><div className="section-heading compact"><div><p className="eyebrow">historial avanzado</p><h2>Lo que está cambiando</h2></div><Trophy size={19} /></div><div className="history-stats"><div><CalendarDays size={16} /><strong>{summary.sessions30}</strong><span>sesiones · 30 días</span></div><div><Layers3 size={16} /><strong>{formatVolume(summary.volume30)}</strong><span>volumen · 30 días</span></div><div><Sparkles size={16} /><strong>{records.length}</strong><span>récords visibles</span></div></div><div className="history-columns"><div><p className="eyebrow">mejores cargas</p>{records.length ? <div className="history-list">{records.map((record) => <div className="history-list-row" key={record.exerciseId}><span>{record.name}</span><strong>{formatWeight(record.load)}{record.reps ? ` · ${record.reps} reps` : ''}</strong></div>)}</div> : <p className="history-empty">Registra peso y repeticiones para ver tus marcas.</p>}</div><div><p className="eyebrow">volumen por grupo</p>{muscleVolumes.length ? <div className="history-list">{muscleVolumes.map((item) => <div className="history-list-row" key={item.muscleGroup}><span>{item.muscleGroup}</span><strong>{formatVolume(item.volume)}</strong></div>)}</div> : <p className="history-empty">Aún no hay volumen calculable.</p>}</div></div><p className="history-caption">Este mes: {summary.currentMonth} sesiones · mes anterior: {summary.previousMonth}.</p></section>;
-}
-
-function personalRecords(sessions: WorkoutSession[]): RecordSummary[] {
-  const records = new Map<string, RecordSummary>();
-  sessions.filter((session) => session.status === 'completed').forEach((session) => session.plannedExercises.forEach((exercise) => {
-    exercise.setLogs.filter((set) => isWorkSet(set) && set.completed && set.weightKg !== undefined).forEach((set) => {
-      const previous = records.get(exercise.exerciseId);
-      if (!previous || (set.weightKg ?? 0) > previous.load || ((set.weightKg ?? 0) === previous.load && (set.actualReps ?? 0) > (previous.reps ?? 0))) {
-        records.set(exercise.exerciseId, { exerciseId: exercise.exerciseId, name: exercise.name, load: set.weightKg ?? 0, reps: set.actualReps });
-      }
-    });
-  }));
-  return Array.from(records.values()).sort((a, b) => b.load - a.load);
-}
-
-function muscleGroupVolumes(data: AppData): MuscleVolumeSummary[] {
-  const names = new Map(data.exercises.map((exercise) => [exercise.id, exercise.muscleGroup]));
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - 30);
-  const totals = new Map<string, number>();
-  data.sessions.filter((session) => session.status === 'completed' && new Date(`${session.dateKey}T12:00:00`) >= cutoff).forEach((session) => session.plannedExercises.forEach((exercise) => {
-    const group = names.get(exercise.exerciseId) ?? 'Otros';
-    const volume = exercise.setLogs.reduce((total, set) => total + (isWorkSet(set) && set.completed ? (set.weightKg ?? 0) * (set.actualReps ?? 0) : 0), 0);
-    if (volume > 0) totals.set(group, (totals.get(group) ?? 0) + volume);
-  }));
-  return Array.from(totals, ([muscleGroup, volume]) => ({ muscleGroup, volume })).sort((a, b) => b.volume - a.volume);
-}
-
-function historySummary(sessions: WorkoutSession[]): HistorySummary {
-  const now = new Date();
-  const cutoff = new Date(now);
-  cutoff.setDate(cutoff.getDate() - 30);
-  const currentMonth = now.getMonth();
-  const currentYear = now.getFullYear();
-  const previousMonthDate = new Date(currentYear, currentMonth - 1, 1);
-  const completed = sessions.filter((session) => session.status === 'completed');
-  const recent = completed.filter((session) => new Date(`${session.dateKey}T12:00:00`) >= cutoff);
-  const volume30 = recent.reduce((total, session) => total + session.plannedExercises.reduce((exerciseTotal, exercise) => exerciseTotal + exercise.setLogs.reduce((setTotal, set) => setTotal + (isWorkSet(set) && set.completed ? (set.weightKg ?? 0) * (set.actualReps ?? 0) : 0), 0), 0), 0);
-  return {
-    sessions30: recent.length,
-    currentMonth: completed.filter((session) => { const date = new Date(`${session.dateKey}T12:00:00`); return date.getMonth() === currentMonth && date.getFullYear() === currentYear; }).length,
-    previousMonth: completed.filter((session) => { const date = new Date(`${session.dateKey}T12:00:00`); return date.getMonth() === previousMonthDate.getMonth() && date.getFullYear() === previousMonthDate.getFullYear(); }).length,
-    volume30,
-  };
-}
-
-const MetricCard = memo(function MetricCard({ label, value, change, icon }: { label: string; value: string; change: string; icon: React.ReactNode }) { return <article className="metric-card"><div className="metric-label">{icon}<span>{label}</span></div><strong>{value}</strong><small>{change}</small></article>; });
-
-const weightChartRanges = [{ value: '3m', label: '3 meses' }, { value: '12m', label: '12 meses' }, { value: 'all', label: 'Todo' }] as const;
-
-function WeightChart({ entries }: { entries: ProgressEntry[] }) {
-  const [range, setRange] = useState<(typeof weightChartRanges)[number]['value']>('12m');
-  const [selectedEntryId, setSelectedEntryId] = useState<string>();
-  const allWeightEntries = entries.filter((entry) => entry.weightKg !== undefined).sort((a, b) => a.date.localeCompare(b.date));
-  if (!allWeightEntries.length) return null;
-
-  const cutoff = new Date();
-  const dayOfMonth = cutoff.getDate();
-  cutoff.setHours(12, 0, 0, 0);
-  cutoff.setDate(1);
-  cutoff.setMonth(cutoff.getMonth() - (range === '3m' ? 3 : 12));
-  cutoff.setDate(Math.min(dayOfMonth, new Date(cutoff.getFullYear(), cutoff.getMonth() + 1, 0).getDate()));
-  const rangeStart = dateKey(cutoff);
-  const weightEntries = range === 'all' ? allWeightEntries : allWeightEntries.filter((entry) => entry.date >= rangeStart);
-  const rangeControls = <div className="weight-chart-ranges" role="group" aria-label="Periodo del gráfico">{weightChartRanges.map((option) => <button type="button" className="weight-chart-range" key={option.value} aria-pressed={range === option.value} onClick={() => { setRange(option.value); setSelectedEntryId(undefined); }}>{option.label}</button>)}</div>;
-  if (!weightEntries.length) return <section className="weight-chart" aria-labelledby="weight-chart-title"><div><p className="eyebrow">peso corporal</p><h3 id="weight-chart-title">Evolución del peso</h3></div>{rangeControls}<p className="weight-chart-empty">No hay medidas en este periodo. Selecciona «Todo» para revisar el historial completo.</p></section>;
-
-  const latest = weightEntries.at(-1)!;
-  const foundIndex = weightEntries.findIndex((entry) => entry.id === selectedEntryId);
-  const activeIndex = foundIndex >= 0 ? foundIndex : weightEntries.length - 1;
-  const selected = weightEntries[activeIndex]!;
-  const previous = weightEntries[activeIndex - 1]?.weightKg;
-  const delta = previous === undefined ? undefined : selected.weightKg! - previous;
-  const width = 320;
-  const plotTop = 14;
-  const plotBottom = 122;
-  const { points, linePath, areaPath, minimum, maximum, rangeSize } = buildSvgChart(weightEntries.map((entry) => ({ date: entry.date, value: entry.weightKg! })), width, plotTop, plotBottom);
-  const scaleValues = [maximum, minimum + rangeSize / 2, minimum];
-  const numberFormat = { maximumFractionDigits: 1 } as const;
-  return <section className="weight-chart" aria-labelledby="weight-chart-title">
-    <div className="weight-chart-heading" aria-live="polite">
-      <div>
-        <p className="eyebrow">peso corporal</p>
-        <div className="weight-chart-reading"><strong>{selected.weightKg!.toLocaleString('es-ES', numberFormat)}<small> kg</small></strong>{delta !== undefined && <span className={delta <= 0 ? 'is-positive' : 'is-caution'}>{delta > 0 ? '+' : ''}{delta.toLocaleString('es-ES', numberFormat)} kg</span>}</div>
-      </div>
-      <time dateTime={selected.date}>{formatDate(selected.date, { day: 'numeric', month: 'short', year: 'numeric' })}</time>
-    </div>
-    {rangeControls}
-    <div className="weight-chart-body">
-      <div className="weight-chart-scale" aria-hidden="true">{scaleValues.map((value, index) => <span key={`${value}-${index}`}>{value.toLocaleString('es-ES', numberFormat)}</span>)}</div>
-      <SvgLineChart points={points} linePath={linePath} areaPath={areaPath} gradientId="weight-chart-fill" width={width} height={140} role="group" title="Evolución del peso" description={`Peso registrado entre ${formatDate(weightEntries[0].date, { day: 'numeric', month: 'long', year: 'numeric' })} y ${formatDate(latest.date, { day: 'numeric', month: 'long', year: 'numeric' })}. Selecciona un punto para consultar esa medición.`} selectedIndex={activeIndex} pointLabels={weightEntries.map((entry) => `${formatDate(entry.date, { day: 'numeric', month: 'long', year: 'numeric' })}: ${entry.weightKg!.toLocaleString('es-ES', numberFormat)} kg`)} onSelectPoint={(index) => setSelectedEntryId(weightEntries[index].id)} />
-    </div>
-    <table className="sr-only" aria-label="Datos del gráfico de peso"><thead><tr><th>Fecha</th><th>Peso (kg)</th></tr></thead><tbody>{weightEntries.map((entry) => <tr key={entry.id}><td>{formatDate(entry.date, { day: 'numeric', month: 'long', year: 'numeric' })}</td><td>{entry.weightKg!.toLocaleString('es-ES', numberFormat)}</td></tr>)}</tbody></table>
-    <div className="weight-chart-footer"><span>{formatDate(weightEntries[0].date, { month: 'short', year: 'numeric' })}</span><span>{weightEntries.length} {weightEntries.length === 1 ? 'registro' : 'registros'}</span><span>{formatDate(latest.date, { month: 'short', year: 'numeric' })}</span></div>
-    {weightEntries.length === 1 ? <p className="weight-chart-note">Añade otra medición para ver la tendencia.</p> : <p className="weight-chart-note">Selecciona un punto para consultar esa medición.</p>}
-  </section>;
-}
-
-function ExerciseProgressChart({ exerciseId, sessions }: { exerciseId: string; sessions: WorkoutSession[] }) {
-  const entries = sessions.flatMap((session) => {
-    if (session.status !== 'completed') return [];
-    const weights = session.plannedExercises.filter((exercise) => exercise.exerciseId === exerciseId).flatMap((exercise) => exercise.setLogs.filter((set) => isWorkSet(set) && set.completed && set.weightKg !== undefined && Number.isFinite(set.weightKg)).map((set) => set.weightKg!));
-    return weights.length ? [{ date: session.dateKey, value: Math.max(...weights) }] : [];
-  }).sort((a, b) => a.date.localeCompare(b.date));
-  if (!entries.length) return <p className="weight-chart-empty">Aún no hay series de trabajo con peso para este ejercicio.</p>;
-
-  const name = sessions.find((session) => session.plannedExercises.some((exercise) => exercise.exerciseId === exerciseId))?.plannedExercises.find((exercise) => exercise.exerciseId === exerciseId)?.name ?? exerciseId;
-  const latest = entries.at(-1)!;
-  const { points, linePath, areaPath, minimum, maximum, rangeSize } = buildSvgChart(entries);
-  const scaleValues = [maximum, minimum + rangeSize / 2, minimum];
-  const numberFormat = { maximumFractionDigits: 1 } as const;
-  return <div className="weight-chart exercise-progress-chart" aria-labelledby="exercise-progress-title">
-    <div className="weight-chart-heading"><div><p className="eyebrow">carga máxima</p><div className="weight-chart-reading"><strong>{latest.value.toLocaleString('es-ES', numberFormat)}<small> kg</small></strong></div></div><time dateTime={latest.date}>{formatDate(latest.date, { day: 'numeric', month: 'short', year: 'numeric' })}</time></div>
-    <div className="weight-chart-body"><div className="weight-chart-scale" aria-hidden="true">{scaleValues.map((value, index) => <span key={`${value}-${index}`}>{value.toLocaleString('es-ES', numberFormat)}</span>)}</div><SvgLineChart points={points} linePath={linePath} areaPath={areaPath} gradientId="exercise-progress-fill" areaClassName="exercise-progress-area" width={320} height={140} role="img" title={`Progresión de carga de ${name}`} description={`Carga máxima en series de trabajo registradas entre ${formatDate(entries[0].date, { day: 'numeric', month: 'long', year: 'numeric' })} y ${formatDate(latest.date, { day: 'numeric', month: 'long', year: 'numeric' })}.`} /></div>
-    <table className="sr-only" aria-label={`Datos de carga de ${name}`}><thead><tr><th>Fecha</th><th>Peso (kg)</th></tr></thead><tbody>{entries.map((entry, index) => <tr key={`${entry.date}-${index}`}><td>{formatDate(entry.date, { day: 'numeric', month: 'long', year: 'numeric' })}</td><td>{entry.value.toLocaleString('es-ES', numberFormat)}</td></tr>)}</tbody></table>
-    <div className="weight-chart-footer"><span>{formatDate(entries[0].date, { month: 'short', year: 'numeric' })}</span><span>{entries.length} {entries.length === 1 ? 'registro' : 'registros'}</span><span>{formatDate(latest.date, { month: 'short', year: 'numeric' })}</span></div>
-  </div>;
-}
-
-function TrendRow({ label, values, unit }: { label: string; values: Array<number | undefined>; unit: string }) { const defined = values.filter((value): value is number => value !== undefined); const max = Math.max(...defined, 1); const min = Math.min(...defined, 0); return <div className="trend-row"><div><strong>{label}</strong><span>{defined.length ? `${defined[defined.length - 1].toLocaleString('es-ES')} ${unit}` : 'Sin datos'}</span></div><div className="trend-bars" aria-label={`Tendencia de ${label}`}>{defined.slice(-8).map((value, index) => { const height = defined.length > 1 ? Math.max(14, ((value - min) / Math.max(max - min, 1)) * 58 + 12) : 24; return <span key={`${value}-${index}`} style={{ height: `${height}px` }} />; })}</div></div>; }
-
-function CheckinForm({ existing, onSave }: { existing?: WeeklyCheckin; onSave: (checkin: Omit<WeeklyCheckin, 'id' | 'createdAt' | 'weekKey'>) => void }) { const [form, setForm] = useState({ weightKg: existing?.weightKg?.toString() ?? '', waistCm: existing?.waistCm?.toString() ?? '', feeling: existing?.feeling ?? '', energy: existing?.energy ?? 'normal' as Energy, completedWorkouts: existing?.completedWorkouts?.toString() ?? '4', note: existing?.note ?? '' }); return <form className="checkin-form" onSubmit={(event) => { event.preventDefault(); onSave({ weightKg: form.weightKg ? Number(form.weightKg) : undefined, waistCm: form.waistCm ? Number(form.waistCm) : undefined, feeling: form.feeling, energy: form.energy, completedWorkouts: Number(form.completedWorkouts), note: form.note || undefined }); }}><div className="form-grid"><NumberField label="Peso" unit="kg · opcional" value={form.weightKg} onChange={(value) => setForm((current) => ({ ...current, weightKg: value }))} /><NumberField label="Cintura" unit="cm · opcional" value={form.waistCm} onChange={(value) => setForm((current) => ({ ...current, waistCm: value }))} /><label>Entrenamientos completados<select value={form.completedWorkouts} onChange={(event) => setForm((current) => ({ ...current, completedWorkouts: event.target.value }))}>{[0, 1, 2, 3, 4].map((value) => <option key={value}>{value}</option>)}</select></label><label>Energía<select value={form.energy} onChange={(event) => setForm((current) => ({ ...current, energy: event.target.value as Energy }))}><option value="low">Baja</option><option value="normal">Normal</option><option value="high">Alta</option></select></label></div><label>¿Cómo te has sentido?<textarea value={form.feeling} onChange={(event) => setForm((current) => ({ ...current, feeling: event.target.value }))} placeholder="Unas palabras sobre la semana" rows={2} /></label><label>Comentario opcional<textarea value={form.note} onChange={(event) => setForm((current) => ({ ...current, note: event.target.value }))} rows={2} /></label><button className="primary-button small" type="submit"><Save size={16} /> Guardar check-in</button></form>; }
-
-const experienceOptions: Array<{ value: ExperienceLevel; label: string; description: string }> = [
-  { value: 'beginner', label: 'Estoy empezando', description: 'Quiero instrucciones sencillas y margen.' },
-  { value: 'intermediate', label: 'Ya tengo base', description: 'Conozco las máquinas y registro cargas.' },
-  { value: 'advanced', label: 'Tengo experiencia', description: 'Quiero centrarme en progresar.' },
-];
-
-function DayPicker({ selected, onChange }: { selected: number[]; onChange: (days: number[]) => void }) {
-  const normalizedSelection = normalizeTrainingDays(selected).slice(0, 4);
-  return <div className="day-picker" aria-label="Días de entrenamiento">{[1, 2, 3, 4, 5, 6, 0].map((day) => { const label = shortDayNames[day]; const dayName = dayNames[day]; const isSelected = normalizedSelection.includes(day); const selectionLimitReached = normalizedSelection.length >= 4 && !isSelected; return <button type="button" key={day} className={isSelected ? 'day-picker-button selected' : 'day-picker-button'} aria-label={dayName} aria-pressed={isSelected} disabled={selectionLimitReached} onClick={() => onChange(isSelected ? normalizedSelection.filter((item) => item !== day) : [...normalizedSelection, day].sort((a, b) => a - b))}>{label}</button>; })}</div>;
-}
-
-function EquipmentPicker({ selected, onChange }: { selected: ExerciseEquipment[]; onChange: (equipment: ExerciseEquipment[]) => void }) {
-  const toggle = (equipment: ExerciseEquipment): void => {
-    const next = selected.includes(equipment) ? selected.filter((item) => item !== equipment) : [...selected, equipment];
-    if (next.length > 0) onChange(next);
-  };
-  return <div className="equipment-picker" role="group" aria-label="Equipamiento disponible">{allExerciseEquipment.map((equipment) => <label key={equipment} className={selected.includes(equipment) ? 'equipment-option selected' : 'equipment-option'}><input type="checkbox" checked={selected.includes(equipment)} onChange={() => toggle(equipment)} /><span>{equipmentLabel(equipment)}</span></label>)}</div>;
-}
-
-function OnboardingDialog({ profile, onComplete }: { profile: UserProfile; onComplete: (profile: Partial<UserProfile>) => void }) {
-  const [form, setForm] = useState({
-    gym: profile.gym,
-    goal: profile.goal,
-    heightCm: profile.heightCm?.toString() ?? '',
-    currentWeightKg: profile.currentWeightKg?.toString() ?? '',
-    sessionMinutes: String(profile.sessionMinutes),
-    experienceLevel: profile.experienceLevel,
-    trainingDays: profile.trainingDays,
-    availableEquipment: profile.availableEquipment,
-  });
-  const save = (): void => onComplete({
-    gym: form.gym.trim(),
-    goal: form.goal.trim(),
-    heightCm: numberOrUndefined(form.heightCm),
-    currentWeightKg: numberOrUndefined(form.currentWeightKg),
-    sessionMinutes: clampNumber(form.sessionMinutes, 20, 180),
-    experienceLevel: form.experienceLevel,
-    trainingDays: form.trainingDays.length ? form.trainingDays : profile.trainingDays,
-    availableEquipment: form.availableEquipment.length ? form.availableEquipment : profile.availableEquipment,
-  });
-  return <div className="onboarding-backdrop"><section className="onboarding-dialog" role="dialog" aria-modal="true" aria-labelledby="onboarding-title"><div className="onboarding-kicker"><Sparkles size={16} /> primera configuración</div><h2 id="onboarding-title">Vamos a dejarlo a tu medida.</h2><p className="onboarding-lead">Unos datos básicos para que la rutina de Hoy encaje contigo desde el primer entrenamiento.</p><form onSubmit={(event) => { event.preventDefault(); save(); }}><label className="onboarding-field">¿Dónde entrenas?<input value={form.gym} onChange={(event) => setForm((current) => ({ ...current, gym: event.target.value }))} placeholder="Ej. Evanfit Picanya" /></label><label className="onboarding-field">¿Qué quieres conseguir?<input value={form.goal} onChange={(event) => setForm((current) => ({ ...current, goal: event.target.value }))} placeholder="Ej. ganar fuerza" /></label><div className="onboarding-grid"><label className="onboarding-field">Duración habitual<span>minutos</span><input inputMode="numeric" value={form.sessionMinutes} onChange={(event) => setForm((current) => ({ ...current, sessionMinutes: event.target.value }))} /></label><div className="onboarding-field"><span>¿Qué días entrenas?</span><span>elige los tuyos</span><DayPicker selected={form.trainingDays} onChange={(trainingDays) => setForm((current) => ({ ...current, trainingDays }))} /></div></div><div className="onboarding-field equipment-field"><span>¿Qué material tienes disponible?</span><span>Las sustituciones y la biblioteca se adaptarán a esto</span><EquipmentPicker selected={form.availableEquipment} onChange={(availableEquipment) => setForm((current) => ({ ...current, availableEquipment }))} /></div><fieldset className="experience-options"><legend>Tu punto de partida</legend>{experienceOptions.map((option) => <label key={option.value} className={form.experienceLevel === option.value ? 'experience-option selected' : 'experience-option'}><input type="radio" name="experience" value={option.value} checked={form.experienceLevel === option.value} onChange={() => setForm((current) => ({ ...current, experienceLevel: option.value }))} /><span><strong>{option.label}</strong><small>{option.description}</small></span></label>)}</fieldset><div className="onboarding-section"><div className="onboarding-section-heading"><span>Datos opcionales</span><small>No hacen falta para empezar</small></div><div className="onboarding-grid"><label className="onboarding-field">Altura<span>cm · opcional</span><input inputMode="decimal" value={form.heightCm} onChange={(event) => setForm((current) => ({ ...current, heightCm: event.target.value }))} placeholder="-" /></label><label className="onboarding-field">Peso actual<span>kg · opcional</span><input inputMode="decimal" value={form.currentWeightKg} onChange={(event) => setForm((current) => ({ ...current, currentWeightKg: event.target.value }))} placeholder="-" /></label></div><p className="onboarding-privacy"><CloudOff size={15} /> En modo local, los datos se guardan en este dispositivo. Si conectas una cuenta, la copia completa se almacena en D1 sin cifrado de extremo a extremo.</p></div><div className="onboarding-actions"><button className="primary-button" type="submit">Guardar y empezar <ChevronRight size={17} /></button><button className="secondary-button" type="button" onClick={() => onComplete({})}>Empezar sin completar</button></div></form></section></div>;
-}
-
-function AccountPanel({ user, passkeys, status, error, cloudUpdatedAt, uploadPending, uploadDisabled, onUploadLocal, onRegister, onLogin, onAddPasskey, onRenamePasskey, onRevokePasskey, onLogout, onLogoutEverywhere }: { user?: AuthUser; passkeys: AuthPasskey[]; status: AuthStatus; error?: string; cloudUpdatedAt?: string; uploadPending: boolean; uploadDisabled: boolean; onUploadLocal: () => void; onRegister: (displayName: string, passkeyLabel: string) => void; onLogin: () => void; onAddPasskey: (passkeyLabel: string) => void; onRenamePasskey: (credentialId: string, label: string) => void; onRevokePasskey: (credentialId: string) => void; onLogout: () => void; onLogoutEverywhere: () => void }) {
-  const [displayName, setDisplayName] = useState('');
-  const [passkeyLabel, setPasskeyLabel] = useState('Passkey principal');
-  const [editingId, setEditingId] = useState<string>();
-  const [editingLabel, setEditingLabel] = useState('');
-  const busy = status === 'checking' || status === 'registering' || status === 'signing_in' || status === 'syncing';
-  const statusCopy = status === 'checking' ? 'Comprobando tu cuenta…' : status === 'registering' ? 'Preparando tu passkey…' : status === 'signing_in' ? 'Esperando la confirmación…' : status === 'syncing' ? 'Sincronizando con D1…' : user ? cloudUpdatedAt ? `Sincronizado ${new Date(cloudUpdatedAt).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' })}` : 'Cuenta conectada' : 'Sin cuenta en la nube';
-  const beginEdit = (passkey: AuthPasskey): void => { setEditingId(passkey.credentialId); setEditingLabel(passkey.label); };
-  const saveEdit = (): void => { if (editingId && editingLabel.trim()) onRenamePasskey(editingId, editingLabel.trim()); setEditingId(undefined); };
-  return <section className="profile-section account-section"><div className="section-heading compact"><div><p className="eyebrow">cuenta · opcional</p><h2>{user ? 'Tu cuenta Radian' : 'Sincroniza con passkey'}</h2></div><Fingerprint size={21} /></div>{user ? <><div className="account-identity"><span className="account-avatar"><Fingerprint size={19} /></span><div><strong>{user.displayName}</strong><span>{statusCopy}</span></div></div><p className="section-description">La copia de tu cuenta incluye el perfil completo, rutinas, sesiones y métricas, y se almacena en D1 sin cifrado de extremo a extremo. En este dispositivo, Radian sigue disponible sin conexión.</p>{uploadPending && <div className="account-upload-pending" role="status"><p>Tu copia local sigue solo en este dispositivo. Sube los datos cuando quieras activar la copia de la cuenta.</p><button className="primary-button small" type="button" onClick={onUploadLocal} disabled={busy || uploadDisabled}>Subir copia local a la cuenta</button></div>}<label className="account-name-field">Nombre de la nueva passkey<input value={passkeyLabel} onChange={(event) => setPasskeyLabel(event.target.value)} placeholder="Ej. iPhone" /></label><div className="account-actions"><button className="primary-button small" type="button" onClick={() => onAddPasskey(passkeyLabel.trim() || 'Passkey')} disabled={busy}><Fingerprint size={15} /> Añadir passkey</button><button className="secondary-button small" type="button" onClick={onLogout}><LogOut size={15} /> Cerrar sesión</button><button className="text-button danger-text" type="button" onClick={onLogoutEverywhere}>Cerrar en todos</button></div><div className="passkey-list"><div className="passkey-list-heading"><strong>Tus dispositivos</strong><span>{passkeys.length} passkey{passkeys.length === 1 ? '' : 's'}</span></div>{passkeys.map((passkey) => <div className="passkey-row" key={passkey.credentialId}>{editingId === passkey.credentialId ? <input value={editingLabel} onChange={(event) => setEditingLabel(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') saveEdit(); if (event.key === 'Escape') setEditingId(undefined); }} autoFocus /> : <div><strong>{passkey.label}</strong><span>{passkey.lastUsedAt ? `Usada ${new Date(passkey.lastUsedAt).toLocaleDateString('es-ES')}` : `Añadida ${new Date(passkey.createdAt).toLocaleDateString('es-ES')}`}</span></div>}<div className="passkey-row-actions">{editingId === passkey.credentialId ? <button type="button" aria-label="Guardar nombre" onClick={saveEdit}><Save size={15} /></button> : <button type="button" aria-label={`Renombrar ${passkey.label}`} onClick={() => beginEdit(passkey)}><Pencil size={15} /></button>}<button type="button" aria-label={`Revocar ${passkey.label}`} onClick={() => onRevokePasskey(passkey.credentialId)} disabled={passkeys.length <= 1}><Trash2 size={15} /></button></div></div>)}</div></> : <><p className="section-description">Usa la huella, Face ID, PIN o el gestor de contraseñas del dispositivo. No necesitas crear ni recordar una contraseña.</p><label className="account-name-field">Nombre para tu perfil<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Ej. Carlos" autoComplete="name" /></label><label className="account-name-field">Nombre de la passkey<input value={passkeyLabel} onChange={(event) => setPasskeyLabel(event.target.value)} placeholder="Ej. iPhone" /></label><div className="account-actions"><button className="primary-button small" type="button" onClick={() => onRegister(displayName.trim(), passkeyLabel.trim() || 'Passkey principal')} disabled={busy || !displayName.trim()}><UserPlus size={15} /> Crear con passkey</button><button className="secondary-button small" type="button" onClick={onLogin} disabled={busy}><LogIn size={15} /> Entrar</button></div><p className="account-status" role="status">{statusCopy}</p></>}{error && <p className="error-message" role="alert">{error}</p>}<p className="sync-security"><LockKeyhole size={13} /> La passkey nunca sale del dispositivo. Radian guarda la clave pública necesaria para verificarla.</p></section>;
-}
-
-function ProfileView({ data, authUser, theme, onThemeChange, onUpdateProfile, onRepeatOnboarding, onImport, onConfirmImport, onConfirmEquipment, syncState, syncStatus, syncError, syncConflict, onKeepLocalSync, onUseRemoteSync, onConnectSync, onUploadSync, onDownloadSync, onDisconnectSync, onRevokeSync, onInstall, isInstalled }: { data: AppData; authUser?: AuthUser; theme: Theme; onThemeChange: (theme: Theme) => void; onUpdateProfile: (profile: Partial<AppData['profile']>, adaptEquipmentPlan?: boolean) => void; onRepeatOnboarding: () => void; onImport: (data: AppData) => void; onConfirmImport: () => Promise<boolean>; onConfirmEquipment: (message: string) => Promise<boolean>; syncState: SyncState; syncStatus: SyncStatus; syncError?: string; syncConflict?: RemoteSyncData; onKeepLocalSync: () => void; onUseRemoteSync: () => void; onConnectSync: (key: string) => void; onUploadSync: () => void; onDownloadSync: () => void; onDisconnectSync: () => void; onRevokeSync: () => void; onInstall?: () => void; isInstalled: boolean }) {
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [editing, setEditing] = useState(false);
-  const [importError, setImportError] = useState<string>();
-  const [profile, setProfile] = useState(data.profile);
-  const avatarInitial = (data.profile.gym.trim() || authUser?.displayName?.trim() || '').charAt(0).toLocaleUpperCase('es-ES');
-  const save = async (): Promise<void> => {
-    const equipmentChanged = profile.availableEquipment.join('|') !== data.profile.availableEquipment.join('|');
-    const gaps = equipmentChanged ? planEquipmentGaps(data.plan, data.exercises, profile.availableEquipment) : [];
-    if (gaps.length > 0) {
-      const replaceable = gaps.filter((gap) => gap.replacement).length;
-      const withoutReplacement = gaps.length - replaceable;
-      const detail = `${replaceable} ${replaceable === 1 ? 'puede sustituirse' : 'pueden sustituirse'} automáticamente${withoutReplacement > 0 ? `; ${withoutReplacement} ${withoutReplacement === 1 ? 'queda' : 'quedan'} para revisar a mano` : ''}`;
-      const adapt = await onConfirmEquipment(`Tu material ha cambiado y ${gaps.length} ${gaps.length === 1 ? 'ejercicio ya no encaja' : 'ejercicios ya no encajan'}. ${detail}. ¿Quieres adaptar las sustituciones disponibles para las próximas sesiones?`);
-      onUpdateProfile(profile, adapt);
-    } else {
-      onUpdateProfile(profile);
-    }
-    setEditing(false);
-  };
-  const exportData = (): void => downloadFile('radian-backup.json', serializeBackup(data), 'application/json');
-  const importData = (event: React.ChangeEvent<HTMLInputElement>): void => { const file = event.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => { try { const next = parseBackup(String(reader.result)); setImportError(undefined); void onConfirmImport().then((confirmed) => { if (confirmed) onImport(next); }); } catch (error) { setImportError(error instanceof Error ? error.message : 'No se pudo leer la copia.'); } }; reader.readAsText(file); event.target.value = ''; };
-  return <section className="view-section"><PageHeader eyebrow="tu contexto" title="Perfil" action={<button className="icon-button subtle" aria-label="Editar perfil" onClick={() => setEditing(true)}><Settings2 size={19} /></button>} /><section className="profile-hero"><div className="profile-avatar">{avatarInitial || <UserRound size={22} />}</div><div><p className="eyebrow light">perfil local</p><h2>Tu punto de partida</h2><p>Solo tú tienes acceso a estos datos.</p></div></section><section className="profile-section"><div className="section-heading compact"><div><p className="eyebrow">base</p><h2>Datos personales</h2></div><button className="text-button" onClick={() => { if (editing) void save(); else setEditing(true); }}>{editing ? 'Guardar' : 'Editar'}</button></div>{editing ? <div className="profile-form"><NumberField label="Altura" unit="cm · opcional" value={profile.heightCm?.toString() ?? ''} onChange={(value) => setProfile((current) => ({ ...current, heightCm: numberOrUndefined(value) }))} /><NumberField label="Peso actual" unit="kg · opcional" value={profile.currentWeightKg?.toString() ?? ''} onChange={(value) => setProfile((current) => ({ ...current, currentWeightKg: numberOrUndefined(value) }))} /><label>Gimnasio<input value={profile.gym} onChange={(event) => setProfile((current) => ({ ...current, gym: event.target.value }))} placeholder="Ej. Evanfit Picanya" /></label><label>Objetivo<input value={profile.goal} onChange={(event) => setProfile((current) => ({ ...current, goal: event.target.value }))} /></label><div className="days-field"><span>Días de entrenamiento</span><span>selecciona los tuyos</span><DayPicker selected={profile.trainingDays} onChange={(trainingDays) => setProfile((current) => ({ ...current, trainingDays }))} /></div><div className="profile-equipment-field"><span>Equipamiento disponible</span><span>Se usa para filtrar la biblioteca y las sustituciones</span><EquipmentPicker selected={profile.availableEquipment} onChange={(availableEquipment) => setProfile((current) => ({ ...current, availableEquipment }))} /></div><label>Duración por sesión<input inputMode="numeric" value={profile.sessionMinutes} onChange={(event) => setProfile((current) => ({ ...current, sessionMinutes: Number(event.target.value) }))} /></label><label>Nivel<select value={profile.experienceLevel} onChange={(event) => setProfile((current) => ({ ...current, experienceLevel: event.target.value as ExperienceLevel }))}><option value="beginner">Estoy empezando</option><option value="intermediate">Ya tengo base</option><option value="advanced">Tengo experiencia</option></select></label></div> : <div className="profile-facts"><Fact label="Altura" value={profile.heightCm !== undefined ? `${profile.heightCm} cm` : 'Sin registrar'} /><Fact label="Peso actual" value={profile.currentWeightKg !== undefined ? `${profile.currentWeightKg} kg` : 'Sin registrar'} /><Fact label="Objetivo" value={profile.goal || 'Sin definir'} /><Fact label="Gimnasio" value={profile.gym || 'Sin definir'} /><Fact label="Material" value={profile.availableEquipment.map((equipment) => equipmentLabel(equipment)).join(' · ')} /><Fact label="Sesiones" value={`${profile.trainingDays.length} días · ${profile.sessionMinutes} min`} /><Fact label="Nivel" value={experienceOptions.find((option) => option.value === profile.experienceLevel)?.label ?? 'Sin definir'} /></div>}</section><section className="profile-section"><div className="section-heading compact"><div><p className="eyebrow">preferencias</p><h2>Cómo usar Radian</h2></div></div><div className="setting-row"><div><strong>Apariencia</strong><span>Se adapta a tu preferencia</span></div><div className="theme-switcher" role="group" aria-label="Apariencia"><button type="button" key="system" className={theme === 'system' ? 'selected' : ''} aria-label={themeOptionLabel('system')} aria-pressed={theme === 'system'} onClick={() => onThemeChange('system')}>Auto</button><button type="button" key="light" className={theme === 'light' ? 'selected' : ''} aria-label={themeOptionLabel('light')} aria-pressed={theme === 'light'} onClick={() => onThemeChange('light')}><Sun size={16} aria-hidden="true" /></button><button type="button" key="dark" className={theme === 'dark' ? 'selected' : ''} aria-label={themeOptionLabel('dark')} aria-pressed={theme === 'dark'} onClick={() => onThemeChange('dark')}><Moon size={16} aria-hidden="true" /></button></div></div><div className="setting-row"><div><strong>Texto grande</strong><span>Mejor lectura en pantalla pequeña</span></div><button type="button" className={data.profile.largeText ? 'toggle on' : 'toggle'} aria-label={textSizeToggleLabel(data.profile.largeText)} aria-pressed={data.profile.largeText} onClick={() => onUpdateProfile({ largeText: !data.profile.largeText })}><span /></button></div><div className="setting-row"><div><strong>Datos en este dispositivo</strong><span>Sin analítica ni servicios de terceros</span></div><CloudOff size={19} /></div><div className="setting-row"><div><strong>Configuración inicial</strong><span>Puedes cambiar tus datos cuando quieras.</span></div><button type="button" className="secondary-button small" onClick={onRepeatOnboarding}><Sparkles size={15} /> Repetir</button></div>{(onInstall || isInstalled) && <div className="setting-row"><div><strong>{isInstalled ? 'Radian está instalada' : 'Instalar Radian'}</strong><span>{isInstalled ? 'Acceso rápido desde tu pantalla de inicio' : 'En iPhone: compartir → Añadir a pantalla de inicio'}</span></div>{isInstalled ? <ShieldCheck size={19} /> : <button type="button" className="secondary-button small" onClick={onInstall}>Instalar</button>}</div>}</section><SyncConflictCard local={data} remote={syncConflict} onKeepLocal={onKeepLocalSync} onUseRemote={onUseRemoteSync} /><SyncPanel syncState={syncState} syncStatus={syncStatus} syncError={syncError} onConnect={onConnectSync} onUpload={onUploadSync} onDownload={onDownloadSync} onDisconnect={onDisconnectSync} onRevoke={onRevokeSync} /><section className="profile-section"><div className="section-heading compact"><div><p className="eyebrow">copia de seguridad</p><h2>Tus datos</h2></div><FileJson size={20} /></div><p className="section-description">Exporta o restaura todo el contenido de Radian como un archivo JSON. Haz una copia de vez en cuando.</p><div className="backup-actions"><button className="secondary-button" onClick={exportData}><Download size={16} /> Exportar datos</button><button className="secondary-button" onClick={() => fileRef.current?.click()}><Upload size={16} /> Importar datos</button><input ref={fileRef} type="file" accept="application/json,.json" onChange={importData} hidden /></div>{importError && <p className="error-message" role="alert">{importError}</p>}</section><section className="profile-section nutrition-section"><div className="section-heading compact"><div><p className="eyebrow">contexto nutricional</p><h2>Sin contar calorías</h2></div><Info size={19} /></div><p className="section-description">Este contexto queda guardado para futuras revisiones, pero Radian no te pide registrar comidas.</p>{editing ? <textarea value={profile.nutritionContext} onChange={(event) => setProfile((current) => ({ ...current, nutritionContext: event.target.value }))} rows={5} /> : <p className="nutrition-copy">{profile.nutritionContext || 'Sin contexto guardado.'}</p>}</section></section>;
-}
-
-function SyncConflictCard({ local, remote, remoteLabel = 'Copia remota', intro = 'No se ha sobrescrito nada. Compara el resumen y toma una decisión explícita.', onKeepLocal, onUseRemote }: { local: AppData; remote?: RemoteSyncData; remoteLabel?: string; intro?: string; onKeepLocal: () => void; onUseRemote: () => void }) {
-  if (!remote?.data) return null;
-  const comparison = compareSyncCopies(local, remote.data);
-  const formatCopyDate = (value?: string): string => value ? new Date(`${value}T12:00:00`).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' }) : 'sin registro';
-  const copySummary = (summary: ReturnType<typeof compareSyncCopies>['local']): string => `${summary.sessionCount} sesiones · ${summary.progressCount} medidas · ${summary.checkinCount} check-ins`;
-  const changedAreas = [comparison.changed.profile && 'perfil', comparison.changed.routine && 'rutina', comparison.changed.sessions && 'sesiones', comparison.changed.progress && 'medidas', comparison.changed.checkins && 'check-ins'].filter((value): value is string => Boolean(value));
-  return <section className="sync-conflict" role="alert" aria-label="Conflicto de sincronización"><strong>Elige qué copia conservar</strong><span>{intro}</span><div className="sync-copy-comparison"><div><small>Este dispositivo</small><strong>{copySummary(comparison.local)}</strong><span>Última sesión: {formatCopyDate(comparison.local.latestSessionDate)}</span></div><div><small>{remoteLabel}</small><strong>{copySummary(comparison.remote)}</strong><span>Última sesión: {formatCopyDate(comparison.remote.latestSessionDate)}</span></div></div>{changedAreas.length > 0 && <p className="sync-conflict-differences">Diferencias detectadas: {changedAreas.join(', ')}.</p>}<div className="sync-conflict-actions"><button className="secondary-button small" type="button" onClick={onUseRemote}>Usar {remoteLabel.toLowerCase()}</button><button className="primary-button small" type="button" onClick={onKeepLocal}>Conservar este dispositivo</button></div></section>;
-}
-
-function SyncPanel({ syncState, syncStatus, syncError, onConnect, onUpload, onDownload, onDisconnect, onRevoke }: { syncState: SyncState; syncStatus: SyncStatus; syncError?: string; onConnect: (key: string) => void; onUpload: () => void; onDownload: () => void; onDisconnect: () => void; onRevoke: () => void }) {
-  const [key, setKey] = useState(syncState.key ?? '');
-  useEffect(() => setKey(syncState.key ?? ''), [syncState.key]);
-  const busy = syncStatus === 'checking' || syncStatus === 'syncing';
-  const status = syncStatus === 'remote' ? 'Hay una copia remota pendiente de elegir.' : syncStatus === 'synced' ? 'Sincronizado ahora.' : syncStatus === 'unavailable' ? 'Cloudflare aún no está conectado.' : syncStatus === 'conflict' ? 'Hay cambios distintos en los dos dispositivos.' : syncStatus === 'checking' ? 'Comprobando el código…' : syncStatus === 'syncing' ? 'Sincronizando…' : syncState.key ? 'Código preparado.' : 'Aún no hay ningún dispositivo conectado.';
-  const generate = (): void => setKey(generateSyncKey());
-  const copy = (): void => { if (key) navigator.clipboard.writeText(key).catch(() => undefined); };
-  return <section className="profile-section sync-section"><div className="section-heading compact"><div><p className="eyebrow">opcional · cloudflare</p><h2>Sincronizar dispositivos</h2></div><LockKeyhole size={20} /></div><p className="section-description">Empareja el móvil y el ordenador con un código. El modo local sigue funcionando si no configuras la nube.</p><div className="sync-code-field"><label>Código de sincronización<input value={key} onChange={(event) => setKey(normalizeSyncKey(event.target.value))} placeholder="XXXX-XXXX-XXXX" autoCapitalize="characters" spellCheck={false} /></label>{key && <button className="icon-button" type="button" onClick={copy} aria-label="Copiar código"><Clipboard size={16} /></button>}</div><div className="backup-actions"><button className="secondary-button" type="button" onClick={generate}><KeyRound size={15} /> Generar código</button><button className="primary-button small" type="button" onClick={() => onConnect(key)} disabled={busy || !key}>Conectar</button></div>{syncState.key && <div className="sync-actions"><button className="secondary-button small" type="button" onClick={onDownload} disabled={busy}>Descargar nube</button><button className="secondary-button small" type="button" onClick={onUpload} disabled={busy}>Subir local</button><button className="text-button" type="button" onClick={onDisconnect}>Desconectar</button><button className="text-button danger-text" type="button" onClick={onRevoke}>Revocar código</button></div>}<p className="sync-status" role="status">{status}</p>{syncState.remoteUpdatedAt && <p className="sync-last-updated">Última versión confirmada: {new Date(syncState.remoteUpdatedAt).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' })}</p>}{syncError && <p className="error-message" role="alert">{syncError}</p>}<p className="sync-security"><LockKeyhole size={13} /> La copia se cifra en el dispositivo antes de subirla. Revoca el código si cambias de móvil.</p></section>;
-}
-
-function Fact({ label, value }: { label: string; value: string }) { return <div className="fact"><span>{label}</span><strong>{value}</strong></div>; }
-function displayWorkoutName(name: string): string { return name.replace(/\s*[·•]\s*/g, ', '); }
-export function getLatestWorkoutStreak(trainingDays: number[], sessions: WorkoutSession[]): number {
-  const plannedDays = new Set(normalizeTrainingDays(trainingDays));
-  const completedDays = new Set(sessions.filter((session) => session.status === 'completed').map((session) => session.dateKey));
-  const earliestSession = [...completedDays].sort()[0];
-  if (!plannedDays.size || !earliestSession) return 0;
-  const cursor = new Date(`${dateKey()}T12:00:00`);
-  if (plannedDays.has(cursor.getDay()) && !completedDays.has(dateKey(cursor))) cursor.setDate(cursor.getDate() - 1);
-  let streak = 0;
-  while (dateKey(cursor) >= earliestSession) {
-    if (plannedDays.has(cursor.getDay())) {
-      if (!completedDays.has(dateKey(cursor))) break;
-      streak += 1;
-    }
-    cursor.setDate(cursor.getDate() - 1);
-  }
-  return streak;
-}
-function numberOrUndefined(value: string): number | undefined { if (!value.trim()) return undefined; const number = Number(value); return Number.isFinite(number) ? number : undefined; }
-function formatExerciseSummary(session: ExerciseSession): string { const completedSets = session.setLogs?.filter((set) => isWorkSet(set) && set.completed) ?? []; const lastSet = completedSets[completedSets.length - 1]; if (lastSet?.weightKg !== undefined && lastSet.actualReps !== undefined) return `${lastSet.weightKg.toLocaleString('es-ES', { maximumFractionDigits: 1 })} kg · ${lastSet.actualReps} reps`; if (session.actualWeightKg !== undefined && session.actualReps !== undefined) return `${session.actualWeightKg.toLocaleString('es-ES', { maximumFractionDigits: 1 })} kg · ${session.actualReps} reps`; return difficultyLabel(session.difficulty ?? 'good'); }
-function NumberField({ label, unit, value, onChange }: { label: string; unit: string; value: string; onChange: (value: string) => void }) { return <label>{label}<span>{unit}</span><input inputMode="decimal" value={value} onChange={(event) => onChange(event.target.value)} placeholder="-" /></label>; }
-function clampNumber(value: string, min: number, max: number): number { const number = Number(value); return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : min; }
-function moveExercise(exercises: PlannedExercise[], index: number, direction: -1 | 1): PlannedExercise[] { const nextIndex = index + direction; if (nextIndex < 0 || nextIndex >= exercises.length) return exercises; const copy = [...exercises]; [copy[index], copy[nextIndex]] = [copy[nextIndex], copy[index]]; return copy; }
-function changeLabel(current?: number, previous?: number, suffix = ' kg'): string { if (current === undefined || previous === undefined) return 'sin comparación'; const difference = current - previous; if (difference === 0) return 'estable'; return `${difference > 0 ? '+' : ''}${difference.toLocaleString('es-ES', { maximumFractionDigits: 1 })}${suffix}`; }
-function difficultyLabel(value: Difficulty): string { return difficultyOptions.find((option) => option.value === value)?.label ?? value; }
-function downloadFile(filename: string, contents: string, type: string): void { const blob = new Blob([contents], { type }); const url = URL.createObjectURL(blob); const anchor = document.createElement('a'); anchor.href = url; anchor.download = filename; anchor.click(); URL.revokeObjectURL(url); }
+// Re-exports kept for consumers importing from the app barrel (tests import these from '../src/App').
+export { ExercisePreview } from './components/ExercisePreview';
+export { getNextSessionExerciseIndex, getNextSessionProgress } from './lib/sessionFlow';
+export { getLatestWorkoutStreak } from './lib/trainingStats';
 
 export { App };
 export default App;
