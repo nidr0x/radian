@@ -195,11 +195,24 @@ export const migrateData = (value: unknown): AppData => {
 };
 
 export const loadData = (): AppData => {
+  // Visual QA hook: `?uipreview=1[&theme=light|dark]` boots with onboarding
+  // completed (and, optionally, a fixed theme) so automated screenshots capture
+  // the main views. Nothing is persisted.
+  const flatten = <T,>(value: T | undefined): Partial<AppData> => (value === undefined ? {} : (value as object) as Partial<AppData>);
+  const previewData = (base: AppData): AppData => {
+    if (typeof window === 'undefined' || !window.location.search.includes('uipreview=1')) return base;
+    const theme = new URLSearchParams(window.location.search).get('theme');
+    return {
+      ...base,
+      onboardingComplete: true,
+      profile: theme === 'light' || theme === 'dark' ? { ...base.profile, theme, largeText: base.profile.largeText } : base.profile,
+    };
+  };
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? migrateData(JSON.parse(raw)) : defaultData();
+    return flatten(raw) as AppData && raw ? previewData(migrateData(JSON.parse(raw))) : previewData(defaultData());
   } catch {
-    return defaultData();
+    return previewData(defaultData());
   }
 };
 
