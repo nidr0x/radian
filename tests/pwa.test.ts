@@ -1,6 +1,9 @@
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
+import { buildPrecacheManifest } from '../vite.config';
 
 type WorkerResponse = {
   readonly ok: boolean;
@@ -81,7 +84,8 @@ const loadWorker = (legacyCache?: FakeCache): { handlers: Map<string, WorkerHand
     skipWaiting: () => { skipWaitingCalls += 1; },
   };
 
-  runInNewContext(readFileSync(new URL('../public/sw.js', import.meta.url), 'utf8'), {
+  const precache = ['/', '/manifest.webmanifest', '/icon.svg', '/exercises/individual/incline-press.webp'];
+  runInNewContext(readFileSync(new URL('../public/sw.js', import.meta.url), 'utf8').replace('"__PRECACHE_MANIFEST__"', JSON.stringify(precache)), {
     URL,
     caches,
     fetch: async (request: string | WorkerRequest) => responseFor(typeof request === 'string' ? request : new URL(request.url).pathname),
@@ -130,5 +134,59 @@ describe('service worker', () => {
     await installPromise;
 
     expect(skipWaitingCalls()).toBe(0);
+  });
+});
+
+describe('precarga generada en build', () => {
+  const buildFixture = (): { dir: string; cleanup: () => void } => {
+    const dir = mkdtempSync(join(tmpdir(), 'radian-precache-'));
+    mkdirSync(join(dir, 'assets'));
+    mkdirSync(join(dir, 'exercises', 'individual'), { recursive: true });
+    writeFileSync(join(dir, 'index.html'), '');
+    writeFileSync(join(dir, 'assets', 'app-B3xj5a1.js'), '');
+    writeFileSync(join(dir, 'assets', 'index-DcQ3-j_f.css'), '');
+    writeFileSync(join(dir, 'exercises', 'individual', 'biceps-curl.webp'), '');
+    writeFileSync(join(dir, 'exercises', 'atlas-push.png'), '');
+    writeFileSync(join(dir, 'icon.svg'), '');
+    writeFileSync(join(dir, 'manifest.webmanifest'), '');
+    writeFileSync(join(dir, '_headers'), '');
+    writeFileSync(join(dir, '_redirects'), '');
+    writeFileSync(join(dir, 'sw.js'), '');
+    return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  };
+
+  it('incluye los assets emitidos y los ficheros públicos y excluye los ficheros de plataforma', () => {
+    const { dir, cleanup } = buildFixture();
+    try {
+      const { precache, excluded } = buildPrecacheManifest(dir);
+
+      expect(precache[0]).toBe('/');
+      expect(precache).toContain('/assets/app-B3xj5a1.js');
+      expect(precache).toContain('/assets/index-DcQ3-j_f.css');
+      expect(precache).toContain('/exercises/individual/biceps-curl.webp');
+      expect(precache).toContain('/manifest.webmanifest');
+      expect(precache).toContain('/icon.svg');
+      for (const path of precache) {
+        expect(path.startsWith('/_headers')).toBe(false);
+        expect(path.startsWith('/_redirects')).toBe(false);
+        expect(path).not.toBe('/index.html');
+        expect(path).not.toBe('/sw.js');
+      }
+      expect(excluded.sort()).toEqual(['_headers', '_redirects', 'exercises/atlas-push.png', 'index.html', 'sw.js']);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('deja fuera del shell los duplicados legacy de los atlas en PNG', () => {
+    const { dir, cleanup } = buildFixture();
+    try {
+      const { precache, excluded } = buildPrecacheManifest(dir);
+
+      expect(precache).not.toContain('/exercises/atlas-push.png');
+      expect(excluded).toContain('exercises/atlas-push.png');
+    } finally {
+      cleanup();
+    }
   });
 });

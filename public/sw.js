@@ -1,19 +1,8 @@
 const CACHE_NAME = 'radian-shell-__BUILD_ID__';
-const APP_SHELL = [
-  '/', '/manifest.webmanifest', '/icon.svg',
-  '/exercises/atlas-push.webp', '/exercises/atlas-pull.webp', '/exercises/atlas-arms.webp',
-  '/exercises/atlas-legs.webp', '/exercises/atlas-support.webp',
-  '/exercises/individual/incline-press.webp', '/exercises/individual/chest-press.webp',
-  '/exercises/individual/cable-fly.webp', '/exercises/individual/lateral-raise.webp',
-  '/exercises/individual/triceps-pushdown.webp', '/exercises/individual/overhead-triceps.webp',
-  '/exercises/individual/lat-pulldown.webp', '/exercises/individual/chest-supported-row.webp',
-  '/exercises/individual/straight-arm-pulldown.webp', '/exercises/individual/reverse-fly.webp',
-  '/exercises/individual/biceps-curl.webp', '/exercises/individual/incline-curl.webp',
-  '/exercises/individual/machine-crunch.webp', '/exercises/individual/leg-press.webp',
-  '/exercises/individual/romanian-deadlift.webp', '/exercises/individual/leg-curl.webp',
-  '/exercises/individual/leg-extension.webp', '/exercises/individual/calf-raise.webp',
-  '/exercises/individual/shoulder-press.webp',
-];
+// APP_SHELL is replaced at build time by the version-offline-shell plugin in vite.config.ts
+// with the exact paths emitted into dist (hashed Vite assets plus every other shipped file).
+// Do not edit by hand: this build placeholder gets swapped for the generated precache list.
+const APP_SHELL = "__PRECACHE_MANIFEST__";
 const CURRENT_SHELL_MARKER = 'name="radian-pwa-version" content="2"';
 
 const hasLegacyShell = async () => {
@@ -29,10 +18,6 @@ const hasLegacyShell = async () => {
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then(async (cache) => {
     await cache.addAll(APP_SHELL);
-    const shell = await cache.match('/');
-    const html = await shell.text();
-    const assets = [...html.matchAll(/(?:src|href)="(\/assets\/[^\"]+)"/g)].map((match) => match[1]);
-    await cache.addAll(assets);
     if (await hasLegacyShell()) self.skipWaiting();
   }));
 });
