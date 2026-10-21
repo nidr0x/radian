@@ -55,7 +55,9 @@ export default defineConfig({
         console.warn(`[version-offline-shell] excluded from precache (see neverPrecached in vite.config.ts): ${excluded.join(', ')}`);
       }
       const version = createHash('sha256').update(html).update(worker).digest('hex').slice(0, 16);
-      writeFileSync('dist/sw.js', worker.replace('__BUILD_ID__', version).replace('"__PRECACHE_MANIFEST__"', JSON.stringify(precache)));
+      writeFileSync('dist/sw.js', worker
+        .replace('__BUILD_ID__', () => version)
+        .replace('"__PRECACHE_MANIFEST__"', () => JSON.stringify(precache)));
     },
   }],
   server: {
