@@ -214,7 +214,7 @@ export const SESSION_HISTORY_MAX_CHARS = 480_000;
 const sessionHistoryCharSize = (session: WorkoutSession): number => JSON.stringify(session).length + 1;
 
 export const pruneSessionHistory = (
-  sessions: readonly WorkoutSession[],
+  sessions: WorkoutSession[],
   maxSessions: number = SESSION_HISTORY_MAX_SESSIONS,
   maxChars: number = SESSION_HISTORY_MAX_CHARS,
 ): WorkoutSession[] => {
