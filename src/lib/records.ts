@@ -54,3 +54,26 @@ export const detectPersonalRecord = (exercise: ExerciseSession, sessions: Workou
   if ((current.maxVolumeKg ?? 0) > (previous.maxVolumeKg ?? 0)) return { kind: 'volume', weightKg: current.maxWeightKg, reps: current.maxWeightReps, volumeKg: current.maxVolumeKg };
   return undefined;
 };
+
+/**
+ * Sessions that hold their exercise's best weight (ties broken by volume), one
+ * per exercise at most. Session-history pruning keeps these pinned so a record
+ * can never age out of the retained history.
+ */
+export const recordSessionIds = (sessions: WorkoutSession[]): string[] => {
+  const best = new Map<string, { sessionId: string; maxWeightKg?: number; maxVolumeKg?: number }>();
+  for (const session of sessions) {
+    if (session.status !== 'completed') continue;
+    for (const exercise of session.plannedExercises) {
+      const record = recordFromExercise(exercise);
+      if (!record) continue;
+      const current = best.get(record.exerciseId);
+      if (!current
+        || (record.maxWeightKg ?? 0) > (current.maxWeightKg ?? 0)
+        || ((record.maxWeightKg ?? 0) === (current.maxWeightKg ?? 0) && (record.maxVolumeKg ?? 0) > (current.maxVolumeKg ?? 0))) {
+        best.set(record.exerciseId, { sessionId: session.id, maxWeightKg: record.maxWeightKg, maxVolumeKg: record.maxVolumeKg });
+      }
+    }
+  }
+  return [...best.values()].map((entry) => entry.sessionId);
+};

@@ -1,5 +1,5 @@
 import type { AppData } from '../types';
-import { parseBackup, serializeBackup } from './storage';
+import { buildBackupPayload, parseBackup, serializeBackup, writeStoredValue } from './storage';
 
 const CHECKPOINT_KEY = 'radian-account-checkpoint-v1';
 const RECOVERY_KEY = 'radian-sync-recovery-v1';
@@ -18,7 +18,8 @@ export const readCheckpoint = (): Checkpoint | undefined => {
   } catch { return undefined; }
 };
 export const saveCheckpoint = (userId: string, version: string, data: AppData, localVersion: string): void => {
-  localStorage.setItem(CHECKPOINT_KEY, JSON.stringify({ userId, version, snapshot: JSON.stringify(data), syncedAt: new Date().toISOString(), localVersion }));
+  // Best-effort: a failed write is recorded in the shared storage-failure channel.
+  writeStoredValue(CHECKPOINT_KEY, JSON.stringify({ userId, version, snapshot: JSON.stringify(data), syncedAt: new Date().toISOString(), localVersion }));
 };
 export const syncDecision = (local: AppData, remote: AppData, version: string | undefined, checkpoint: Checkpoint | undefined, userId: string): 'same' | 'upload' | 'download' | 'conflict' => {
   if (JSON.stringify(local) === JSON.stringify(remote)) return 'same';
@@ -32,14 +33,19 @@ export const syncDecision = (local: AppData, remote: AppData, version: string | 
 export const readRecovery = (): RecoveryCopy | undefined => {
   try {
     const value = JSON.parse(localStorage.getItem(RECOVERY_KEY) ?? 'null');
-    if (!value || typeof value.savedAt !== 'string' || typeof value.backup !== 'string') return undefined;
-    parseBackup(value.backup);
-    return value;
+    if (!value || typeof value.savedAt !== 'string') return undefined;
+    // Legacy snapshots embed the backup as a JSON string; current ones store the
+    // backup payload object directly (no extra encoding hop). Canonicalize to a
+    // string so consumers keep calling `parseBackup(copy.backup)`.
+    const backup = typeof value.backup === 'string' ? value.backup : JSON.stringify(value.backup);
+    parseBackup(backup);
+    return { savedAt: value.savedAt, backup };
   } catch { return undefined; }
 };
-export const preserveRecovery = (data: AppData): RecoveryCopy => {
-  const copy = { savedAt: new Date().toISOString(), backup: serializeBackup(data) };
-  // Refuse to overwrite either side when the recovery copy cannot be persisted.
-  localStorage.setItem(RECOVERY_KEY, JSON.stringify(copy));
-  return copy;
+export const preserveRecovery = (data: AppData): RecoveryCopy | undefined => {
+  const copy = { savedAt: new Date().toISOString(), backup: buildBackupPayload(data) };
+  // Refuse to overwrite either side when the recovery copy cannot be persisted;
+  // the failure is recorded in the shared storage-failure channel.
+  if (!writeStoredValue(RECOVERY_KEY, JSON.stringify(copy))) return undefined;
+  return { savedAt: copy.savedAt, backup: serializeBackup(data) };
 };

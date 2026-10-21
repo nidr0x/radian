@@ -1,5 +1,6 @@
 import { defaultData } from '../data/initialPlan';
 import { allExerciseEquipment } from './exercises';
+import { recordSessionIds } from './records';
 import { nextPrescription } from './progression';
 import { adaptPlannedExercise, sessionAdaptation } from './sessionAdaptation';
 import type { AppData, BackupPayload, Energy, ExerciseSession, PlannedExercise, ProgressionPolicy, SessionReadiness, SetLog, Soreness, WorkoutDay, WorkoutSession } from '../types';
@@ -194,6 +195,101 @@ export const migrateData = (value: unknown): AppData => {
   };
 };
 
+/**
+ * Retention policy for the persisted session history, applied on every persist.
+ *
+ * New sessions are appended to the end of `data.sessions`, so "oldest" means
+ * front of the array and retention keeps the newest suffix (always keeping at
+ * least the most recent session, which is usually the active workout).
+ *
+ * SESSION_HISTORY_MAX_SESSIONS caps the count generously (~3 years at 4-5
+ * sessions per week). SESSION_HISTORY_MAX_CHARS caps the serialized sessions
+ * array: a fully logged session measures ~4.7 KB, so the budget keeps ~100
+ * sessions and makes the `radian-data-v1` blob converge below both the ~5 MB
+ * localStorage quota and the server sync limit (900 KB request body, which
+ * after JSON + base64 envelope leaves room for roughly a 620 KB plain blob).
+ * The budget applies to that primary blob only: the sync checkpoint and the
+ * recovery copy store the full snapshot (bounded to ~2 MB in total during
+ * recovery windows, still well under the ~5 MB quota).
+ *
+ * Record sessions (pinned via `recordSessionIds`) are kept outside the budget:
+ * a personal record can never age out of the retained history, at the cost of
+ * at most one extra session per exercise (~30 sessions in the current plan).
+ */
+export const SESSION_HISTORY_MAX_SESSIONS = 720;
+export const SESSION_HISTORY_MAX_CHARS = 480_000;
+
+const sessionHistoryCharSize = (session: WorkoutSession): number => JSON.stringify(session).length + 1;
+
+export const pruneSessionHistory = (
+  sessions: WorkoutSession[],
+  maxSessions: number = SESSION_HISTORY_MAX_SESSIONS,
+  maxChars: number = SESSION_HISTORY_MAX_CHARS,
+  mustKeepIds: readonly string[] = [],
+): WorkoutSession[] => {
+  const keepSet = new Set(mustKeepIds);
+  const prunable = keepSet.size === 0 ? sessions : sessions.filter((session) => !keepSet.has(session.id));
+  const sessionLimit = Math.max(1, maxSessions);
+  const windowed = prunable.length > sessionLimit ? prunable.slice(-sessionLimit) : prunable;
+  const kept: WorkoutSession[] = [];
+  let totalChars = 0;
+  const charLimit = Math.max(0, maxChars);
+  for (let index = windowed.length - 1; index >= 0; index -= 1) {
+    const size = sessionHistoryCharSize(windowed[index]);
+    // Always keep the newest session even when it alone exceeds the budget.
+    if (kept.length > 0 && totalChars + size > charLimit) break;
+    kept.push(windowed[index]);
+    totalChars += size;
+  }
+  if (keepSet.size === 0 && windowed === sessions && kept.length === sessions.length) return sessions;
+  const keptIds = new Set(kept.reverse().map((session) => session.id));
+  // Merge pinned and retained sessions back in their original chronological order.
+  return sessions.filter((session) => keepSet.has(session.id) || keptIds.has(session.id));
+};
+
+export interface StorageFailure {
+  at: string;
+  message: string;
+}
+
+type StorageFailureListener = (failure: StorageFailure | undefined) => void;
+
+let storageFailure: StorageFailure | undefined;
+const storageFailureListeners = new Set<StorageFailureListener>();
+
+const notifyStorageFailure = (): void => {
+  storageFailureListeners.forEach((listener) => listener(storageFailure));
+};
+
+export const getStorageFailure = (): StorageFailure | undefined => storageFailure;
+
+export const subscribeStorageFailure = (listener: StorageFailureListener): (() => void) => {
+  storageFailureListeners.add(listener);
+  return () => { storageFailureListeners.delete(listener); };
+};
+
+export const clearStorageFailure = (): void => {
+  if (!storageFailure) return;
+  storageFailure = undefined;
+  notifyStorageFailure();
+};
+
+const recordStorageFailure = (error: unknown): void => {
+  storageFailure = { at: new Date().toISOString(), message: error instanceof Error ? error.message : String(error) };
+  notifyStorageFailure();
+};
+
+/** Best-effort write: records failures in the shared storage-failure channel instead of throwing. */
+export const writeStoredValue = (key: string, value: string): boolean => {
+  try {
+    localStorage.setItem(key, value);
+    return true;
+  } catch (error) {
+    recordStorageFailure(error);
+    return false;
+  }
+};
+
 export const loadData = (): AppData => {
   // Visual QA hook: `?uipreview=1[&theme=light|dark]` boots with onboarding
   // completed (and, optionally, a fixed theme) so automated screenshots capture
@@ -217,15 +313,18 @@ export const loadData = (): AppData => {
 };
 
 export const persistData = (data: AppData): boolean => {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    return true;
-  } catch {
-    return false;
-  }
+  // The in-memory state is never pruned (progress views and best lifts keep
+  // reading the full history); only the persisted copy is capped. It converges
+  // once the app reloads and migrates the pruned blob back into memory.
+  const stored = { ...data, sessions: pruneSessionHistory(data.sessions, SESSION_HISTORY_MAX_SESSIONS, SESSION_HISTORY_MAX_CHARS, recordSessionIds(data.sessions)) };
+  if (!writeStoredValue(STORAGE_KEY, JSON.stringify(stored))) return false;
+  clearStorageFailure();
+  return true;
 };
 
-export const serializeBackup = (data: AppData): string => JSON.stringify({ app: 'radian', exportedAt: new Date().toISOString(), data } satisfies BackupPayload, null, 2);
+export const buildBackupPayload = (data: AppData): BackupPayload => ({ app: 'radian', exportedAt: new Date().toISOString(), data });
+
+export const serializeBackup = (data: AppData): string => JSON.stringify(buildBackupPayload(data), null, 2);
 
 export const parseBackup = (raw: string): AppData => {
   const parsed: unknown = JSON.parse(raw);
