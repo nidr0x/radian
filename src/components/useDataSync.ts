@@ -7,7 +7,8 @@ import {
   dataVersion as buildDataVersion, dataRevisionFromVersion, readCheckpoint, saveCheckpoint,
   syncDecision, readRecovery, preserveRecovery,
 } from '../lib/syncRecovery';
-import { migrateData, parseBackup, persistData, subscribeStorageFailure } from '../lib/storage';
+import { migrateData, parseBackup, persistData, pruneSessionHistory, SESSION_HISTORY_MAX_CHARS, SESSION_HISTORY_MAX_SESSIONS, subscribeStorageFailure } from '../lib/storage';
+import { recordSessionIds } from '../lib/records';
 import { hasAppUpdate } from '../lib/pwa';
 import {
   addPasskey, AuthApiError, currentUser, listPasskeys, loginWithPasskey, logout, logoutEverywhere,
@@ -104,6 +105,13 @@ export function useDataSync(
   }, [authUser]);
   useEffect(() => {
     const persisted = persistData(data);
+    // Converge in-memory history with the retained suffix instead of waiting for
+    // a reload: sync, checkpoint and backup payloads then respect the size budget
+    // while the user session is still open. Idempotent, so it settles in one step.
+    const prunedSessions = pruneSessionHistory(data.sessions, SESSION_HISTORY_MAX_SESSIONS, SESSION_HISTORY_MAX_CHARS, recordSessionIds(data.sessions));
+    if (prunedSessions !== data.sessions) {
+      setData((current) => ({ ...current, sessions: pruneSessionHistory(current.sessions, SESSION_HISTORY_MAX_SESSIONS, SESSION_HISTORY_MAX_CHARS, recordSessionIds(current.sessions)) }));
+    }
     setStorageWarning((current) => persisted ? current === 'No se pudo guardar la configuración local. Comprueba el espacio disponible.' ? undefined : current : 'No se pudo guardar el progreso en este dispositivo.');
     if (!online || !syncReady || !syncState.key) return undefined;
     const timer = window.setTimeout(() => {
@@ -123,7 +131,7 @@ export function useDataSync(
       });
     }, 900);
     return () => window.clearTimeout(timer);
-  }, [data, syncReady, syncState.key, online]);
+  }, [data, syncReady, syncState.key, online, setData]);
   useEffect(() => subscribeStorageFailure(() => {
     setStorageWarning((current) => current === 'No se pudo guardar el progreso en este dispositivo.' ? current : 'No se pudo guardar el progreso en este dispositivo.');
   }), []);
@@ -265,13 +273,13 @@ export function useDataSync(
 
   const applyRemoteSync = (remote: RemoteSyncData, message: string): boolean => {
     if (!remote.data) return false;
-    try {
-      setRecovery(preserveRecovery(dataRef.current));
-    } catch {
+    const backup = preserveRecovery(dataRef.current);
+    if (!backup) {
       setSyncStatus('conflict');
       setSyncError('No hay espacio para guardar la copia local recuperable. Exporta tus datos antes de sustituirlos.');
       return false;
     }
+    setRecovery(backup);
     setData(migrateData(remote.data));
     saveSyncState({ ...syncStateRef.current, remoteUpdatedAt: remote.updatedAt });
     setSyncConflict(undefined);
@@ -290,13 +298,13 @@ export function useDataSync(
 
   const keepLocalSync = async (): Promise<void> => {
     if (!syncConflict?.data || !syncConflict.updatedAt) return;
-    try {
-      setRecovery(preserveRecovery(syncConflict.data));
-    } catch {
+    const backup = preserveRecovery(syncConflict.data);
+    if (!backup) {
       setSyncStatus('conflict');
       setSyncError('No hay espacio para guardar la copia remota recuperable. Exporta tus datos antes de conservar el dispositivo.');
       return;
     }
+    setRecovery(backup);
     saveSyncState({ ...syncStateRef.current, remoteUpdatedAt: syncConflict.updatedAt });
     await uploadSync();
   };
@@ -352,7 +360,13 @@ export function useDataSync(
         acknowledge(localSnapshot, saved.updatedAt, localVersion);
       } else {
         if (decision === 'download') {
-          setRecovery(preserveRecovery(localSnapshot));
+          const backup = preserveRecovery(localSnapshot);
+          if (!backup) {
+            setAuthStatus('error');
+            setAuthError('No hay espacio para guardar la copia local recuperable. Exporta tus datos antes de descargar la copia de la nube.');
+            return;
+          }
+          setRecovery(backup);
           setData(normalized);
         }
         acknowledge(decision === 'download' ? normalized : localSnapshot, remote.updatedAt, decision === 'download' ? buildDataVersion(normalized, dataRevisionRef.current) : localVersion);
@@ -439,12 +453,12 @@ export function useDataSync(
   const resolveCloudConflict = async (choice: 'local' | 'remote'): Promise<void> => {
     const conflict = cloudConflict;
     if (!conflict?.data || !authUserRef.current) return;
-    try {
-      setRecovery(preserveRecovery(choice === 'remote' ? data : migrateData(conflict.data)));
-    } catch {
+    const backup = preserveRecovery(choice === 'remote' ? data : migrateData(conflict.data));
+    if (!backup) {
       setAuthError('No hay espacio para guardar la copia recuperable. Exporta tus datos antes de resolver el conflicto.');
       return;
     }
+    setRecovery(backup);
     if (choice === 'remote') {
       const next = migrateData(conflict.data);
       setData(next);
@@ -603,7 +617,9 @@ export function useDataSync(
     if (!recovery || !await showConfirm({ title: '¿Restaurar esta copia?', message: 'Se guardará la versión actual para poder volver atrás.', confirmLabel: 'Restaurar', danger: false })) return;
     try {
       const next = parseBackup(recovery.backup);
-      setRecovery(preserveRecovery(data));
+      const backup = preserveRecovery(data);
+      if (!backup) throw new Error('No hay espacio para guardar la copia actual antes de restaurar la copia recuperable.');
+      setRecovery(backup);
       setData(next);
       setToast('Copia recuperada en este dispositivo');
     } catch { setAuthError('No se pudo restaurar la copia. Comprueba el espacio disponible.'); }

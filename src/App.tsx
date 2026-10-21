@@ -39,10 +39,10 @@ function App() {
     return { checkpoint, matches, revision: matches ? dataRevisionFromVersion(checkpoint?.localVersion) : 0 };
   });
   const dataRevisionRef = useRef(initialSyncCheckpoint.revision);
-  const setData = (next: AppData | ((current: AppData) => AppData)): void => {
+  const setData = useCallback((next: AppData | ((current: AppData) => AppData)): void => {
     dataRevisionRef.current += 1;
     setDataState(next);
-  };
+  }, [dataRevisionRef]);
   const updateData = (updater: (current: AppData) => AppData): void => setData((current) => updater(current));
   const dataVersion = buildDataVersion(data, dataRevisionRef.current);
   const [view, setView] = useState<View>('today');
@@ -92,7 +92,7 @@ function App() {
     const timer = window.setTimeout(() => setToast(undefined), 2600);
     return () => window.clearTimeout(timer);
   }, [toast]);
-  useEffect(() => setData((current) => migrateData(current)), []);
+  useEffect(() => setData((current) => migrateData(current)), [setData]);
   const scheduledDays = scheduledWorkoutDays(data.plan.days, data.profile.trainingDays);
   const todayDay = scheduledDays.find((day) => day.weekday === currentWeekday());
   const activeDay = scheduledDays.find((day) => day.id === activeDayId) ?? scheduledDays[0];

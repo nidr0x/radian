@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defaultData } from '../src/data/initialPlan';
+import { recordSessionIds } from '../src/lib/records';
 import {
+  SESSION_HISTORY_MAX_CHARS,
   SESSION_HISTORY_MAX_SESSIONS,
   STORAGE_KEY,
   clearStorageFailure,
@@ -12,7 +14,7 @@ import {
   subscribeStorageFailure,
   writeStoredValue,
 } from '../src/lib/storage';
-import type { WorkoutSession } from '../src/types';
+import type { ExerciseSession, WorkoutSession } from '../src/types';
 
 const stubStorage = (options: { failContents?: boolean } = {}) => {
   const values = new Map<string, string>();
@@ -61,6 +63,33 @@ describe('poda del historial de sesiones', () => {
     const kept = pruneSessionHistory(sessions, SESSION_HISTORY_MAX_SESSIONS, -5);
     expect(kept.length).toBeGreaterThan(0);
     expect(kept[kept.length - 1]).toEqual(sessions[sessions.length - 1]);
+  });
+
+  it('mantiene la sesión fijada aunque el límite de recuento la descartaría', () => {
+    const sessions = [historySession('s1'), historySession('s2'), historySession('s3'), historySession('s4')];
+    const kept = pruneSessionHistory(sessions, 2, SESSION_HISTORY_MAX_CHARS, ['s1']);
+    expect(kept).toEqual([sessions[0], sessions[2], sessions[3]]);
+  });
+
+  it('el presupuesto de caracteres no descuenta las sesiones fijadas', () => {
+    const sessions = [historySession('s1', 'uno'), historySession('s2', 'dos'), historySession('s3')];
+    const budget = sessionChars(sessions[2]);
+    const kept = pruneSessionHistory(sessions, SESSION_HISTORY_MAX_SESSIONS, budget, ['s1']);
+    expect(kept).toEqual([sessions[0], sessions[2]]);
+  });
+
+  it('identifica la sesión con la mejor carga por ejercicio para fijarla', () => {
+    const recordSession = historySession('s1');
+    const recordExercise = { exerciseId: 'bench-press', setLogs: [{ setNumber: 1, phase: 'work' as const, targetReps: 8, actualReps: 5, weightKg: 95, completed: true }] } as unknown as ExerciseSession;
+    (recordSession as { plannedExercises: ExerciseSession[] }).plannedExercises = [recordExercise];
+    const lighter = { exerciseId: 'bench-press', setLogs: [{ setNumber: 1, phase: 'work' as const, targetReps: 8, actualReps: 5, weightKg: 80, completed: true }] } as unknown as ExerciseSession;
+    const sessions = [
+      recordSession,
+      historySession('s2'),
+      { ...historySession('s3'), plannedExercises: [lighter] } as unknown as WorkoutSession,
+    ];
+    expect(recordSessionIds(sessions)).toEqual(['s1']);
+    expect(pruneSessionHistory(sessions, 1, SESSION_HISTORY_MAX_CHARS, recordSessionIds(sessions)).map((session) => session.id)).toEqual(['s1', 's3']);
   });
 });
 

@@ -157,7 +157,7 @@ The authentication Functions use `AUTH_RATE_LIMITER` when the environment provid
 ## MVP decisions
 
 - React + TypeScript + Vite, with an optional backend through Pages Functions and D1.
-- State persisted in `localStorage` behind `src/lib/storage.ts`, with `schemaVersion` and migration functions ready to replace the adapter with IndexedDB. Persisted session history is pruned oldest-first under `SESSION_HISTORY_MAX_SESSIONS`/`SESSION_HISTORY_MAX_CHARS` (in-memory history stays full), and persistence failures are observable via `getStorageFailure()`.
+- State persisted in `localStorage` behind `src/lib/storage.ts`, with `schemaVersion` and migration functions ready to replace the adapter with IndexedDB. Persisted session history is pruned oldest-first under `SESSION_HISTORY_MAX_SESSIONS`/`SESSION_HISTORY_MAX_CHARS`, with record sessions pinned so a personal record never ages out; in-memory history converges to the retained suffix right after persisting, and persistence failures are observable via `getStorageFailure()`. The pruning budget applies to the `radian-data-v1` blob; the sync checkpoint and the recovery copy keep the full snapshot.
 - Sessions store a snapshot of the current program when they start. Editing the routine does not change historical records.
 - The recommendation engine in `src/lib/recommendations.ts` is deterministic and testable without the UI.
 - New sessions calculate an explainable prescription for each exercise: double progression, linear progression, maintenance, a deload after three stalled sessions, and blocked progression when discomfort is reported. The routine lets you choose the rule, load increment, and up to three warm-up sets.

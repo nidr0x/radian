@@ -1,5 +1,6 @@
 import { defaultData } from '../data/initialPlan';
 import { allExerciseEquipment } from './exercises';
+import { recordSessionIds } from './records';
 import { nextPrescription } from './progression';
 import { adaptPlannedExercise, sessionAdaptation } from './sessionAdaptation';
 import type { AppData, BackupPayload, Energy, ExerciseSession, PlannedExercise, ProgressionPolicy, SessionReadiness, SetLog, Soreness, WorkoutDay, WorkoutSession } from '../types';
@@ -204,9 +205,16 @@ export const migrateData = (value: unknown): AppData => {
  * SESSION_HISTORY_MAX_SESSIONS caps the count generously (~3 years at 4-5
  * sessions per week). SESSION_HISTORY_MAX_CHARS caps the serialized sessions
  * array: a fully logged session measures ~4.7 KB, so the budget keeps ~100
- * sessions and makes the whole `radian-data-v1` blob converge below both the
- * ~5 MB localStorage quota and the server sync limit (900 KB request body, which
+ * sessions and makes the `radian-data-v1` blob converge below both the ~5 MB
+ * localStorage quota and the server sync limit (900 KB request body, which
  * after JSON + base64 envelope leaves room for roughly a 620 KB plain blob).
+ * The budget applies to that primary blob only: the sync checkpoint and the
+ * recovery copy store the full snapshot (bounded to ~2 MB in total during
+ * recovery windows, still well under the ~5 MB quota).
+ *
+ * Record sessions (pinned via `recordSessionIds`) are kept outside the budget:
+ * a personal record can never age out of the retained history, at the cost of
+ * at most one extra session per exercise (~30 sessions in the current plan).
  */
 export const SESSION_HISTORY_MAX_SESSIONS = 720;
 export const SESSION_HISTORY_MAX_CHARS = 480_000;
@@ -217,9 +225,12 @@ export const pruneSessionHistory = (
   sessions: WorkoutSession[],
   maxSessions: number = SESSION_HISTORY_MAX_SESSIONS,
   maxChars: number = SESSION_HISTORY_MAX_CHARS,
+  mustKeepIds: readonly string[] = [],
 ): WorkoutSession[] => {
+  const keepSet = new Set(mustKeepIds);
+  const prunable = keepSet.size === 0 ? sessions : sessions.filter((session) => !keepSet.has(session.id));
   const sessionLimit = Math.max(1, maxSessions);
-  const windowed = sessions.length > sessionLimit ? sessions.slice(-sessionLimit) : sessions;
+  const windowed = prunable.length > sessionLimit ? prunable.slice(-sessionLimit) : prunable;
   const kept: WorkoutSession[] = [];
   let totalChars = 0;
   const charLimit = Math.max(0, maxChars);
@@ -230,8 +241,10 @@ export const pruneSessionHistory = (
     kept.push(windowed[index]);
     totalChars += size;
   }
-  if (windowed === sessions && kept.length === sessions.length) return sessions;
-  return kept.reverse();
+  if (keepSet.size === 0 && windowed === sessions && kept.length === sessions.length) return sessions;
+  const keptIds = new Set(kept.reverse().map((session) => session.id));
+  // Merge pinned and retained sessions back in their original chronological order.
+  return sessions.filter((session) => keepSet.has(session.id) || keptIds.has(session.id));
 };
 
 export interface StorageFailure {
@@ -303,7 +316,7 @@ export const persistData = (data: AppData): boolean => {
   // The in-memory state is never pruned (progress views and best lifts keep
   // reading the full history); only the persisted copy is capped. It converges
   // once the app reloads and migrates the pruned blob back into memory.
-  const stored = { ...data, sessions: pruneSessionHistory(data.sessions) };
+  const stored = { ...data, sessions: pruneSessionHistory(data.sessions, SESSION_HISTORY_MAX_SESSIONS, SESSION_HISTORY_MAX_CHARS, recordSessionIds(data.sessions)) };
   if (!writeStoredValue(STORAGE_KEY, JSON.stringify(stored))) return false;
   clearStorageFailure();
   return true;
