@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   deleteSyncData, loadSyncState, normalizeSyncKey, persistSyncState, pullSyncData, pushSyncData,
   SyncApiError, type RemoteSyncData, type SyncState,
@@ -57,13 +57,13 @@ export function useDataSync(
   const [syncAttempt, setSyncAttempt] = useState(0);
 
   const cloudBusyRef = useRef(false);
-  const acknowledge = (snapshot: AppData, updatedAt?: string, version = buildDataVersion(snapshot, dataRevisionRef.current)): void => {
+  const acknowledge = useCallback((snapshot: AppData, updatedAt?: string, version = buildDataVersion(snapshot, dataRevisionRef.current)): void => {
     if (!updatedAt || !authUserRef.current) return;
     saveCheckpoint(authUserRef.current.id, updatedAt, snapshot, version);
     setAcknowledged(version);
     cloudUpdatedAtRef.current = updatedAt;
     setCloudUpdatedAt(updatedAt);
-  };
+  }, [dataRevisionRef]);
 
   const syncStateRef = useRef(syncState);
   const authUserRef = useRef<AuthUser | undefined>(undefined);
@@ -157,7 +157,7 @@ export function useDataSync(
       });
     }, 900);
     return () => window.clearTimeout(timer);
-  }, [authUser, data, online, syncAttempt, acknowledged, dataVersion]);
+  }, [authUser, data, online, syncAttempt, acknowledged, dataVersion, acknowledge, dataRef]);
   useEffect(() => {
     let cancelled = false;
     currentUser().then(async (user) => {
@@ -184,6 +184,10 @@ export function useDataSync(
       }
     });
     return () => { cancelled = true; };
+  // Runs once on mount on purpose: `hydrateAccount` and `showConfirm` are
+  // per-render closures, and re-running this check on each render would refetch
+  // the account and re-hydrate local data repeatedly.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const saveSyncState = (next: SyncState): void => {
@@ -590,6 +594,9 @@ export function useDataSync(
       document.removeEventListener('visibilitychange', refreshOnReturn);
       window.removeEventListener('focus', refreshOnReturn);
     };
+  // Re-subscribing whenever `refreshCloud` changes identity is unnecessary: the
+  // handler reads current state through refs and the throttle above.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [online, cloudConflict]);
 
   const restoreLocalRecovery = async (): Promise<void> => {

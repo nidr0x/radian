@@ -98,7 +98,7 @@ describe('persistencia observable', () => {
   });
 
   it('recarga la copia podada guardada en el dispositivo', () => {
-    const values = stubStorage();
+    stubStorage();
     const base = defaultData();
     const baseSession = createSession(base.plan.days[0], '2026-01-01');
     const data = {

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ArrowDown, ArrowUp, Check, ChevronLeft, ChevronRight, Dumbbell, Gauge, History, Layers3, Maximize2, Minimize2, MoreHorizontal, Pencil, Play, Plus, Save, Search, Timer, Trash2, X } from 'lucide-react';
+import { useAutoFocus } from '../lib/useAutoFocus';
 import { currentWeekday } from '../lib/date';
 import { compatibleAlternatives, equipmentLabel, exerciseMatches, unresolvedPlanEquipmentGaps, type PlanEquipmentGap } from '../lib/exercises';
 import { exerciseGuidance } from '../data/initialPlan';
@@ -23,8 +24,12 @@ export function RoutineView({ data, days, activeDay, onDayChange, onUpdateDay, o
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [libraryInitialQuery, setLibraryInitialQuery] = useState<string>();
   const [libraryTargetId, setLibraryTargetId] = useState<string>();
+  const titleInputRef = useAutoFocus<HTMLInputElement>();
+  // The expanded exercise resets on day change on purpose: reacting to
+  // `activeDay.exercises` would collapse the editor after every field edit.
   useEffect(() => {
     setExpandedExerciseId(activeDay.exercises.find((exercise) => exercise.active)?.id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeDay.id]);
   useEffect(() => {
     if (!searchRequest) return;
@@ -84,7 +89,7 @@ export function RoutineView({ data, days, activeDay, onDayChange, onUpdateDay, o
         <small>{displayWorkoutName(day.name).split(',')[0]}</small>
         </button>)}</div>
         <section className="routine-intro" id="routine-panel" role="tabpanel" aria-labelledby={`routine-tab-${activeDay.id}`}>
-          <div>{editingName ? <input className="title-input" value={activeDay.name} onChange={(event) => onUpdateDay(activeDay.id, (day) => ({ ...day, name: event.target.value }))} onBlur={() => setEditingName(false)} autoFocus /> : <h2>{displayWorkoutName(activeDay.name)}</h2>}<p>{activeDay.focus} · ~{data.profile.sessionMinutes} min</p>
+          <div>{editingName ? <input ref={titleInputRef} className="title-input" value={activeDay.name} onChange={(event) => onUpdateDay(activeDay.id, (day) => ({ ...day, name: event.target.value }))} onBlur={() => setEditingName(false)} /> : <h2>{displayWorkoutName(activeDay.name)}</h2>}<p>{activeDay.focus} · ~{data.profile.sessionMinutes} min</p>
           </div>
           <button className="icon-button subtle" aria-label="Editar nombre del entrenamiento" onClick={() => setEditingName(true)}>
             <MoreHorizontal size={19} />

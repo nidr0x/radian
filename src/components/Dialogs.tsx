@@ -2,12 +2,15 @@ import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, X } from 'lucide-react';
 import { useFocusTrap } from '../lib/useFocusTrap';
+import { useBackdropDismiss } from '../lib/useBackdropDismiss';
 
 export function SessionExitDialog({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: () => void }) {
   const dialogRef = useRef<HTMLElement | null>(null);
+  const backdropRef = useRef<HTMLDivElement | null>(null);
   useFocusTrap(dialogRef, true, onCancel);
-  return <div className="session-exit-backdrop" role="presentation" onMouseDown={onCancel}>
-<section ref={dialogRef} className="session-exit-dialog" role="dialog" aria-modal="true" aria-labelledby="session-exit-title" onMouseDown={(event) => event.stopPropagation()}>
+  useBackdropDismiss(backdropRef, onCancel);
+  return <div ref={backdropRef} className="session-exit-backdrop" role="presentation">
+<section ref={dialogRef} className="session-exit-dialog" role="dialog" aria-modal="true" aria-labelledby="session-exit-title">
   <div className="session-exit-heading">
     <p className="eyebrow">salir de la sesión</p>
       <button className="icon-button subtle" type="button" aria-label="Cerrar aviso" onClick={onCancel}>
@@ -26,9 +29,11 @@ export function SessionExitDialog({ onCancel, onConfirm }: { onCancel: () => voi
 
 export function ConfirmDialog({ title, message, confirmLabel = 'Confirmar', danger = false, onConfirm, onCancel }: { title: string; message: string; confirmLabel?: string; danger?: boolean; onConfirm: () => void; onCancel: () => void }) {
   const dialogRef = useRef<HTMLElement | null>(null);
+  const backdropRef = useRef<HTMLDivElement | null>(null);
   useFocusTrap(dialogRef, true, onCancel);
-  const content = <div className="session-exit-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}>
-<section ref={dialogRef} className="session-exit-dialog confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title" aria-describedby="confirm-dialog-message" onMouseDown={(event) => event.stopPropagation()}>
+  useBackdropDismiss(backdropRef, onCancel);
+  const content = <div ref={backdropRef} className="session-exit-backdrop" role="presentation">
+<section ref={dialogRef} className="session-exit-dialog confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title" aria-describedby="confirm-dialog-message">
   <h2 id="confirm-dialog-title">{title}</h2>
     <p id="confirm-dialog-message">{message}</p>
       <div className="session-exit-actions">
@@ -42,13 +47,15 @@ export function ConfirmDialog({ title, message, confirmLabel = 'Confirmar', dang
 
 export function RestEndedOverlay({ nextExerciseName, onDismiss }: { nextExerciseName?: string; onDismiss: () => void }) {
   const dialogRef = useRef<HTMLElement | null>(null);
+  const backdropRef = useRef<HTMLDivElement | null>(null);
   useFocusTrap(dialogRef, true, onDismiss);
+  useBackdropDismiss(backdropRef, onDismiss);
   useEffect(() => {
     const timer = window.setTimeout(onDismiss, 10_000);
     return () => { window.clearTimeout(timer); };
   }, [onDismiss]);
-  const content = <div className="rest-ended-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onDismiss(); }}>
-<section ref={dialogRef} className="rest-ended-dialog" role="dialog" aria-modal="true" aria-labelledby="rest-ended-title" onMouseDown={(event) => event.stopPropagation()}>
+  const content = <div ref={backdropRef} className="rest-ended-backdrop" role="presentation">
+<section ref={dialogRef} className="rest-ended-dialog" role="dialog" aria-modal="true" aria-labelledby="rest-ended-title">
   <Check className="rest-ended-check" size={52} aria-hidden="true" />
   <p className="eyebrow">temporizador</p>
     <h2 id="rest-ended-title">¡Descanso terminado!</h2>

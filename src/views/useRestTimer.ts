@@ -33,7 +33,7 @@ export function useRestTimer(setToast: RestToast): RestTimer {
       setToast('Descanso terminado');
     }, Math.max(0, restUntil - Date.now()));
     return () => window.clearTimeout(timer);
-  }, [restUntil]);
+  }, [restUntil, setToast]);
 
   const dismissRestEnded = useCallback(() => setRestEnded(false), []);
 

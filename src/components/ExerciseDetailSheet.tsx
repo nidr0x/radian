@@ -1,6 +1,7 @@
 import { useRef } from 'react';
 import { Gauge, X } from 'lucide-react';
 import { useFocusTrap } from '../lib/useFocusTrap';
+import { useBackdropDismiss } from '../lib/useBackdropDismiss';
 import { formatExerciseSummary } from '../lib/format';
 import { ExerciseThumb } from './ExerciseThumb';
 import { recommendationFor, progressionAction } from '../lib/recommendations';
@@ -8,12 +9,14 @@ import type { ExerciseGuidance, PlannedExercise, ExerciseSession } from '../type
 
 export function ExerciseDetailSheet({ exercise, muscleGroup, guidance, recommendation, progressionAction: action, lastSession, onClose }: { exercise: PlannedExercise; muscleGroup?: string; guidance?: ExerciseGuidance; recommendation?: ReturnType<typeof recommendationFor>; progressionAction?: ReturnType<typeof progressionAction>; lastSession?: ExerciseSession; onClose: () => void }) {
   const dialogRef = useRef<HTMLElement | null>(null);
+  const backdropRef = useRef<HTMLDivElement | null>(null);
   const detail = guidance ?? { setup: 'Ajusta el asiento y la carga para que puedas moverte con control.', cues: ['Mantén una postura estable.', 'Mueve la carga sin impulso.', 'Detén el recorrido si pierdes el control.'], commonMistake: 'Usar más carga de la que permite una ejecución limpia.' };
   const alternatives = detail.alternatives ?? ['Reduce la carga y acorta el recorrido.', 'Prueba una variante que no provoque molestias.', 'Si persiste, anótalo para revisarlo con tu entrenador.'];
   const discomfortAdvice = detail.discomfortAdvice ?? 'Una molestia articular no es una señal para forzar. Para, registra lo que has notado y revisa el ajuste.';
   useFocusTrap(dialogRef, true, onClose);
-  return <div className="exercise-detail-backdrop" role="presentation" onMouseDown={onClose}>
-<section ref={dialogRef} className="exercise-detail-sheet" role="dialog" aria-modal="true" aria-labelledby="exercise-detail-title" onMouseDown={(event) => event.stopPropagation()}>
+  useBackdropDismiss(backdropRef, onClose);
+  return <div ref={backdropRef} className="exercise-detail-backdrop" role="presentation">
+<section ref={dialogRef} className="exercise-detail-sheet" role="dialog" aria-modal="true" aria-labelledby="exercise-detail-title">
   <div className="detail-sheet-topline">
     <p className="eyebrow">referencia de máquina</p>
       <button className="icon-button subtle" type="button" aria-label="Cerrar ficha" onClick={onClose}>

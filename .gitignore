@@ -6,5 +6,6 @@ dist/
 .env*
 .DS_Store
 *.tsbuildinfo
+_worker.bundle
 .codex/coordination/*
 !.codex/coordination/project.yaml

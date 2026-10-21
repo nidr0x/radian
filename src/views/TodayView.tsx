@@ -62,7 +62,7 @@ export function TodayView({ data, todayDay, activeSession, onSelectExercise, onD
   const doneToday = data.sessions.some((session) => session.dateKey === dateKey() && session.status === 'completed');
   const latestCompletedToday = data.sessions.filter((session) => session.dateKey === dateKey() && session.status === 'completed').sort((a, b) => (b.completedAt ?? '').localeCompare(a.completedAt ?? ''))[0];
   const completedSummary = latestCompletedToday ? summarizeSession(latestCompletedToday, data.sessions) : undefined;
-  const completedExerciseComparisons = useMemo(() => latestCompletedToday ? sessionExerciseComparisons(latestCompletedToday, data.sessions) : [], [data.sessions, workoutDay]);
+  const completedExerciseComparisons = useMemo(() => latestCompletedToday ? sessionExerciseComparisons(latestCompletedToday, data.sessions) : [], [data.sessions, latestCompletedToday]);
   const pendingRecoveryItems = data.sessions.flatMap((session) => (session.recoveryExercises ?? []).map((exercise) => ({ sessionId: session.id, exercise })));
   const primaryAction = todayPrimaryAction(doneToday);
 
@@ -146,7 +146,7 @@ const TodayDashboardAside = memo(function TodayDashboardAside({ data, onNavigate
     const summary = summarizeSession(session);
     return { volumeKg: total.volumeKg + summary.volumeKg, durationSeconds: total.durationSeconds + summary.durationSeconds };
   }, { volumeKg: 0, durationSeconds: 0 }), [monthSessions]);
-  const weekDays = useMemo(() => buildWeekDays(data.profile.trainingDays, data.sessions), [data.sessions, data.plan.days, data.profile.trainingDays]);
+  const weekDays = useMemo(() => buildWeekDays(data.profile.trainingDays, data.sessions), [data.sessions, data.profile.trainingDays]);
   const streak = useMemo(() => getLatestWorkoutStreak(data.profile.trainingDays, data.sessions), [data.sessions, data.profile.trainingDays]);
   const completedWeekdays = weekDays.filter((day) => day.completed).map((day) => dayNames[new Date(`${day.key}T12:00:00`).getDay()]);
   const completedWeekdayLabel = completedWeekdays.length === 0
@@ -171,7 +171,7 @@ const TodayDashboardAside = memo(function TodayDashboardAside({ data, onNavigate
 });
 
 function HomeMuscleGroupsCard({ data, onNavigate }: { data: AppData; onNavigate: (view: View) => void }) {
-  const muscleGroups = useMemo(() => muscleGroupVolumes(data).slice(0, 3), [data.sessions, data.exercises]);
+  const muscleGroups = useMemo(() => muscleGroupVolumes(data).slice(0, 3), [data]);
   return <section className="progress-card home-muscle-card"><div className="section-heading compact"><div><p className="eyebrow">actividad</p><h2>Grupos musculares</h2></div><button type="button" className="text-button" onClick={() => onNavigate('progress')}>Ver más <ChevronRight size={15} /></button></div>{muscleGroups.length ? <div className="home-muscle-grid">{muscleGroups.map((group) => { const image = data.exercises.find((exercise) => exercise.muscleGroup === group.muscleGroup)?.imageUrl; return <article className="home-muscle-tile" key={group.muscleGroup}>{image && <img src={image} alt="" loading="lazy" />}<strong>{group.muscleGroup}</strong><span>{formatVolume(group.volume)}</span></article>; })}</div> : <p className="home-muscle-empty">Completa sesiones para ver el volumen por grupo.</p>}</section>;
 }
 

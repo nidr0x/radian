@@ -1,15 +1,12 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import * as AppModule from '../src/App';
-import type { ExerciseSession, WorkoutSession } from '../src/types';
+import App from '../src/App';
+import { getNextSessionProgress } from '../src/lib/sessionFlow';
+import { getLatestWorkoutStreak } from '../src/lib/trainingStats';
+import type { WorkoutSession } from '../src/types';
 import { defaultData } from '../src/data/initialPlan';
 import { createSession, STORAGE_KEY } from '../src/lib/storage';
-
-const appProgress = AppModule as typeof AppModule & {
-  getNextSessionProgress?: (session: WorkoutSession, updatedExercise: ExerciseSession) => Pick<WorkoutSession, 'activeExerciseIndex' | 'status' | 'completedAt'>;
-  getLatestWorkoutStreak?: (trainingDays: number[], sessions: WorkoutSession[]) => number;
-};
 
 const completedOn = (dateKey: string): WorkoutSession => ({ dateKey, status: 'completed' } as WorkoutSession);
 
@@ -21,7 +18,7 @@ const renderAppWithData = (data: ReturnType<typeof defaultData>): string => {
     removeItem: (key: string) => values.delete(key),
   });
   vi.stubGlobal('navigator', { onLine: true });
-  return renderToStaticMarkup(React.createElement(AppModule.default));
+  return renderToStaticMarkup(React.createElement(App));
 };
 
 describe('progreso visible de la sesión activa', () => {
@@ -29,7 +26,7 @@ describe('progreso visible de la sesión activa', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 9, 9, 12));
     try {
-      expect(appProgress.getLatestWorkoutStreak?.([1, 3, 5], [completedOn('2026-10-05'), completedOn('2026-10-07')])).toBe(2);
+      expect(getLatestWorkoutStreak([1, 3, 5], [completedOn('2026-10-05'), completedOn('2026-10-07')])).toBe(2);
     } finally {
       vi.useRealTimers();
     }
@@ -39,7 +36,7 @@ describe('progreso visible de la sesión activa', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 9, 9, 12));
     try {
-      expect(appProgress.getLatestWorkoutStreak?.([1, 3, 5], [completedOn('2026-10-05')])).toBe(0);
+      expect(getLatestWorkoutStreak([1, 3, 5], [completedOn('2026-10-05')])).toBe(0);
     } finally {
       vi.useRealTimers();
     }
@@ -64,7 +61,7 @@ describe('progreso visible de la sesión activa', () => {
     });
     vi.stubGlobal('navigator', { onLine: true });
 
-    const html = renderToStaticMarkup(React.createElement(AppModule.default));
+    const html = renderToStaticMarkup(React.createElement(App));
 
     expect(html).toContain('Ejercicio 7 de 7');
     expect(html).toContain('4 completados');
@@ -85,7 +82,7 @@ describe('progreso visible de la sesión activa', () => {
       completedAt: '2026-09-23T10:10:00.000Z',
     };
 
-    expect(appProgress.getNextSessionProgress?.(session, updatedExercise)).toEqual({
+    expect(getNextSessionProgress(session, updatedExercise)).toEqual({
       activeExerciseIndex: 2,
       status: 'in_progress',
       completedAt: undefined,
@@ -108,7 +105,7 @@ describe('progreso visible de la sesión activa', () => {
       completedAt: '2026-09-23T10:15:00.000Z',
     };
 
-    expect(appProgress.getNextSessionProgress?.(session, updatedExercise)).toEqual({
+    expect(getNextSessionProgress(session, updatedExercise)).toEqual({
       activeExerciseIndex: 0,
       status: 'in_progress',
       completedAt: undefined,
@@ -125,7 +122,7 @@ describe('progreso visible de la sesión activa', () => {
       completedAt: '2026-09-23T10:25:00.000Z',
     };
 
-    expect(appProgress.getNextSessionProgress?.(session, finalSkippedExercise)).toEqual({
+    expect(getNextSessionProgress(session, finalSkippedExercise)).toEqual({
       activeExerciseIndex: 0,
       status: 'completed',
       completedAt: '2026-09-23T10:25:00.000Z',

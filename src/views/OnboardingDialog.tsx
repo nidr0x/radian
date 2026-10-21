@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Sparkles } from 'lucide-react';
 import { ChevronRight, CloudOff } from 'lucide-react';
-import { DayPicker, EquipmentPicker, experienceOptions } from '../components/ProfilePickers';
+import { DayPicker, EquipmentPicker } from '../components/ProfilePickers';
+import { experienceOptions } from '../lib/profileOptions';
 import { numberOrUndefined, clampNumber } from '../lib/format';
 import type { UserProfile } from '../types';
 
@@ -53,7 +54,12 @@ export function OnboardingDialog({ profile, onComplete }: { profile: UserProfile
                   <EquipmentPicker selected={form.availableEquipment} onChange={(availableEquipment) => setForm((current) => ({ ...current, availableEquipment }))} />
                 </div>
                 <fieldset className="experience-options">
-                  <legend>Tu punto de partida</legend>{experienceOptions.map((option) => <label key={option.value} className={form.experienceLevel === option.value ? 'experience-option selected' : 'experience-option'}>
+                  <legend>Tu punto de partida</legend>
+                  {/* The visible copy comes from experienceOptions at runtime; the a11y rule
+                      cannot read JSX expressions as static label text. The label wraps the
+                      radio input, so the association and accessible name are correct. */}
+                  {/* eslint-disable-next-line jsx-a11y/label-has-associated-control */}
+                  {experienceOptions.map((option) => <label key={option.value} className={form.experienceLevel === option.value ? 'experience-option selected' : 'experience-option'}>
                     <input type="radio" name="experience" value={option.value} checked={form.experienceLevel === option.value} onChange={() => setForm((current) => ({ ...current, experienceLevel: option.value }))} />
                     <span>
                       <strong>{option.label}</strong>

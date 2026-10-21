@@ -1,17 +1,6 @@
-import { useEffect, useState } from 'react';
 import { Minus, Pause, Play, Plus, Timer, X } from 'lucide-react';
 import { formatDuration } from '../lib/date';
-
-export function useRestCountdown(restUntil: number | null, pausedRemaining: number): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (restUntil === null) return undefined;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [restUntil]);
-  return restUntil === null ? pausedRemaining : Math.max(0, Math.ceil((restUntil - now) / 1000));
-}
+import { useRestCountdown } from './useRestCountdown';
 
 export function RestFloating({ restUntil, restRemaining, exerciseName, paused, onAdjust, onPause, onResume, onClose }: { restUntil: number | null; restRemaining: number; exerciseName?: string; paused: boolean; onAdjust: (seconds: number) => void; onPause: () => void; onResume: () => void; onClose: () => void }) {
   const remaining = useRestCountdown(restUntil, restRemaining);

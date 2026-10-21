@@ -1,7 +1,7 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { ExercisePreview } from '../src/App';
+import { ExercisePreview } from '../src/components/ExercisePreview';
 
 const exercise = {
   id: 'incline-press-day-1',

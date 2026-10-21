@@ -26,7 +26,7 @@ export function ProgressView({ data, onAddProgress, onAddCheckin, onInfo, onToas
   const completedThisWeek = weekDays.filter((day) => day.completed).length;
   const weeklyTarget = Math.max(scheduledTrainingDays.length, 1);
   const performance = useMemo(() => performanceRows(data.sessions), [data.sessions]);
-  const availableExercises = useMemo(() => exerciseTrendOptions(data), [data.sessions]);
+  const availableExercises = useMemo(() => exerciseTrendOptions(data), [data]);
   const sortedProgress = useMemo(() => [...data.progress].sort((a, b) => a.date.localeCompare(b.date)), [data.progress]);
   const weightEntries = useMemo(() => sortedProgress.filter((entry) => entry.weightKg !== undefined), [sortedProgress]);
   const waistEntries = useMemo(() => sortedProgress.filter((entry) => entry.waistCm !== undefined), [sortedProgress]);
@@ -145,7 +145,7 @@ export function ProgressView({ data, onAddProgress, onAddCheckin, onInfo, onToas
 function ProgressOverview({ data, range, onRangeChange }: { data: AppData; range: ProgressRange; onRangeChange: (range: ProgressRange) => void }) {
   const buckets = useMemo(() => buildProgressBuckets(data.sessions, range), [data.sessions, range]);
   const totals = buckets.reduce((sum, bucket) => ({ sessions: sum.sessions + bucket.sessions, volumeKg: sum.volumeKg + bucket.volumeKg, durationSeconds: sum.durationSeconds + bucket.durationSeconds }), { sessions: 0, volumeKg: 0, durationSeconds: 0 });
-  const muscleGroups = useMemo(() => muscleGroupVolumes(data).slice(0, 3), [data.sessions, data.exercises]);
+  const muscleGroups = useMemo(() => muscleGroupVolumes(data).slice(0, 3), [data]);
   const weekDays = buildWeekDays(data.profile.trainingDays, data.sessions);
   const streak = getLatestWorkoutStreak(data.profile.trainingDays, data.sessions);
   const labels: Record<ProgressRange, string> = { week: 'Semana', month: 'Mes', year: 'Año', all: 'Todo' };
@@ -245,7 +245,7 @@ const MetricCard = memo(function MetricCard({ label, value, change, icon }: { la
 
 function HistoryPanel({ data }: { data: AppData }) {
   const records = useMemo(() => personalRecords(data.sessions).slice(0, 3), [data.sessions]);
-  const muscleVolumes = useMemo(() => muscleGroupVolumes(data).slice(0, 3), [data.sessions, data.exercises]);
+  const muscleVolumes = useMemo(() => muscleGroupVolumes(data).slice(0, 3), [data]);
   const summary = historySummary(data.sessions);
   return <section className="progress-card history-card"><div className="section-heading compact"><div><p className="eyebrow">historial avanzado</p><h2>Lo que está cambiando</h2></div><Trophy size={19} /></div><div className="history-stats"><div><CalendarDays size={16} /><strong>{summary.sessions30}</strong><span>sesiones · 30 días</span></div><div><Layers3 size={16} /><strong>{formatVolume(summary.volume30)}</strong><span>volumen · 30 días</span></div><div><Sparkles size={16} /><strong>{records.length}</strong><span>récords visibles</span></div></div><div className="history-columns"><div><p className="eyebrow">mejores cargas</p>{records.length ? <div className="history-list">{records.map((record) => <div className="history-list-row" key={record.exerciseId}><span>{record.name}</span><strong>{formatWeight(record.load)}{record.reps ? ` · ${record.reps} reps` : ''}</strong></div>)}</div> : <p className="history-empty">Registra peso y repeticiones para ver tus marcas.</p>}</div><div><p className="eyebrow">volumen por grupo</p>{muscleVolumes.length ? <div className="history-list">{muscleVolumes.map((item) => <div className="history-list-row" key={item.muscleGroup}><span>{item.muscleGroup}</span><strong>{formatVolume(item.volume)}</strong></div>)}</div> : <p className="history-empty">Aún no hay volumen calculable.</p>}</div></div><p className="history-caption">Este mes: {summary.currentMonth} sesiones · mes anterior: {summary.previousMonth}.</p></section>;
 }

@@ -7,7 +7,7 @@ import { isWorkSet } from '../lib/progression';
 import { formatDuration } from '../lib/date';
 import { formatExerciseSummary, formatWeight } from '../lib/format';
 import { getNextSessionExerciseIndex, isSessionExerciseDeferred } from '../lib/sessionFlow';
-import { useRestCountdown } from '../components/RestFloating';
+import { useRestCountdown } from '../components/useRestCountdown';
 import { ExerciseThumb } from '../components/ExerciseThumb';
 import { recommendationFor, progressionAction } from '../lib/recommendations';
 import type { ExerciseRecord } from '../lib/records';
@@ -36,6 +36,9 @@ export function ActiveSession({ session, restRemaining, restUntil, restExerciseN
     setPendingDifficulty(exercise?.difficulty);
     setDetailsOpen(Boolean(exercise?.discomfort || exercise?.discomfortNote));
     setEquipmentAlternativesOpen(false);
+  // Reset the editor only when the planned exercise identity changes; depending on
+  // the full `exercise` object would rebuild the drafts after each parent render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [exercise?.plannedExerciseId, exercise?.exerciseId, exercise?.sets, exercise?.repMin, previousExercise?.plannedExerciseId]);
 
   useEffect(() => {
@@ -165,12 +168,12 @@ export function ActiveSession({ session, restRemaining, restUntil, restExerciseN
                                                   <SetLogEditor logs={setLogs} repMin={exercise.repMin} repMax={exercise.repMax} exerciseEquipment={exerciseEquipment} hasPrevious={Boolean(previousExercise)} prefilled={Boolean(previousExercise && setLogs.some((set) => set.actualReps !== undefined || set.weightKg !== undefined))} onChange={updateSet} onCopy={copyPrevious} />
                                                   <button type="button" className="details-toggle" onClick={() => setDetailsOpen((value) => !value)}>
                                                     <Plus size={17} /> {detailsOpen ? 'Ocultar molestias y nota' : 'Añadir molestias o nota'}</button>{detailsOpen && <div className="optional-fields">
-                                                      <label className="toggle-field">
+                                                      <div className="toggle-field">
                                                         <span>¿Alguna molestia?</span>
                                                           <button type="button" className={discomfort ? 'toggle on' : 'toggle'} aria-pressed={discomfort} onClick={() => { const next = !discomfort; setDiscomfort(next); onDraft(session.id, exercise.plannedExerciseId, { discomfort: next }); }}>
                                                             <span />
                                                           </button>
-                                                        </label>
+                                                        </div>
                                                         <label className="full-field">Nota breve <textarea value={note} onChange={(event) => { setNote(event.target.value); onDraft(session.id, exercise.plannedExerciseId, { discomfortNote: event.target.value || undefined }); }} placeholder="¿Qué has notado?" rows={2} />
                                                       </label>{discomfort && <div className="discomfort-panel">
                                                       <strong>Prueba otra variante</strong>
@@ -204,8 +207,8 @@ function SessionExerciseNavigator({ session, onSelect }: { session: WorkoutSessi
       const deferred = isSessionExerciseDeferred(exercise);
       const current = index === session.activeExerciseIndex;
       const status = current ? 'Ahora' : deferred ? 'Aplazado' : skipped ? 'Saltado' : completed ? 'Hecho' : 'Pendiente';
-      return <li key={exercise.plannedExerciseId}>
-        <button ref={current ? activeStepRef : undefined} type="button" className={`session-exercise-step${current ? ' is-active' : ''}${completed ? ' is-complete' : ''}${skipped ? ' is-skipped' : ''}${deferred ? ' is-deferred' : ''}`} aria-current={current ? 'step' : undefined} aria-setsize={session.plannedExercises.length} aria-posinset={index + 1} aria-label={`${exercise.name}: ${status}${current ? ', ejercicio actual' : ', seleccionar ejercicio'}`} onClick={() => onSelect(index)}>
+      return <li key={exercise.plannedExerciseId} aria-setsize={session.plannedExercises.length} aria-posinset={index + 1}>
+        <button ref={current ? activeStepRef : undefined} type="button" className={`session-exercise-step${current ? ' is-active' : ''}${completed ? ' is-complete' : ''}${skipped ? ' is-skipped' : ''}${deferred ? ' is-deferred' : ''}`} aria-current={current ? 'step' : undefined} aria-label={`${exercise.name}: ${status}${current ? ', ejercicio actual' : ', seleccionar ejercicio'}`} onClick={() => onSelect(index)}>
           <span className="session-exercise-step-index">{completed ? <Check size={14} /> : skipped ? <SkipForward size={14} /> : deferred ? <Pause size={14} /> : index + 1}</span>
           <span className="session-exercise-step-copy"><span className="session-exercise-step-name">{exercise.name}</span><small>{status}</small></span>
         </button>

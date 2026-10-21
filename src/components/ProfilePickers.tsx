@@ -1,12 +1,6 @@
 import { allExerciseEquipment, equipmentLabel } from '../lib/exercises';
 import { dayNames, normalizeTrainingDays, shortDayNames } from '../lib/date';
-import type { ExerciseEquipment, ExperienceLevel } from '../types';
-
-export const experienceOptions: Array<{ value: ExperienceLevel; label: string; description: string }> = [
-  { value: 'beginner', label: 'Estoy empezando', description: 'Quiero instrucciones sencillas y margen.' },
-  { value: 'intermediate', label: 'Ya tengo base', description: 'Conozco las máquinas y registro cargas.' },
-  { value: 'advanced', label: 'Tengo experiencia', description: 'Quiero centrarme en progresar.' },
-];
+import type { ExerciseEquipment } from '../types';
 
 export function DayPicker({ selected, onChange }: { selected: number[]; onChange: (days: number[]) => void }) {
   const normalizedSelection = normalizeTrainingDays(selected).slice(0, 4);

@@ -1,13 +1,15 @@
 import { useState } from 'react';
 import { Fingerprint, LockKeyhole, LogIn, LogOut, Pencil, Save, Trash2, UserPlus } from 'lucide-react';
 import type { AuthPasskey, AuthUser } from '../lib/auth';
-import { AuthStatus } from '../lib/appStatus';
+import type { AuthStatus } from '../lib/appStatus';
+import { useAutoFocus } from '../lib/useAutoFocus';
 
 export function AccountPanel({ user, passkeys, status, error, cloudUpdatedAt, uploadPending, uploadDisabled, onUploadLocal, onRegister, onLogin, onAddPasskey, onRenamePasskey, onRevokePasskey, onLogout, onLogoutEverywhere }: { user?: AuthUser; passkeys: AuthPasskey[]; status: AuthStatus; error?: string; cloudUpdatedAt?: string; uploadPending: boolean; uploadDisabled: boolean; onUploadLocal: () => void; onRegister: (displayName: string, passkeyLabel: string) => void; onLogin: () => void; onAddPasskey: (passkeyLabel: string) => void; onRenamePasskey: (credentialId: string, label: string) => void; onRevokePasskey: (credentialId: string) => void; onLogout: () => void; onLogoutEverywhere: () => void }) {
   const [displayName, setDisplayName] = useState('');
   const [passkeyLabel, setPasskeyLabel] = useState('Passkey principal');
   const [editingId, setEditingId] = useState<string>();
   const [editingLabel, setEditingLabel] = useState('');
+  const editRef = useAutoFocus<HTMLInputElement>();
   const busy = status === 'checking' || status === 'registering' || status === 'signing_in' || status === 'syncing';
   const statusCopy = status === 'checking' ? 'Comprobando tu cuenta…' : status === 'registering' ? 'Preparando tu passkey…' : status === 'signing_in' ? 'Esperando la confirmación…' : status === 'syncing' ? 'Sincronizando con D1…' : user ? cloudUpdatedAt ? `Sincronizado ${new Date(cloudUpdatedAt).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' })}` : 'Cuenta conectada' : 'Sin cuenta en la nube';
   const beginEdit = (passkey: AuthPasskey): void => { setEditingId(passkey.credentialId); setEditingLabel(passkey.label); };
@@ -45,7 +47,7 @@ export function AccountPanel({ user, passkeys, status, error, cloudUpdatedAt, up
                       <div className="passkey-list-heading">
                         <strong>Tus dispositivos</strong>
                           <span>{passkeys.length} passkey{passkeys.length === 1 ? '' : 's'}</span>
-                          </div>{passkeys.map((passkey) => <div className="passkey-row" key={passkey.credentialId}>{editingId === passkey.credentialId ? <input value={editingLabel} onChange={(event) => setEditingLabel(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') saveEdit(); if (event.key === 'Escape') setEditingId(undefined); }} autoFocus /> : <div>
+                          </div>{passkeys.map((passkey) => <div className="passkey-row" key={passkey.credentialId}>{editingId === passkey.credentialId ? <input ref={editRef} value={editingLabel} onChange={(event) => setEditingLabel(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') saveEdit(); if (event.key === 'Escape') setEditingId(undefined); }} /> : <div>
                           <strong>{passkey.label}</strong>
                             <span>{passkey.lastUsedAt ? `Usada ${new Date(passkey.lastUsedAt).toLocaleDateString('es-ES')}` : `Añadida ${new Date(passkey.createdAt).toLocaleDateString('es-ES')}`}</span>
                             </div>}<div className="passkey-row-actions">{editingId === passkey.credentialId ? <button type="button" aria-label="Guardar nombre" onClick={saveEdit}>

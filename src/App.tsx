@@ -7,7 +7,8 @@ import { updateActionCopy } from './lib/uiCopy';
 import { applyAppUpdate } from './lib/pwa';
 import { requestScreenWakeLock, type ScreenWakeLock } from './lib/wakeLock';
 import { useDataSync } from './components/useDataSync';
-import { BottomNav, navItems } from './components/BottomNav';
+import { BottomNav } from './components/BottomNav';
+import { navItems } from './components/navigation';
 import { ConfirmDialog, RestEndedOverlay, SessionExitDialog } from './components/Dialogs';
 import { RestFloating } from './components/RestFloating';
 import { ResumeSessionBanner } from './components/ResumeSessionBanner';
@@ -353,11 +354,6 @@ function App() {
     </div>
   );
 }
-
-// Re-exports kept for consumers importing from the app barrel (tests import these from '../src/App').
-export { ExercisePreview } from './components/ExercisePreview';
-export { getNextSessionExerciseIndex, getNextSessionProgress } from './lib/sessionFlow';
-export { getLatestWorkoutStreak } from './lib/trainingStats';
 
 export { App };
 export default App;
