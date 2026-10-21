@@ -12,7 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@simplewebauthn/browser": "^13.3.0",
+    "@simplewebauthn/browser": "^14.0.0",
     "@simplewebauthn/server": "^14.0.0",
     "@vitejs/plugin-react": "latest",
     "lucide-react": "latest",
