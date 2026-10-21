@@ -13,7 +13,7 @@ import { buildWeekDays, getLatestWorkoutStreak, muscleGroupVolumes } from '../li
 import { latestExercise } from '../lib/exerciseQueries';
 import { displayWorkoutName, formatExerciseSummary, formatSessionDuration, formatVolume, formatWeight } from '../lib/format';
 import { PageHeader } from '../components/PageHeader';
-import { ExercisePreview } from '../components/ExercisePreview';
+import { ExercisePreview, type ExercisePreviewCue } from '../components/ExercisePreview';
 import { ExerciseDetailSheet } from '../components/ExerciseDetailSheet';
 import { ActiveSession } from './ActiveSession';
 import { SessionCalendar } from './ProgressView';
@@ -118,7 +118,7 @@ export function TodayView({ data, todayDay, activeSession, onSelectExercise, onD
                   </div>
         <p className="today-start-hint plan-info"><Info size={17} aria-hidden="true" /><span>{primaryAction.hint}</span></p>
         {readinessOpen && <ReadinessPrompt value={readiness} onChange={setReadiness} onSkip={() => { setReadinessOpen(false); onDismissRestEnded(); onStart(workoutDay); }} onStart={() => { setReadinessOpen(false); onDismissRestEnded(); onStart(workoutDay, readiness); }} />}
-        <div className="exercise-list plan-exercise-list">{plannedExercises.map((exercise, index) => <ExercisePreview key={exercise.id} exercise={exercise} index={index} muscleGroup={data.exercises.find((item) => item.id === exercise.exerciseId)?.muscleGroup} onOpenDetails={() => setDetailExercise(exercise)} />)}</div>
+        <div className="exercise-list plan-exercise-list">{plannedExercises.map((exercise, index) => <ExercisePreview key={exercise.id} exercise={exercise} index={index} muscleGroup={data.exercises.find((item) => item.id === exercise.exerciseId)?.muscleGroup} cue={exercisePreviewCue(data, exercise)} onOpenDetails={() => setDetailExercise(exercise)} />)}</div>
       </section>
       <TodayDashboardAside data={data} onNavigate={onNavigate} />
 
@@ -263,6 +263,16 @@ function sessionExerciseComparisons(session: WorkoutSession, history: WorkoutSes
       nextAction: progressionAction(exercise.exerciseId, history, exercise),
     };
   });
+}
+
+function exercisePreviewCue(data: AppData, exercise: PlannedExercise): ExercisePreviewCue {
+  const last = latestExercise(data.sessions, exercise.exerciseId);
+  const action = progressionAction(exercise.exerciseId, data.sessions, exercise);
+  return {
+    last: last ? formatExerciseSummary(last) : undefined,
+    next: action ? action.title.replace(/^Próxima vez:\s*/, '') : undefined,
+    hint: action?.detail,
+  };
 }
 
 function alternativeExercises(data: AppData, exerciseId: string, differentEquipment = false): ExerciseDefinition[] {

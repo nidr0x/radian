@@ -428,6 +428,9 @@ button.exercise-card:hover, button.preview-card:hover { border-color: var(--line
 .exercise-muscle-dot::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--line-strong); }
 .exercise-card-chevron { flex: none; color: var(--faint); }
 .exercise-main { flex: 1 1 auto; min-width: 0; display: grid; gap: 3px; }
+.exercise-preview-cue { margin: 0; display: flex; flex-wrap: wrap; gap: 1px 10px; font-size: 12px; line-height: 1.35; }
+.exercise-preview-cue span:first-child { color: var(--muted); }
+.exercise-preview-cue span + span { color: var(--accent-ink); font-weight: 570; }
 
 .preview-card { background: var(--surface); scroll-margin-bottom: 90px; }
 .next-action {

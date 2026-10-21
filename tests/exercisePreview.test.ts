@@ -37,4 +37,19 @@ describe('tarjeta previa de ejercicio', () => {
     expect(html).not.toContain('last-feedback');
     expect(html).not.toContain('next-action');
   });
+
+  it('muestra la referencia previa y la sugerencia cuando hay datos', () => {
+    const html = renderToStaticMarkup(React.createElement(ExercisePreview, {
+      exercise,
+      index: 0,
+      muscleGroup: 'Pecho',
+      cue: { last: '40 kg · 10 reps', next: 'prueba 42,5 kg', hint: 'Dos sesiones fáciles seguidas.' },
+      onOpenDetails: () => undefined,
+    }));
+
+    expect(html).toContain('exercise-preview-cue');
+    expect(html).toContain('Última vez · 40 kg · 10 reps');
+    expect(html).toContain('prueba 42,5 kg');
+    expect(html).toContain('Dos sesiones fáciles seguidas.');
+  });
 });
