@@ -354,6 +354,8 @@ describe('puente MCP remoto de Radian', () => {
       'get_chat_context',
       'get_equipment_alternatives',
       'explain_recommendation',
+      'estimate_1rm',
+      'muscle_balance',
     ]);
     expect(MCP_TOOL_DEFINITIONS.every((tool) => !tool.name.includes('write') && !tool.name.includes('delete'))).toBe(true);
   });
@@ -907,6 +909,50 @@ describe('puente MCP remoto de Radian', () => {
       updatedAt: '2026-08-31T21:00:00.000Z',
       trainingDays: data.profile.trainingDays,
     });
+  });
+
+  it('estima el 1RM con Epley a partir de las series registradas', async () => {
+    const data = defaultData();
+    const session = createSession(data.plan.days[0], '2026-08-31', new Date('2026-08-31T10:00:00.000Z'));
+    session.status = 'completed';
+    session.completedAt = '2026-08-31T11:00:00.000Z';
+    session.plannedExercises[0].difficulty = 'good';
+    session.plannedExercises[0].setLogs.filter(isWorkSet).forEach((set) => { set.weightKg = 60; set.actualReps = 8; set.completed = true; });
+    data.sessions = [session];
+
+    await expect(handleMcpTool('estimate_1rm', {}, data)).resolves.toMatchObject({
+      formula: expect.stringContaining('Epley'),
+      estimates: [expect.objectContaining({
+        exerciseId: 'incline-press',
+        muscleGroup: 'Pecho',
+        estimated1rmKg: 76,
+        weightKg: 60,
+        reps: 8,
+        date: '2026-08-31',
+      })],
+    });
+    await expect(handleMcpTool('estimate_1rm', { exercise: 'aperturas' }, data)).resolves.toMatchObject({ estimates: [] });
+  });
+
+  it('resume el balance muscular de la semana por grupos', async () => {
+    const data = defaultData();
+    const session = createSession(data.plan.days[0], '2026-08-31', new Date('2026-08-31T10:00:00.000Z'));
+    session.status = 'completed';
+    session.completedAt = '2026-08-31T11:00:00.000Z';
+    session.plannedExercises.forEach((exercise) => {
+      exercise.difficulty = 'good';
+      exercise.setLogs.filter(isWorkSet).forEach((set) => { set.weightKg = 40; set.actualReps = 10; set.completed = true; });
+    });
+    data.sessions = [session];
+
+    await expect(handleMcpTool('muscle_balance', {}, data)).resolves.toMatchObject({
+      muscles: [
+        expect.objectContaining({ muscleGroup: 'Pecho', sets: 8, volumeKg: 40 * 10 * 8 }),
+        expect.objectContaining({ muscleGroup: 'Tríceps', sets: 5 }),
+        expect.objectContaining({ muscleGroup: 'Hombros', sets: 3 }),
+      ],
+    });
+    await expect(handleMcpTool('muscle_balance', { period: 'last_week' }, data)).resolves.toMatchObject({ muscles: [] });
   });
 
   it('devuelve updatedAt junto al resultado de lectura', async () => {

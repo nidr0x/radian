@@ -161,6 +161,26 @@ export const MCP_TOOL_DEFINITIONS = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'estimate_1rm',
+    title: 'Estimar 1RM',
+    description: 'Estima el 1RM con la fórmula de Epley a partir de series completadas con peso y repeticiones. Con exercise omitido devuelve una tabla.',
+    inputSchema: {
+      type: 'object',
+      properties: { exercise: { type: 'string' } },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'muscle_balance',
+    title: 'Consultar balance muscular',
+    description: 'Resume series de trabajo y volumen por grupo muscular en el periodo solicitado.',
+    inputSchema: {
+      type: 'object',
+      properties: { period: { type: 'string', enum: PERIODS, default: 'this_week' } },
+      additionalProperties: false,
+    },
+  },
 ];
 
 export const MCP_WRITE_TOOL_DEFINITIONS = [
@@ -1424,6 +1444,50 @@ const recommendationExplanation = (data: AppData, definition: AppData['exercises
   };
 };
 
+const round1 = (value: number): number => Math.round(value * 10) / 10;
+
+const muscleGroupFor = (data: AppData, exercise: ExerciseSession): string =>
+  data.exercises.find((definition) => definition.id === exercise.exerciseId)?.muscleGroup ?? 'Sin grupo';
+
+const estimate1rmResult = (data: AppData, rawQuery: unknown) => {
+  const query = typeof rawQuery === 'string' ? normalizeText(rawQuery) : undefined;
+  const best = new Map<string, { exerciseId: string; name: string; muscleGroup: string; estimated1rmKg: number; weightKg: number; reps: number; date: string; workoutId: string }>();
+  sortedSessions(data).forEach((session) => session.plannedExercises.forEach((exercise) => {
+    if (query && !exerciseMatches(data, exercise, query)) return;
+    completedWorkSets(exercise).forEach((set) => {
+      const weight = set.weightKg;
+      const reps = set.actualReps;
+      if (weight === undefined || reps === undefined || weight <= 0 || reps <= 0) return;
+      const estimated1rmKg = round1(weight * (1 + reps / 30));
+      const current = best.get(exercise.exerciseId);
+      if (!current || estimated1rmKg > current.estimated1rmKg) {
+        best.set(exercise.exerciseId, { exerciseId: exercise.exerciseId, name: exercise.name, muscleGroup: muscleGroupFor(data, exercise), estimated1rmKg, weightKg: weight, reps, date: session.dateKey, workoutId: session.id });
+      }
+    });
+  }));
+  const estimates = [...best.values()].sort((a, b) => b.estimated1rmKg - a.estimated1rmKg || a.name.localeCompare(b.name));
+  return { formula: 'Epley: peso × (1 + repeticiones / 30)', exercise: rawQuery, estimates };
+};
+
+const muscleBalanceResult = (data: AppData, range: { from?: string; to?: string }) => {
+  const groups = new Map<string, { muscleGroup: string; sets: number; volumeKg: number; exercises: Set<string> }>();
+  sortedSessions(data).filter((session) => inRange(session.dateKey, range)).forEach((session) => session.plannedExercises.forEach((exercise) => {
+    const completed = completedWorkSets(exercise);
+    if (completed.length === 0) return;
+    const muscleGroup = muscleGroupFor(data, exercise);
+    const current = groups.get(muscleGroup) ?? { muscleGroup, sets: 0, volumeKg: 0, exercises: new Set<string>() };
+    completed.forEach((set) => {
+      current.sets += 1;
+      current.volumeKg += (set.weightKg ?? 0) * (set.actualReps ?? 0);
+    });
+    current.exercises.add(exercise.name);
+    groups.set(muscleGroup, current);
+  }));
+  const muscles = [...groups.values()].map((group) => ({ muscleGroup: group.muscleGroup, sets: group.sets, volumeKg: round1(group.volumeKg), exercises: [...group.exercises].sort() }))
+    .sort((a, b) => b.sets - a.sets || b.volumeKg - a.volumeKg || a.muscleGroup.localeCompare(b.muscleGroup));
+  return { from: range.from, to: range.to, muscles };
+};
+
 export const handleMcpTool = async (name: string, args: Record<string, unknown>, loaded: AppData | null | McpLoadedUserData): Promise<Record<string, unknown>> => {
   const { data, updatedAt } = normalizeLoadedData(loaded);
   if (!data) return { message: 'Tu cuenta está conectada, pero todavía no hay una copia de Radian subida a D1.' };
@@ -1443,6 +1507,11 @@ export const handleMcpTool = async (name: string, args: Record<string, unknown>,
   if (name === 'explain_recommendation') {
     const definition = matchedDefinition(data, args.exercise);
     return withVersion(definition ? recommendationExplanation(data, definition) : { matchedExercise: null, recommendation: null, evidence: [], alternatives: [] }, updatedAt);
+  }
+  if (name === 'estimate_1rm') return withVersion(estimate1rmResult(data, args.exercise), updatedAt);
+  if (name === 'muscle_balance') {
+    const range = rangeFor({ ...args, period: args.period ?? 'this_week' });
+    return withVersion(muscleBalanceResult(data, range), updatedAt);
   }
   if (name === 'list_workouts') {
     const range = rangeFor(args);
