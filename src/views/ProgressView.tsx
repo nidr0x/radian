@@ -40,6 +40,7 @@ export function ProgressView({ data, onAddProgress, onAddCheckin, onInfo, onToas
   <Info size={19} />
 </button>} />
 <ProgressOverview data={data} range={progressRange} onRangeChange={setProgressRange} />
+<TrainingSignalsCard signals={weeklySummary.signals} />
 <div className="metric-grid">
   <MetricCard label="Peso actual" value={lastWeight?.weightKg !== undefined ? formatWeight(lastWeight.weightKg) : formatWeight(data.profile.currentWeightKg)} change={changeLabel(lastWeight?.weightKg, previousWeight?.weightKg)} icon={<Activity size={17} />} />
   <MetricCard label="Cintura" value={lastWaist?.waistCm !== undefined ? `${lastWaist.waistCm.toLocaleString('es-ES', { maximumFractionDigits: 1 })} cm` : 'Sin registro'} change={changeLabel(lastWaist?.waistCm, previousWaist?.waistCm, ' cm')} icon={<Gauge size={17} />} />
@@ -125,7 +126,6 @@ export function ProgressView({ data, onAddProgress, onAddCheckin, onInfo, onToas
     <ExerciseTrendCard data={data} />
     <HistoryPanel data={data} />
     <WeeklyTrends summary={weeklySummary} />
-    <TrainingSignalsCard signals={weeklySummary.signals} />
   </div>
 </details>
 <WeeklyReviewCard summary={weeklySummary} data={data} onToast={onToast} />
@@ -236,7 +236,7 @@ function WeeklyReviewCard({ summary, data, onToast }: { summary: ReturnType<type
   return <section className="coach-card weekly-review-card"><div className="weekly-review-topline"><div><p className="eyebrow light">para revisar juntos</p><h2>Tu semana, en claro</h2></div><span className="weekly-review-period">{summary.periodLabel}</span></div><p className="weekly-review-feedback">{summary.feedback}</p><div className="weekly-review-facts" aria-label="Resumen de la semana"><div><strong>{summary.completedSessions}/{summary.targetSessions}</strong><span>sesiones</span></div><div><strong>{summary.completedExercises}</strong><span>ejercicios</span></div><div><strong>{formatVolume(summary.volumeKg)}</strong><span>volumen</span></div></div><div className={`weekly-review-focus ${summary.focusTone}`}><Gauge size={17} /><div><strong>{focusLabel}</strong><p>{summary.focus}</p></div></div>{summary.recommendations.length > 0 && <div className="weekly-review-recommendations" aria-label="Recomendaciones para la próxima semana"><p className="eyebrow light">recomendación por ejercicio</p><ul>{summary.recommendations.slice(0, 3).map((recommendation) => <li key={recommendation.exerciseId}><strong>{recommendation.name}</strong><span>{recommendation.title}. {recommendation.detail}</span></li>)}</ul></div>}{summary.energy && <p className="weekly-review-checkin"><Sun size={15} /> Energía {summary.energy === 'high' ? 'alta' : summary.energy === 'low' ? 'baja' : 'normal'}{summary.feeling ? ` · ${summary.feeling}` : ''}</p>}<button type="button" className="text-button" onClick={share}><Share2 size={15} /> Compartir</button></section>;
 }
 
-function TrainingSignalsCard({ signals }: { signals: ReturnType<typeof buildWeeklySummary>['signals'] }) {
+export function TrainingSignalsCard({ signals }: { signals: ReturnType<typeof buildWeeklySummary>['signals'] }) {
   if (signals.length === 0) return null;
   return <section className="progress-card signal-card" aria-labelledby="training-signals-title"><div className="section-heading compact"><div><p className="eyebrow">detección temprana</p><h2 id="training-signals-title">Señales a revisar</h2></div><Gauge size={19} /></div><p className="section-description">No son diagnósticos: son patrones del historial para decidir el siguiente ajuste con calma.</p><div className="signal-list">{signals.slice(0, 4).map((signal) => <article className="signal-row" key={`${signal.kind}-${signal.exerciseId}`}><div><strong>{signal.name}</strong><span>{signal.title}</span></div><p>{signal.detail}</p><small>{signal.evidence.sessionCount} sesiones · {signal.evidence.latestDate}</small></article>)}</div></section>;
 }
