@@ -4,9 +4,8 @@
   "description": "Tu entrenamiento, sin fricción.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f2f2f7",
-  "theme_color": "#f2f2f7",
-  "orientation": "portrait",
+  "background_color": "#f1f4ef",
+  "theme_color": "#f1f4ef",
   "icons": [
     { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
   ]

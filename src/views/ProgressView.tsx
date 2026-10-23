@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from 'react';
+import { memo, useMemo, useRef, useState } from 'react';
 import { Activity, CalendarDays, Check, ChevronLeft, ChevronRight, Gauge, Info, Layers3, Plus, Share2, Sparkles, Sun, Trophy } from 'lucide-react';
 import { buildProgressBuckets, type ProgressBucket, type ProgressRange } from '../lib/progressOverview';
 import { buildCalendarCells } from '../lib/sessionCalendar';
@@ -14,6 +14,7 @@ import { buildWeeklySummary, weeklySummaryText } from '../lib/weeklySummary';
 import type { AppData, ExerciseDefinition, ProgressEntry, WeeklyCheckin, WorkoutDay, WorkoutSession } from '../types';
 
 export function ProgressView({ data, onAddProgress, onAddCheckin, onInfo, onToast }: { data: AppData; onAddProgress: (entry: Omit<ProgressEntry, 'id' | 'date'>) => void; onAddCheckin: (checkin: Omit<WeeklyCheckin, 'id' | 'createdAt' | 'weekKey'>) => void; onInfo: () => void; onToast: (message: string) => void }) {
+  const progressDetailsRef = useRef<HTMLDetailsElement>(null);
   const [measureOpen, setMeasureOpen] = useState(false);
   const [checkinOpen, setCheckinOpen] = useState(false);
   const [selectedExerciseId, setSelectedExerciseId] = useState('');
@@ -36,112 +37,114 @@ export function ProgressView({ data, onAddProgress, onAddCheckin, onInfo, onToas
   const previousWaist = waistEntries.at(-2);
   const saveMeasure = (event: React.FormEvent): void => { event.preventDefault(); onAddProgress(Object.fromEntries(Object.entries(form).filter(([, value]) => value !== '').map(([key, value]) => [key, Number(value)])) as Omit<ProgressEntry, 'id' | 'date'>); setForm({ weightKg: '', waistCm: '', chestCm: '', armCm: '', hipCm: '' }); setMeasureOpen(false); };
   return <section className="view-section progress-view">
-<PageHeader eyebrow="señales, no ruido" title="Progreso" action={<button className="icon-button subtle" type="button" aria-label="Información sobre las métricas" onClick={onInfo}>
-  <Info size={19} />
-</button>} />
-<ProgressOverview data={data} range={progressRange} onRangeChange={setProgressRange} />
-<TrainingSignalsCard signals={weeklySummary.signals} />
-<div className="metric-grid">
-  <MetricCard label="Peso actual" value={lastWeight?.weightKg !== undefined ? formatWeight(lastWeight.weightKg) : formatWeight(data.profile.currentWeightKg)} change={changeLabel(lastWeight?.weightKg, previousWeight?.weightKg)} icon={<Activity size={17} />} />
-  <MetricCard label="Cintura" value={lastWaist?.waistCm !== undefined ? `${lastWaist.waistCm.toLocaleString('es-ES', { maximumFractionDigits: 1 })} cm` : 'Sin registro'} change={changeLabel(lastWaist?.waistCm, previousWaist?.waistCm, ' cm')} icon={<Gauge size={17} />} />
-  <MetricCard label="Adherencia" value={`${Math.min(completedThisWeek, weeklyTarget)}/${weeklyTarget}`} change="esta semana" icon={<Check size={17} />} />
-</div>
-<section className="progress-card weekly-adherence-card">
-  <div className="section-heading compact">
-    <div>
-      <p className="eyebrow">esta semana</p>
-        <h2>Tu constancia</h2>
+    <PageHeader eyebrow="señales, no ruido" title="Progreso" action={<button className="icon-button subtle" type="button" aria-label="Información sobre las métricas" onClick={onInfo}>
+      <Info size={19} />
+    </button>} />
+    <ProgressOverview data={data} range={progressRange} onRangeChange={setProgressRange} onShowDetails={() => { if (progressDetailsRef.current) progressDetailsRef.current.open = true; }} />
+    <WeeklyReviewCard summary={weeklySummary} data={data} onToast={onToast} />
+    <TrainingSignalsCard signals={weeklySummary.signals} />
+    <div className="metric-grid">
+      <MetricCard label="Peso actual" value={lastWeight?.weightKg !== undefined ? formatWeight(lastWeight.weightKg) : formatWeight(data.profile.currentWeightKg)} change={changeLabel(lastWeight?.weightKg, previousWeight?.weightKg)} icon={<Activity size={17} />} />
+      <MetricCard label="Cintura" value={lastWaist?.waistCm !== undefined ? `${lastWaist.waistCm.toLocaleString('es-ES', { maximumFractionDigits: 1 })} cm` : 'Sin registro'} change={changeLabel(lastWaist?.waistCm, previousWaist?.waistCm, ' cm')} icon={<Gauge size={17} />} />
+      <MetricCard label="Adherencia" value={`${Math.min(completedThisWeek, weeklyTarget)}/${weeklyTarget}`} change="esta semana" icon={<Check size={17} />} />
+    </div>
+    <section className="progress-card weekly-adherence-card">
+      <div className="section-heading compact">
+        <div>
+          <p className="eyebrow">esta semana</p>
+          <h2>Tu constancia</h2>
         </div>
         <strong className="weekly-score">{completedThisWeek}/{weeklyTarget}</strong>
-        </div>
-        <div className="week-strip" aria-label="Entrenamientos de la semana">{weekDays.map((day) => <div className={day.completed ? 'week-day completed' : day.planned ? 'week-day planned' : 'week-day'} key={day.key}>
-          <span>{day.label}</span>
-            <i aria-hidden="true">{day.completed ? '✓' : day.planned ? '·' : ''}</i>
-            </div>)}</div>
-            <p className="history-caption">{completedThisWeek === 0 ? 'Todavía no hay entrenamientos guardados esta semana.' : `${completedThisWeek} de ${weeklyTarget} sesiones previstas ya están guardadas.`}</p>
-            </section>
-            <section className="progress-card">
-              <div className="section-heading compact">
-                <div>
-                  <p className="eyebrow">historial</p>
-                    <h2>Calendario</h2>
-                    </div>
-                  </div>
-                  <SessionCalendar sessions={data.sessions} trainingDays={data.profile.trainingDays} exercises={data.exercises} workoutDays={data.plan.days} />
-                </section>
-                <section className="progress-card">
-                  <div className="section-heading compact">
-                    <div>
-                      <p className="eyebrow">evolución corporal</p>
-                        <h2>Medidas en el tiempo</h2>
-                        </div>
-                        <button className="text-button" onClick={() => setMeasureOpen((value) => !value)}>
-                          <Plus size={16} /> Añadir</button>
-                          </div>{measureOpen && <form className="measurement-form" onSubmit={saveMeasure}>
-                          <NumberField label="Peso" unit="kg" value={form.weightKg} onChange={(value) => setForm((current) => ({ ...current, weightKg: value }))} />
-                          <NumberField label="Cintura" unit="cm" value={form.waistCm} onChange={(value) => setForm((current) => ({ ...current, waistCm: value }))} />
-                          <NumberField label="Pecho" unit="cm" value={form.chestCm} onChange={(value) => setForm((current) => ({ ...current, chestCm: value }))} />
-                          <NumberField label="Brazo" unit="cm" value={form.armCm} onChange={(value) => setForm((current) => ({ ...current, armCm: value }))} />
-                          <NumberField label="Cadera" unit="cm · opcional" value={form.hipCm} onChange={(value) => setForm((current) => ({ ...current, hipCm: value }))} />
-                          <button className="primary-button small" type="submit">Guardar medidas</button>
-                          </form>}<WeightChart entries={sortedProgress} />
-                          <div className="trend-list">
-                            <TrendRow label="Cintura" values={sortedProgress.map((item) => item.waistCm)} unit="cm" />
-                          </div>{data.progress.length === 0 && <div className="empty-state">
-                          <span className="empty-icon">
-                            <Activity size={19} />
-                          </span>
-                          <strong>Aún no hay medidas</strong>
-                            <p>Registra solo lo que te apetezca comparar. No hace falta hacerlo cada día.</p>
-                            </div>}</section>{performance.length > 0 && <section className="progress-card performance-card">
-                            <div className="section-heading compact">
-                              <div>
-                                <p className="eyebrow">señal de entrenamiento</p>
-                                  <h2>Rendimiento reciente</h2>
-                                  </div>
-                                  <Gauge size={19} />
-                                </div>
-                                <div className="performance-list">{performance.map((item) => <div className="performance-row" key={item.exerciseId}>
-                                  <div>
-                                    <strong>{item.name}</strong>
-                                      <span>{item.load !== undefined ? `${formatWeight(item.load)} · ${item.reps ?? '-'} reps` : 'Sin carga registrada'}</span>
-                                      </div>
-                                      <b>{formatVolume(item.volume)}</b>
-                                      </div>)}</div>
-                                    </section>}<HistoryPanel data={data} /><section className="checkin-card">
-                                    <div className="checkin-mark">
-                                      <Sun size={21} />
-                                    </div>
-                                    <div className="checkin-copy">
-                                      <p className="eyebrow">cierre semanal</p>
-                                        <h2>{currentCheckin ? 'Check-in guardado' : '¿Cómo ha ido la semana?'}</h2>
-                                          <p>{currentCheckin ? 'Puedes editarlo cuando quieras.' : 'Dos minutos para poner contexto a tus datos.'}</p>
-                                          </div>
-                                          <button className="text-button" onClick={() => setCheckinOpen((value) => !value)}>{currentCheckin ? 'Editar' : 'Hacer check-in'} <ChevronRight size={16} />
-                                        </button>
-                                      </section>{checkinOpen && <CheckinForm existing={currentCheckin} onSave={(value) => { onAddCheckin(value); setCheckinOpen(false); }} />}
-    <details id="progress-details" className="progress-details">
-<summary>Ver histórico detallado</summary>
-  <div className="progress-details-body">
-    <ExerciseTrendCard data={data} />
-    <WeeklyTrends summary={weeklySummary} />
-  </div>
-</details>
-<WeeklyReviewCard summary={weeklySummary} data={data} onToast={onToast} />
-<section className="progress-card">
-  <div className="section-heading compact">
-    <div>
-      <p className="eyebrow">por ejercicio</p>
-        <h2>Progresión de carga</h2>
-        </div>
       </div>
-      <label className="exercise-progress-select-label">Ejercicio<select value={selectedExerciseId} onChange={(event) => setSelectedExerciseId(event.target.value)}>
-        <option value="">Elige un ejercicio…</option>{availableExercises.map((exercise) => <option key={exercise.id} value={exercise.id}>{exercise.name}</option>)}</select>
-        </label>{selectedExerciseId && <ExerciseProgressChart exerciseId={selectedExerciseId} sessions={data.sessions} />}</section>
-      </section>;
+      <div className="week-strip" aria-label="Entrenamientos de la semana">{weekDays.map((day) => <div className={day.completed ? 'week-day completed' : day.planned ? 'week-day planned' : 'week-day'} key={day.key}>
+        <span>{day.label}</span>
+        <i aria-hidden="true">{day.completed ? '✓' : day.planned ? '·' : ''}</i>
+      </div>)}</div>
+      <p className="history-caption">{completedThisWeek === 0 ? 'Todavía no hay entrenamientos guardados esta semana.' : `${completedThisWeek} de ${weeklyTarget} sesiones previstas ya están guardadas.`}</p>
+    </section>
+    <section className="progress-card">
+      <div className="section-heading compact">
+        <div>
+          <p className="eyebrow">evolución corporal</p>
+          <h2>Medidas en el tiempo</h2>
+        </div>
+        <button className="text-button" onClick={() => setMeasureOpen((value) => !value)}><Plus size={16} /> Añadir</button>
+      </div>
+      {measureOpen && <form className="measurement-form" onSubmit={saveMeasure}>
+        <NumberField label="Peso" unit="kg" value={form.weightKg} onChange={(value) => setForm((current) => ({ ...current, weightKg: value }))} />
+        <NumberField label="Cintura" unit="cm" value={form.waistCm} onChange={(value) => setForm((current) => ({ ...current, waistCm: value }))} />
+        <NumberField label="Pecho" unit="cm" value={form.chestCm} onChange={(value) => setForm((current) => ({ ...current, chestCm: value }))} />
+        <NumberField label="Brazo" unit="cm" value={form.armCm} onChange={(value) => setForm((current) => ({ ...current, armCm: value }))} />
+        <NumberField label="Cadera" unit="cm · opcional" value={form.hipCm} onChange={(value) => setForm((current) => ({ ...current, hipCm: value }))} />
+        <button className="primary-button small" type="submit">Guardar medidas</button>
+      </form>}
+      <WeightChart entries={sortedProgress} />
+      <div className="trend-list"><TrendRow label="Cintura" values={sortedProgress.map((item) => item.waistCm)} unit="cm" /></div>
+      {data.progress.length === 0 && <div className="empty-state">
+        <span className="empty-icon"><Activity size={19} /></span>
+        <strong>Aún no hay medidas</strong>
+        <p>Registra solo lo que te apetezca comparar. No hace falta hacerlo cada día.</p>
+      </div>}
+    </section>
+    <section className="checkin-card">
+      <div className="checkin-mark"><Sun size={21} /></div>
+      <div className="checkin-copy">
+        <p className="eyebrow">cierre semanal</p>
+        <h2>{currentCheckin ? 'Check-in guardado' : '¿Cómo ha ido la semana?'}</h2>
+        <p>{currentCheckin ? 'Puedes editarlo cuando quieras.' : 'Dos minutos para poner contexto a tus datos.'}</p>
+      </div>
+      <button className="text-button" onClick={() => setCheckinOpen((value) => !value)}>{currentCheckin ? 'Editar' : 'Hacer check-in'} <ChevronRight size={16} /></button>
+    </section>
+    {checkinOpen && <CheckinForm existing={currentCheckin} onSave={(value) => { onAddCheckin(value); setCheckinOpen(false); }} />}
+    <details id="progress-details" ref={progressDetailsRef} className="progress-details">
+      <summary>Ver histórico detallado</summary>
+      <div className="progress-details-body">
+        <section className="progress-card">
+          <div className="section-heading compact">
+            <div>
+              <p className="eyebrow">historial</p>
+              <h2>Calendario</h2>
+            </div>
+          </div>
+          <SessionCalendar sessions={data.sessions} trainingDays={data.profile.trainingDays} exercises={data.exercises} workoutDays={data.plan.days} />
+        </section>
+        {performance.length > 0 && <section className="progress-card performance-card">
+          <div className="section-heading compact">
+            <div>
+              <p className="eyebrow">señal de entrenamiento</p>
+              <h2>Rendimiento reciente</h2>
+            </div>
+            <Gauge size={19} />
+          </div>
+          <div className="performance-list">{performance.map((item) => <div className="performance-row" key={item.exerciseId}>
+            <div>
+              <strong>{item.name}</strong>
+              <span>{item.load !== undefined ? `${formatWeight(item.load)} · ${item.reps ?? '-'} reps` : 'Sin carga registrada'}</span>
+            </div>
+            <b>{formatVolume(item.volume)}</b>
+          </div>)}</div>
+        </section>}
+        <HistoryPanel data={data} />
+        <ExerciseTrendCard data={data} />
+        <WeeklyTrends summary={weeklySummary} />
+        <section className="progress-card">
+          <div className="section-heading compact">
+            <div>
+              <p className="eyebrow">por ejercicio</p>
+              <h2>Progresión de carga</h2>
+            </div>
+          </div>
+          <label className="exercise-progress-select-label">Ejercicio<select value={selectedExerciseId} onChange={(event) => setSelectedExerciseId(event.target.value)}>
+            <option value="">Elige un ejercicio…</option>{availableExercises.map((exercise) => <option key={exercise.id} value={exercise.id}>{exercise.name}</option>)}
+          </select></label>
+          {selectedExerciseId && <ExerciseProgressChart exerciseId={selectedExerciseId} sessions={data.sessions} />}
+        </section>
+      </div>
+    </details>
+  </section>;
 }
 
-function ProgressOverview({ data, range, onRangeChange }: { data: AppData; range: ProgressRange; onRangeChange: (range: ProgressRange) => void }) {
+function ProgressOverview({ data, range, onRangeChange, onShowDetails }: { data: AppData; range: ProgressRange; onRangeChange: (range: ProgressRange) => void; onShowDetails: () => void }) {
   const buckets = useMemo(() => buildProgressBuckets(data.sessions, range), [data.sessions, range]);
   const totals = buckets.reduce((sum, bucket) => ({ sessions: sum.sessions + bucket.sessions, volumeKg: sum.volumeKg + bucket.volumeKg, durationSeconds: sum.durationSeconds + bucket.durationSeconds }), { sessions: 0, volumeKg: 0, durationSeconds: 0 });
   const muscleGroups = useMemo(() => muscleGroupVolumes(data).slice(0, 3), [data]);
@@ -155,7 +158,7 @@ function ProgressOverview({ data, range, onRangeChange }: { data: AppData; range
       <article className="progress-overview-card progress-training-card"><div className="progress-overview-heading"><h2>Entrenamientos</h2><ChevronRight size={17} aria-hidden="true" /></div><strong>{totals.sessions}</strong><span className="progress-overview-caption">{labels[range].toLowerCase()}</span><ProgressOverviewBars buckets={buckets} metric="sessions" tone="green" /></article>
       <ProgressOverviewMetric label="Volumen total" value={formatVolume(totals.volumeKg)} buckets={buckets} metric="volumeKg" tone="blue" />
       <ProgressOverviewMetric label="Tiempo total" value={totals.durationSeconds ? formatSessionDuration(totals.durationSeconds) : '0 min'} buckets={buckets} metric="durationSeconds" tone="purple" />
-      <section className="progress-overview-card progress-muscle-card"><div className="progress-overview-heading"><h2>Grupos musculares</h2><a className="text-button" href="#progress-details">Ver más <ChevronRight size={15} aria-hidden="true" /></a></div>{muscleGroups.length ? <div className="progress-muscle-grid">{muscleGroups.map((group) => { const image = data.exercises.find((exercise) => exercise.muscleGroup === group.muscleGroup)?.imageUrl; return <article className="progress-muscle-tile" key={group.muscleGroup}>{image && <img src={image} alt="" loading="lazy" />}<strong>{group.muscleGroup}</strong><span>{formatVolume(group.volume)}</span></article>; })}</div> : <p className="progress-overview-empty">Completa sesiones para ver el volumen por grupo.</p>}</section>
+      <section className="progress-overview-card progress-muscle-card"><div className="progress-overview-heading"><h2>Grupos musculares</h2><a className="text-button" href="#progress-details" onClick={onShowDetails}>Ver más <ChevronRight size={15} aria-hidden="true" /></a></div>{muscleGroups.length ? <div className="progress-muscle-grid">{muscleGroups.map((group) => { const image = data.exercises.find((exercise) => exercise.muscleGroup === group.muscleGroup)?.imageUrl; return <article className="progress-muscle-tile" key={group.muscleGroup}>{image && <img src={image} alt="" loading="lazy" />}<strong>{group.muscleGroup}</strong><span>{formatVolume(group.volume)}</span></article>; })}</div> : <p className="progress-overview-empty">Completa sesiones para ver el volumen por grupo.</p>}</section>
       <article className="progress-overview-card progress-streak-card"><div className="progress-overview-heading"><h2>Racha de días</h2><Activity size={17} aria-hidden="true" /></div><strong>{streak}</strong><span className="progress-overview-caption">sesiones seguidas</span><div className="progress-overview-week" aria-label="Actividad de esta semana">{weekDays.map((day) => <span key={day.key} className={`${day.completed ? 'is-complete' : ''}${day.planned ? ' is-planned' : ''}`} title={`${day.label}: ${day.completed ? 'completado' : day.planned ? 'previsto' : 'descanso'}`} />)}</div></article>
     </div>
   </section>;
@@ -167,7 +170,7 @@ function ProgressOverviewMetric({ label, value, buckets, metric, tone }: { label
 
 function ProgressOverviewBars({ buckets, metric, tone }: { buckets: ProgressBucket[]; metric: keyof Pick<ProgressBucket, 'sessions' | 'volumeKg' | 'durationSeconds'>; tone: 'green' | 'blue' | 'purple' }) {
   const max = Math.max(...buckets.map((bucket) => bucket[metric]), 0);
-  const labelStep = Math.max(1, Math.ceil(buckets.length / 6));
+  const labelStep = Math.max(1, Math.ceil((buckets.length - 1) / 3));
   return <div className={`progress-overview-bars ${tone}`} role="img" aria-label={`${buckets.reduce((total, bucket) => total + bucket[metric], 0)} ${metric === 'sessions' ? 'entrenamientos' : metric === 'volumeKg' ? 'kilogramos de volumen' : 'segundos de entrenamiento'}`}>
     {buckets.map((bucket, index) => <span key={bucket.key} title={`${bucket.label}: ${bucket[metric]}`}>{bucket[metric] > 0 && <i style={{ height: `${Math.max(8, bucket[metric] / max * 100)}%` }} />}{index % labelStep === 0 || index === buckets.length - 1 ? <small>{bucket.label}</small> : <small aria-hidden="true">&nbsp;</small>}</span>)}
   </div>;
