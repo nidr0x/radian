@@ -108,7 +108,7 @@ export function ProgressView({ data, onAddProgress, onAddCheckin, onInfo, onToas
                                       </div>
                                       <b>{formatVolume(item.volume)}</b>
                                       </div>)}</div>
-                                    </section>}<section className="checkin-card">
+                                    </section>}<HistoryPanel data={data} /><section className="checkin-card">
                                     <div className="checkin-mark">
                                       <Sun size={21} />
                                     </div>
@@ -124,7 +124,6 @@ export function ProgressView({ data, onAddProgress, onAddCheckin, onInfo, onToas
 <summary>Ver histórico detallado</summary>
   <div className="progress-details-body">
     <ExerciseTrendCard data={data} />
-    <HistoryPanel data={data} />
     <WeeklyTrends summary={weeklySummary} />
   </div>
 </details>
@@ -243,7 +242,7 @@ export function TrainingSignalsCard({ signals }: { signals: ReturnType<typeof bu
 
 const MetricCard = memo(function MetricCard({ label, value, change, icon }: { label: string; value: string; change: string; icon: React.ReactNode }) { return <article className="metric-card"><div className="metric-label">{icon}<span>{label}</span></div><strong>{value}</strong><small>{change}</small></article>; });
 
-function HistoryPanel({ data }: { data: AppData }) {
+export function HistoryPanel({ data }: { data: AppData }) {
   const records = useMemo(() => personalRecords(data.sessions).slice(0, 3), [data.sessions]);
   const muscleVolumes = useMemo(() => muscleGroupVolumes(data).slice(0, 3), [data]);
   const summary = historySummary(data.sessions);
