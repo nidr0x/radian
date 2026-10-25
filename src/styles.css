@@ -720,7 +720,7 @@ button.exercise-card:hover, button.preview-card:hover { border-color: var(--line
 .prefill-note { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; }
 .set-quick-action { display: inline-flex; align-items: center; gap: 5px; min-height: 34px; padding: 0 11px; border: 1px solid var(--accent-ink); border-radius: var(--radius-chip); background: var(--accent-pale); color: var(--accent-ink); font-size: 12px; font-weight: 600; }
 .set-quick-action:hover { background: var(--accent-wash); }
-.set-weight-convention { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; margin: 6px 0 2px; }
+.set-weight-convention { display: flex; align-items: flex-start; gap: 6px; color: var(--muted); font-size: 12px; margin: 6px 0 2px; }
 .set-weight-convention svg { flex: none; color: var(--faint); }
 .set-log-list { display: grid; gap: 7px; margin-top: 10px; }
 .set-log-row {

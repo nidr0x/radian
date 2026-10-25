@@ -13,6 +13,14 @@ import { recommendationFor, progressionAction } from '../lib/recommendations';
 import type { ExerciseRecord } from '../lib/records';
 import type { Difficulty, ExerciseEquipment, ExerciseDefinition, ExerciseSession, SetLog, WorkoutSession } from '../types';
 
+const weightConventions: Record<ExerciseEquipment, string> = {
+  dumbbell: 'Mancuernas: registra una sola mancuerna, no la suma de ambas.',
+  barbell: 'Barra: registra el total, incluida la barra y los discos de ambos lados.',
+  machine: 'Máquina: registra la carga de la pila; en unilateral, la del lado trabajado.',
+  cable: 'Polea: registra la carga de un lado; no sumes ambas poleas.',
+  bodyweight: 'Peso corporal: registra solo el lastre añadido; déjalo vacío si no añades carga.',
+};
+
 export function ActiveSession({ session, restRemaining, restUntil, restExerciseName, onRestartRest, screenWakeLockActive, previousExercise, bestRecord, recommendation, progression, progressionAction: action, alternatives, equipmentAlternatives, exerciseEquipment, onSelectExercise, onDefer, onComplete, onDraft, onSwap, onRest, onUndo, canUndo, onExit }: { session: WorkoutSession; restRemaining: number; restUntil: number | null; restExerciseName?: string; onRestartRest: () => void; screenWakeLockActive: boolean; previousExercise?: ExerciseSession; bestRecord?: ExerciseRecord; recommendation?: ReturnType<typeof recommendationFor>; progression?: string; progressionAction?: ReturnType<typeof progressionAction>; alternatives: ExerciseDefinition[]; equipmentAlternatives: ExerciseDefinition[]; exerciseEquipment?: ExerciseEquipment; onSelectExercise: (index: number) => void; onDefer: () => void; onComplete: (session: WorkoutSession, exercise: ExerciseSession, patch: Partial<ExerciseSession>, startRest: boolean) => void; onDraft: (sessionId: string, plannedExerciseId: string, patch: Partial<ExerciseSession>) => void; onSwap: (replacement: ExerciseDefinition, reason: 'discomfort' | 'equipment') => void; onRest: () => void; onUndo: () => void; canUndo: boolean; onExit: () => void }) {
   const visibleRestRemaining = useRestCountdown(restUntil, restRemaining);
   const exercise = session.plannedExercises[session.activeExerciseIndex];
@@ -218,6 +226,7 @@ function SessionExerciseNavigator({ session, onSelect }: { session: WorkoutSessi
 }
 
 function SetLogEditor({ logs, repMin, repMax, exerciseEquipment, hasPrevious, prefilled, onChange, onCopy }: { logs: SetLog[]; repMin: number; repMax: number; exerciseEquipment?: ExerciseEquipment; hasPrevious: boolean; prefilled: boolean; onChange: (setNumber: number, patch: Partial<SetLog>) => void; onCopy: () => void }) {
+  const weightConvention = exerciseEquipment ? weightConventions[exerciseEquipment] : undefined;
   const nextSet = logs.find((set) => !set.completed);
   const completeNext = (): void => {
     if (!nextSet) return;
@@ -239,13 +248,13 @@ function SetLogEditor({ logs, repMin, repMax, exerciseEquipment, hasPrevious, pr
         <History size={13} /> Último registro cargado</span>}</div>
           <div className="set-log-heading-actions">{nextSet && <button className="set-quick-action" type="button" onClick={completeNext}>
             <Check size={14} /> Completar siguiente</button>}{hasPrevious && <button className="text-button" type="button" onClick={onCopy}>Repetir último</button>}</div>
-            </div>{exerciseEquipment === 'dumbbell' && <p className="set-weight-convention">
-            <Info size={14} aria-hidden="true" />En mancuernas, registra el peso de una sola mancuerna.</p>}<div className="set-log-list">{logs.map((set, index) => { const warmup = set.phase === 'warmup'; return <div className={`${set.completed ? 'set-log-row is-complete' : 'set-log-row'}${warmup ? ' is-warmup' : ''}`} key={set.setNumber}>
+            </div>{weightConvention && <p id="set-weight-convention" className="set-weight-convention" role="note">
+            <Info size={14} aria-hidden="true" />{weightConvention}</p>}<div className="set-log-list">{logs.map((set, index) => { const warmup = set.phase === 'warmup'; return <div className={`${set.completed ? 'set-log-row is-complete' : 'set-log-row'}${warmup ? ' is-warmup' : ''}`} key={set.setNumber}>
               <span className="set-log-number">{String(set.setNumber).padStart(2, '0')}</span>
                 <span className="set-log-target">{warmup ? 'Calentamiento' : 'Objetivo'}<strong>{warmup ? `${repMin} reps` : `${repMin}-${repMax}`}</strong>
                 </span>
                 <div className="set-weight-input-group" role="group" aria-label={`Peso de la serie ${set.setNumber}`}>
-                  <label>Peso<input aria-label={`Peso serie ${set.setNumber}${warmup ? ' calentamiento' : ''}`} inputMode="decimal" enterKeyHint="next" data-set-field="weight" onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); focusNextSetInput(event.currentTarget); } }} value={set.weightKg ?? ''} onChange={(event) => onChange(set.setNumber, { weightKg: numberOrUndefined(event.target.value) })} placeholder="kg" />
+                  <label>Peso<input aria-label={`Peso serie ${set.setNumber}${warmup ? ' calentamiento' : ''}`} aria-describedby={weightConvention ? 'set-weight-convention' : undefined} inputMode="decimal" enterKeyHint="next" data-set-field="weight" onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); focusNextSetInput(event.currentTarget); } }} value={set.weightKg ?? ''} onChange={(event) => onChange(set.setNumber, { weightKg: numberOrUndefined(event.target.value) })} placeholder="kg" />
                 </label>
                 <div className="set-weight-stepper">
                   <button type="button" aria-label={`Restar 2,5 kg al peso de la serie ${set.setNumber}`} disabled={(set.weightKg ?? 0) <= 0} onClick={() => onChange(set.setNumber, { weightKg: Math.max(0, (set.weightKg ?? 0) - 2.5) })}>−</button>

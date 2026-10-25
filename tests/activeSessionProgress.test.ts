@@ -173,7 +173,7 @@ describe('progreso visible de la sesión activa', () => {
 
       const html = renderAppWithData(data);
 
-      expect(html).toContain('En mancuernas, registra el peso de una sola mancuerna.');
+      expect(html).toContain('Mancuernas: registra una sola mancuerna, no la suma de ambas.');
     } finally {
       vi.useRealTimers();
     }
