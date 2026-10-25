@@ -1,6 +1,7 @@
 import { isCloudflarePerimeterBlock } from './smoke-policy.mjs';
 
 const baseUrl = (process.env.RADIAN_SMOKE_URL ?? 'https://radian.nidr0x.win').replace(/\/+$/, '');
+const publicOrigin = (process.env.RADIAN_PUBLIC_ORIGIN ?? baseUrl).replace(/\/+$/, '');
 
 const fail = (message) => {
   throw new Error(message);
@@ -47,7 +48,7 @@ if (!oauthMetadataResponse.ok) {
 }
 
 const oauthMetadata = await oauthMetadataResponse.json();
-if (oauthMetadata.issuer !== baseUrl || oauthMetadata.authorization_endpoint !== `${baseUrl}/api/mcp/authorize` || oauthMetadata.token_endpoint !== `${baseUrl}/api/mcp/token`) {
+if (oauthMetadata.issuer !== publicOrigin || oauthMetadata.authorization_endpoint !== `${publicOrigin}/api/mcp/authorize` || oauthMetadata.token_endpoint !== `${publicOrigin}/api/mcp/token`) {
   fail('Los metadatos OAuth no apuntan a los endpoints públicos de producción.');
 }
 

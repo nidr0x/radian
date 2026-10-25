@@ -47,6 +47,9 @@ jobs:
 
       - name: Smoke test production
         if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        env:
+          RADIAN_SMOKE_URL: https://radian-cku.pages.dev
+          RADIAN_PUBLIC_ORIGIN: https://radian.nidr0x.win
         run: |
           for attempt in $(seq 1 12); do
             set +e
