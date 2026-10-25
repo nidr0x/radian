@@ -169,11 +169,12 @@ export const getWebAuthnConfig = (context: SyncContext): { rpId: string; origin:
   return { rpId: config.rpId, origin: config.origin, rpName: config.rpName };
 };
 
-export const requireAuthConfiguration = (context: SyncContext): Response | undefined => {
+export const requireAuthConfiguration = (context: SyncContext, requestOrigin = context.request.url): Response | undefined => {
   const config = authConfig(context);
-  const requestUrl = new URL(context.request.url);
+  let requestUrl: URL;
   let configuredOrigin: URL;
   try {
+    requestUrl = new URL(requestOrigin);
     configuredOrigin = new URL(config.origin);
   } catch {
     return json({ error: 'auth_configuration_unavailable', message: 'La configuración de autenticación no es válida.' }, 503);

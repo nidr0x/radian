@@ -2,7 +2,7 @@ import { json, requireAuthConfiguration, requireDatabase } from '../lib/auth';
 import type { SyncContext } from '../types';
 
 export const onRequestGet = async (context: SyncContext): Promise<Response> => {
-  const configurationError = requireAuthConfiguration(context);
+  const configurationError = requireAuthConfiguration(context, context.env.WEBAUTHN_ORIGIN);
   if (configurationError) return json({ ok: false, service: 'radian', database: 'unknown', auth: 'unavailable' }, 503);
   const database = requireDatabase(context);
   if (database instanceof Response) return database;

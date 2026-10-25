@@ -80,6 +80,15 @@ describe('protecciones de Pages Functions', () => {
     expect(requireAuthConfiguration(context({ SESSION_SECRET: 'test-session-secret' }))).toBeUndefined();
   });
 
+  it('valida la configuración canónica desde el host directo de Pages sin cambiar la comprobación de origen de las rutas', () => {
+    const pagesContext: SyncContext = {
+      ...context({ SESSION_SECRET: 'test-session-secret', WEBAUTHN_RP_ID: 'radian.nidr0x.win', WEBAUTHN_ORIGIN: 'https://radian.nidr0x.win' }),
+      request: new Request('https://radian-cku.pages.dev/api/health'),
+    };
+    expect((requireAuthConfiguration(pagesContext) as Response).status).toBe(503);
+    expect(requireAuthConfiguration(pagesContext, pagesContext.env.WEBAUTHN_ORIGIN)).toBeUndefined();
+  });
+
   it('emite la cookie de sesión con prefijo Host y Secure en HTTPS', async () => {
     const statement = { bind: vi.fn().mockReturnThis(), run: vi.fn().mockResolvedValue({ success: true, meta: { changes: 1 } }) } as unknown as D1PreparedStatementLike;
     const database = { prepare: vi.fn().mockReturnValue(statement) } as unknown as D1DatabaseLike;
