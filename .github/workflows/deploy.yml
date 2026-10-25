@@ -67,3 +67,16 @@ jobs:
           done
           echo "Production smoke test failed after 120 seconds."
           exit 1
+
+  report-production-deployment:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: deploy
+    runs-on: ubuntu-latest
+    permissions:
+      deployments: write
+    environment:
+      name: production
+      url: https://radian.nidr0x.win
+    steps:
+      - name: Record verified production deployment
+        run: echo "Production Pages deployment passed its smoke test."
