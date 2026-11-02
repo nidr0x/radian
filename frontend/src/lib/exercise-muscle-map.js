@@ -1,4 +1,4 @@
-{
+export default {
  "1010": {
   "bp": "upper legs",
   "primaries": [
@@ -3295,4 +3295,4 @@
    "serratus"
   ]
  }
-}
+};
