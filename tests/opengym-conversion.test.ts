@@ -127,11 +127,11 @@ describe('conversor local Radian → openGym', () => {
     expect(state.routines.map(routine => routine.id)).toEqual(['day-beta', 'day-alpha']);
     expect(state.routines[0].ex.map(exercise => exercise.id)).toEqual(['custom-deadlift']);
     expect(state.workouts.map(workout => workout.id)).toEqual(['session-beta', 'session-orphan']);
-    expect(state.workouts[0]).toMatchObject({ id: 'session-beta', d: '2020-01-01', routineId: 'day-beta', name: 'Example workout' });
+    expect(state.workouts[0]).toMatchObject({ id: 'session-beta', d: '2020-01-01', routineId: 'day-beta', name: 'Example day' });
     expect(state.workouts[0].entries[0]).toMatchObject({ id: 'custom-deadlift', plannedExerciseId: 'slot-beta' });
     expect(state.workouts[0].entries[0].sets.map(set => set.n)).toEqual([2, 1]);
     expect(state.workouts[0].entries[0].sets[0]).toMatchObject({ r: 5, w: 40, phase: 'work' });
-    expect(state.workouts[1]).toMatchObject({ d: '2020-01-01', routineId: 'removed-day', name: 'Example workout' });
+    expect(state.workouts[1]).toMatchObject({ d: '2020-01-01', routineId: 'removed-day', name: 'Imported workout' });
     expect(state.workouts[1].entries[0]).toMatchObject({ id: 'removed-exercise', plannedExerciseId: 'removed-slot' });
     expect(state.bodyweight).toEqual([{ id: 'progress-current', d: '2020-01-01', w: 75, unit: 'kg' }]);
     expect(state.measurements).toEqual([{ id: 'progress-current', d: '2020-01-01', waist: 80, arm: 32, unit: 'cm' }]);
@@ -248,7 +248,7 @@ describe('conversor local Radian → openGym', () => {
   it('rechaza UTF-8 inválido antes de crear outputs y conserva los bytes de origen', () => {
     withTempDirectory(directory => {
       const sourceBytes = Buffer.from(readFileSync(new URL('./fixtures/opengym/radian-backup-v7.json', import.meta.url)));
-      const marker = sourceBytes.indexOf(Buffer.from('Fixture Deadlift'));
+      const marker = sourceBytes.indexOf(Buffer.from('Example exercise'));
       expect(marker).toBeGreaterThanOrEqual(0);
       sourceBytes[marker] = 0xff;
 
