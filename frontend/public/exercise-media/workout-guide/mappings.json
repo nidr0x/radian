@@ -1,0 +1,896 @@
+[
+  {
+    "exerciseId": "0017",
+    "exerciseName": "assisted pull-up",
+    "slug": "assisted-pull-up",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0025",
+    "exerciseName": "barbell bench press",
+    "slug": "bench-press",
+    "match": "reviewed barbell exercise alias"
+  },
+  {
+    "exerciseId": "0027",
+    "exerciseName": "barbell bent over row",
+    "slug": "barbell-row",
+    "match": "reviewed barbell exercise alias"
+  },
+  {
+    "exerciseId": "0032",
+    "exerciseName": "barbell deadlift",
+    "slug": "deadlift",
+    "match": "reviewed barbell exercise alias"
+  },
+  {
+    "exerciseId": "0033",
+    "exerciseName": "barbell decline bench press",
+    "slug": "decline-bench-press",
+    "match": "reviewed barbell exercise alias"
+  },
+  {
+    "exerciseId": "0042",
+    "exerciseName": "barbell front squat",
+    "slug": "front-squat",
+    "match": "reviewed barbell exercise alias"
+  },
+  {
+    "exerciseId": "0047",
+    "exerciseName": "barbell incline bench press",
+    "slug": "incline-bench-press",
+    "match": "reviewed barbell exercise alias"
+  },
+  {
+    "exerciseId": "0085",
+    "exerciseName": "barbell romanian deadlift",
+    "slug": "romanian-deadlift",
+    "match": "reviewed barbell exercise alias"
+  },
+  {
+    "exerciseId": "0095",
+    "exerciseName": "barbell shrug",
+    "slug": "shrug",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0162",
+    "exerciseName": "cable front raise",
+    "slug": "cable-front-raise",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0178",
+    "exerciseName": "cable lateral raise",
+    "slug": "cable-lateral-raise",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0251",
+    "exerciseName": "chest dip",
+    "slug": "chest-dip",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0276",
+    "exerciseName": "dead bug",
+    "slug": "dead-bug",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0279",
+    "exerciseName": "decline push-up",
+    "slug": "decline-push-up",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0282",
+    "exerciseName": "decline sit-up",
+    "slug": "decline-sit-up",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0283",
+    "exerciseName": "diamond push-up",
+    "slug": "diamond-push-up",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0289",
+    "exerciseName": "dumbbell bench press",
+    "slug": "dumbbell-bench-press",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0293",
+    "exerciseName": "dumbbell bent over row",
+    "slug": "dumbbell-bent-over-row",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0308",
+    "exerciseName": "dumbbell fly",
+    "slug": "dumbbell-fly",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0405",
+    "exerciseName": "dumbbell seated shoulder press",
+    "slug": "seated-dumbbell-press",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0406",
+    "exerciseName": "dumbbell shrug",
+    "slug": "dumbbell-shrug",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0407",
+    "exerciseName": "dumbbell side bend",
+    "slug": "dumbbell-side-bend",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0471",
+    "exerciseName": "handstand push-up",
+    "slug": "handstand-push-up",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0472",
+    "exerciseName": "hanging leg raise",
+    "slug": "hanging-leg-raise",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0493",
+    "exerciseName": "incline push-up",
+    "slug": "incline-push-up",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0499",
+    "exerciseName": "inverted row",
+    "slug": "inverted-row",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0514",
+    "exerciseName": "jump squat",
+    "slug": "jump-squat",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0549",
+    "exerciseName": "kettlebell swing",
+    "slug": "kettlebell-swing",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0630",
+    "exerciseName": "mountain climber",
+    "slug": "mountain-climber",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0652",
+    "exerciseName": "pull-up",
+    "slug": "pull-up",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0662",
+    "exerciseName": "push-up",
+    "slug": "push-up",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0687",
+    "exerciseName": "russian twist",
+    "slug": "russian-twist",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0688",
+    "exerciseName": "scapular pull-up",
+    "slug": "scapular-pull-up",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0715",
+    "exerciseName": "side plank",
+    "slug": "side-plank",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0832",
+    "exerciseName": "weighted crunch",
+    "slug": "weighted-crunch",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0868",
+    "exerciseName": "cable curl",
+    "slug": "cable-curl",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "0872",
+    "exerciseName": "reverse crunch",
+    "slug": "reverse-crunch",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "1053",
+    "exerciseName": "kneeling hip flexor stretch",
+    "slug": "kneeling-hip-flexor-stretch",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "1160",
+    "exerciseName": "burpee",
+    "slug": "burpee",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "1163",
+    "exerciseName": "lying leg raise",
+    "slug": "lying-leg-raise",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "1200",
+    "exerciseName": "push press",
+    "slug": "push-press",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "1206",
+    "exerciseName": "cable pull through",
+    "slug": "cable-pull-through",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "1241",
+    "exerciseName": "bird dog",
+    "slug": "bird-dog",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "1326",
+    "exerciseName": "chin-up",
+    "slug": "chin-up",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "1409",
+    "exerciseName": "barbell glute bridge",
+    "slug": "barbell-glute-bridge",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "1459",
+    "exerciseName": "dumbbell romanian deadlift",
+    "slug": "dumbbell-romanian-deadlift",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "1471",
+    "exerciseName": "inchworm",
+    "slug": "inchworm",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "1489",
+    "exerciseName": "sissy squat",
+    "slug": "sissy-squat",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "1503",
+    "exerciseName": "band pull apart",
+    "slug": "band-pull-apart",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "1511",
+    "exerciseName": "hamstring stretch",
+    "slug": "hamstring-stretch",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "2258",
+    "exerciseName": "walking",
+    "slug": "walking",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "2612",
+    "exerciseName": "jump rope",
+    "slug": "jump-rope",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "2870",
+    "exerciseName": "swimming",
+    "slug": "swimming",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "2921",
+    "exerciseName": "pike push up",
+    "slug": "pike-push-up",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "3094",
+    "exerciseName": "jumping jack",
+    "slug": "jumping-jack",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "3294",
+    "exerciseName": "archer push up",
+    "slug": "archer-push-up",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "3335",
+    "exerciseName": "dumbbell glute bridge",
+    "slug": "dumbbell-glute-bridge",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "3360",
+    "exerciseName": "bear crawl",
+    "slug": "bear-crawl",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "3366",
+    "exerciseName": "shrimp squat",
+    "slug": "shrimp-squat",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "3367",
+    "exerciseName": "skater squat",
+    "slug": "skater-squat",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "3436",
+    "exerciseName": "superman",
+    "slug": "superman",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "3561",
+    "exerciseName": "glute bridge march",
+    "slug": "glute-bridge-march",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "3593",
+    "exerciseName": "barbell squat",
+    "slug": "squat",
+    "match": "reviewed barbell exercise alias"
+  },
+  {
+    "exerciseId": "3622",
+    "exerciseName": "v up",
+    "slug": "v-up",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "3705",
+    "exerciseName": "squat thrust",
+    "slug": "squat-thrust",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "3905",
+    "exerciseName": "arm circles",
+    "slug": "arm-circles",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "3930",
+    "exerciseName": "plank jack",
+    "slug": "plank-jack",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "4051",
+    "exerciseName": "side lying leg raise",
+    "slug": "side-lying-leg-raise",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "4170",
+    "exerciseName": "bear plank",
+    "slug": "bear-plank",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "4580",
+    "exerciseName": "cat cow stretch",
+    "slug": "cat-cow-stretch",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "4633",
+    "exerciseName": "world's greatest stretch",
+    "slug": "worlds-greatest-stretch",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "4726",
+    "exerciseName": "commando pull up",
+    "slug": "commando-pull-up",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "4742",
+    "exerciseName": "dumbbell hip thrust",
+    "slug": "dumbbell-hip-thrust",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "4853",
+    "exerciseName": "dumbbell lateral lunge",
+    "slug": "dumbbell-lateral-lunge",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "4861",
+    "exerciseName": "kettlebell romanian deadlift",
+    "slug": "kettlebell-romanian-deadlift",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "5121",
+    "exerciseName": "dumbbell sumo squat",
+    "slug": "dumbbell-sumo-squat",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "5460",
+    "exerciseName": "explosive push up",
+    "slug": "explosive-push-up",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "5649",
+    "exerciseName": "hollow rock",
+    "slug": "hollow-rock",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "5822",
+    "exerciseName": "prone y raise",
+    "slug": "prone-y-raise",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "5881",
+    "exerciseName": "crab walk",
+    "slug": "crab-walk",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "6211",
+    "exerciseName": "bicycle crunch",
+    "slug": "bicycle-crunch",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "7553",
+    "exerciseName": "doorway chest stretch",
+    "slug": "doorway-chest-stretch",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "7746",
+    "exerciseName": "nordic hamstring curl",
+    "slug": "nordic-hamstring-curl",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "8192",
+    "exerciseName": "dumbbell sumo deadlift",
+    "slug": "dumbbell-sumo-deadlift",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "9819",
+    "exerciseName": "hanging knee raise",
+    "slug": "hanging-knee-raise",
+    "match": "name and compatible equipment"
+  },
+  {
+    "exerciseId": "1004",
+    "exerciseName": "band squat",
+    "slug": "banded-squat",
+    "match": "same movement and compatible resistance-band equipment"
+  },
+  {
+    "exerciseId": "1009",
+    "exerciseName": "band stiff leg deadlift",
+    "slug": "dumbbell-romanian-deadlift",
+    "match": "same loaded hip hinge; dumbbells instead of resistance band"
+  },
+  {
+    "exerciseId": "1060",
+    "exerciseName": "barbell hip thrust",
+    "slug": "hip-thrust",
+    "match": "same movement and compatible barbell equipment"
+  },
+  {
+    "exerciseId": "1243",
+    "exerciseName": "dead bug v. 2",
+    "slug": "dead-bug",
+    "match": "same bodyweight movement; catalogue version variation"
+  },
+  {
+    "exerciseId": "1254",
+    "exerciseName": "band bench press",
+    "slug": "bench-press",
+    "match": "same bench press; barbell instead of resistance bands"
+  },
+  {
+    "exerciseId": "1323",
+    "exerciseName": "cable rope seated row",
+    "slug": "seated-row",
+    "match": "same seated cable row; handle variation"
+  },
+  {
+    "exerciseId": "1350",
+    "exerciseName": "lever seated row",
+    "slug": "machine-row",
+    "match": "same seated lever row; machine illustration"
+  },
+  {
+    "exerciseId": "1436",
+    "exerciseName": "barbell high bar squat",
+    "slug": "squat",
+    "match": "same barbell squat; high-bar distinction not shown"
+  },
+  {
+    "exerciseId": "1460",
+    "exerciseName": "walking lunge",
+    "slug": "walking-lunge",
+    "match": "same walking lunge; dumbbell load in illustration"
+  },
+  {
+    "exerciseId": "1476",
+    "exerciseName": "one leg squat",
+    "slug": "pistol-squat",
+    "match": "same single-leg squat movement"
+  },
+  {
+    "exerciseId": "1502",
+    "exerciseName": "band pushdown",
+    "slug": "tricep-pushdown",
+    "match": "same triceps pushdown; cable instead of resistance band"
+  },
+  {
+    "exerciseId": "1568",
+    "exerciseName": "kettlebell one arm swing",
+    "slug": "kettlebell-swing",
+    "match": "same kettlebell swing; two-handed variation"
+  },
+  {
+    "exerciseId": "1760",
+    "exerciseName": "dumbbell goblet squat",
+    "slug": "goblet-squat",
+    "match": "same movement and compatible dumbbell equipment"
+  },
+  {
+    "exerciseId": "2137",
+    "exerciseName": "dumbbell arnold press",
+    "slug": "arnold-press",
+    "match": "same movement and compatible dumbbell equipment"
+  },
+  {
+    "exerciseId": "2144",
+    "exerciseName": "cable seated chest press",
+    "slug": "machine-chest-press",
+    "match": "same seated chest press; machine instead of cable"
+  },
+  {
+    "exerciseId": "2267",
+    "exerciseName": "lever seated leg press",
+    "slug": "leg-press",
+    "match": "same seated leg press; machine illustration"
+  },
+  {
+    "exerciseId": "2330",
+    "exerciseName": "cable lat pulldown full range of motion",
+    "slug": "lat-pulldown",
+    "match": "same cable lat pulldown; full-range variation"
+  },
+  {
+    "exerciseId": "3322",
+    "exerciseName": "kettlebell deadlift",
+    "slug": "deadlift",
+    "match": "same deadlift movement; barbell instead of kettlebell"
+  },
+  {
+    "exerciseId": "3326",
+    "exerciseName": "band alternate lat pulldown with twist",
+    "slug": "banded-lat-pulldown",
+    "match": "same band lat pulldown; twisting variation not shown"
+  },
+  {
+    "exerciseId": "3518",
+    "exerciseName": "band seated leg extension",
+    "slug": "leg-extension",
+    "match": "same seated knee extension; machine instead of resistance band"
+  },
+  {
+    "exerciseId": "3575",
+    "exerciseName": "kettlebell backward lunge",
+    "slug": "reverse-lunge",
+    "match": "same backward lunge; dumbbell instead of kettlebell"
+  },
+  {
+    "exerciseId": "3780",
+    "exerciseName": "band standing chest press",
+    "slug": "machine-chest-press",
+    "match": "same horizontal chest press; machine instead of resistance band"
+  },
+  {
+    "exerciseId": "3899",
+    "exerciseName": "band bent over row",
+    "slug": "banded-row",
+    "match": "same band row; stance variation"
+  },
+  {
+    "exerciseId": "4063",
+    "exerciseName": "band biceps curl",
+    "slug": "bicep-curl",
+    "match": "same biceps curl; dumbbells instead of resistance band"
+  },
+  {
+    "exerciseId": "4682",
+    "exerciseName": "band bent over rear delt fly",
+    "slug": "rear-delt-fly",
+    "match": "same rear-delt fly; dumbbell instead of resistance band"
+  },
+  {
+    "exerciseId": "5607",
+    "exerciseName": "band face pull",
+    "slug": "banded-face-pull",
+    "match": "same movement and compatible resistance-band equipment"
+  },
+  {
+    "exerciseId": "5661",
+    "exerciseName": "dumbbell bent over row with chest support",
+    "slug": "chest-supported-row",
+    "match": "same chest-supported row; machine instead of dumbbells"
+  },
+  {
+    "exerciseId": "0426",
+    "exerciseName": "dumbbell standing overhead press",
+    "slug": "standing-dumbbell-press",
+    "match": "same movement and compatible dumbbell equipment"
+  },
+  {
+    "exerciseId": "0334",
+    "exerciseName": "dumbbell lateral raise",
+    "slug": "lateral-raise",
+    "match": "same movement and compatible dumbbell equipment"
+  },
+  {
+    "exerciseId": "0241",
+    "exerciseName": "cable triceps pushdown (v-bar)",
+    "slug": "tricep-pushdown",
+    "match": "same cable pushdown; handle variation"
+  },
+  {
+    "exerciseId": "0031",
+    "exerciseName": "barbell curl",
+    "slug": "ez-bar-curl",
+    "match": "same bar curl; EZ-bar variation"
+  },
+  {
+    "exerciseId": "0313",
+    "exerciseName": "dumbbell hammer curl",
+    "slug": "hammer-curl",
+    "match": "same movement and compatible dumbbell equipment"
+  },
+  {
+    "exerciseId": "0043",
+    "exerciseName": "barbell full squat",
+    "slug": "squat",
+    "match": "same barbell squat movement"
+  },
+  {
+    "exerciseId": "0739",
+    "exerciseName": "sled 45° leg press",
+    "slug": "leg-press",
+    "match": "same leg press; machine variation"
+  },
+  {
+    "exerciseId": "0585",
+    "exerciseName": "lever leg extension",
+    "slug": "leg-extension",
+    "match": "same movement and compatible machine equipment"
+  },
+  {
+    "exerciseId": "0586",
+    "exerciseName": "lever lying leg curl",
+    "slug": "lying-leg-curl",
+    "match": "same movement and compatible machine equipment"
+  },
+  {
+    "exerciseId": "0605",
+    "exerciseName": "lever standing calf raise",
+    "slug": "standing-calf-raise",
+    "match": "same movement and compatible machine equipment"
+  },
+  {
+    "exerciseId": "0587",
+    "exerciseName": "lever military press",
+    "slug": "machine-shoulder-press",
+    "match": "same lever shoulder press; machine variation"
+  },
+  {
+    "exerciseId": "0150",
+    "exerciseName": "cable bar lateral pulldown",
+    "slug": "lat-pulldown",
+    "match": "same cable lat pulldown; bar attachment variation"
+  },
+  {
+    "exerciseId": "0599",
+    "exerciseName": "lever seated leg curl",
+    "slug": "seated-leg-curl",
+    "match": "same movement and compatible machine equipment"
+  },
+  {
+    "exerciseId": "0336",
+    "exerciseName": "dumbbell lunge",
+    "slug": "forward-lunge",
+    "match": "same lunge movement; bodyweight illustration"
+  },
+  {
+    "exerciseId": "0091",
+    "exerciseName": "barbell seated overhead press",
+    "slug": "overhead-press",
+    "match": "same barbell overhead press; seated posture variation"
+  },
+  {
+    "exerciseId": "0534",
+    "exerciseName": "kettlebell goblet squat",
+    "slug": "goblet-squat",
+    "match": "same goblet squat; dumbbell instead of kettlebell"
+  },
+  {
+    "exerciseId": "0432",
+    "exerciseName": "dumbbell stiff leg deadlift",
+    "slug": "dumbbell-romanian-deadlift",
+    "match": "same dumbbell hip hinge; Romanian deadlift variation"
+  },
+  {
+    "exerciseId": "0285",
+    "exerciseName": "dumbbell alternate biceps curl",
+    "slug": "bicep-curl",
+    "match": "same dumbbell curl; alternating variation"
+  },
+  {
+    "exerciseId": "0314",
+    "exerciseName": "dumbbell incline bench press",
+    "slug": "incline-dumbbell-press",
+    "match": "same movement and compatible dumbbell equipment"
+  },
+  {
+    "exerciseId": "0417",
+    "exerciseName": "dumbbell standing calf raise",
+    "slug": "standing-calf-raise",
+    "match": "same standing calf raise; machine instead of dumbbells"
+  },
+  {
+    "exerciseId": "0911",
+    "exerciseName": "band lying leg curl",
+    "slug": "lying-leg-curl",
+    "match": "same lying leg curl; machine instead of resistance band"
+  },
+  {
+    "exerciseId": "0997",
+    "exerciseName": "band shoulder press",
+    "slug": "machine-shoulder-press",
+    "match": "same shoulder press; machine instead of resistance band"
+  },
+  {
+    "exerciseId": "0909",
+    "exerciseName": "band lunges",
+    "slug": "forward-lunge",
+    "match": "same lunge movement; bodyweight illustration"
+  },
+  {
+    "exerciseId": "0894",
+    "exerciseName": "band calf raise",
+    "slug": "calf-raise",
+    "match": "same calf raise; bodyweight illustration"
+  },
+  {
+    "exerciseId": "0175",
+    "exerciseName": "cable kneeling crunch",
+    "slug": "cable-crunch",
+    "match": "same cable crunch; kneeling setup"
+  },
+  {
+    "exerciseId": "0030",
+    "exerciseName": "barbell close-grip bench press",
+    "slug": "close-grip-bench-press",
+    "match": "same movement and compatible barbell equipment"
+  },
+  {
+    "exerciseId": "0592",
+    "exerciseName": "lever preacher curl",
+    "slug": "preacher-curl",
+    "match": "same preacher curl; machine instead of free-weight support"
+  },
+  {
+    "exerciseId": "0430",
+    "exerciseName": "dumbbell standing triceps extension",
+    "slug": "dumbbell-overhead-tricep-extension",
+    "match": "same movement and compatible dumbbell equipment"
+  },
+  {
+    "exerciseId": "0378",
+    "exerciseName": "dumbbell rear fly",
+    "slug": "rear-delt-fly",
+    "match": "same rear-delt fly and compatible dumbbell equipment"
+  },
+  {
+    "exerciseId": "0319",
+    "exerciseName": "dumbbell incline fly",
+    "slug": "incline-cable-fly",
+    "match": "same incline chest fly; cable instead of dumbbells"
+  },
+  {
+    "exerciseId": "0227",
+    "exerciseName": "cable standing fly",
+    "slug": "cable-fly",
+    "match": "same cable fly movement"
+  },
+  {
+    "exerciseId": "0054",
+    "exerciseName": "barbell lunge",
+    "slug": "forward-lunge",
+    "match": "same barbell lunge pattern; bodyweight illustration"
+  },
+  {
+    "exerciseId": "0576",
+    "exerciseName": "lever chest press",
+    "slug": "machine-chest-press",
+    "match": "same movement and compatible machine equipment"
+  },
+  {
+    "exerciseId": "0861",
+    "exerciseName": "cable seated row",
+    "slug": "seated-row",
+    "match": "same seated cable row movement"
+  },
+  {
+    "exerciseId": "0114",
+    "exerciseName": "barbell step-up",
+    "slug": "step-up",
+    "match": "same step-up; dumbbell instead of barbell"
+  },
+  {
+    "exerciseId": "0520",
+    "exerciseName": "kettlebell alternating press",
+    "slug": "standing-dumbbell-press",
+    "match": "same alternating overhead press; dumbbell instead of kettlebell"
+  },
+  {
+    "exerciseId": "0541",
+    "exerciseName": "kettlebell one arm row",
+    "slug": "one-arm-dumbbell-row",
+    "match": "same one-arm row; dumbbell instead of kettlebell"
+  }
+]

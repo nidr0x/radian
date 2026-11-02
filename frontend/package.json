@@ -1,0 +1,31 @@
+{
+  "name": "radian-frontend",
+  "private": true,
+  "version": "1.4.2",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && node scripts/check-pwa-bundle.mjs",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:fatigue-probe": "node scripts/fatigue-monotonic-probe.mjs"
+  },
+  "license": "AGPL-3.0-or-later",
+  "dependencies": {
+    "jsqr": "^1.4.0",
+    "lean-qr": "^2.7.3",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "react-router-dom": "^7.18.2",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.3",
+    "@vitest/coverage-v8": "^4.1.11",
+    "happy-dom": "^20.11.2",
+    "linkedom": "^0.18.13",
+    "vite": "^8.1.5",
+    "vitest": "^4.1.10"
+  }
+}
