@@ -1,51 +1,70 @@
 # Radian
 
-Radian is an open-source workout planner and training log delivered as a progressive web app (PWA). The public project targets Cloudflare Pages, Pages Functions, D1, R2, and Queues. This repository does not publish native iOS or Android apps.
+[![License: AGPL v3 or later](https://img.shields.io/badge/License-AGPL--3.0%2B-blue.svg)](LICENSE)
+
+**Radian is an open-source workout planner and training log built as a progressive web app (PWA).** It is a fork of [OpenGym](https://github.com/DuarteSantos8/openGym), adapted to run on Cloudflare Workers with D1, R2, and Queues.
+
+Radian is designed for the web and can be installed as a PWA. This repository does not include native iOS or Android apps.
 
 ## Features
 
-- Exercise library, routines, workout logging, history, and progress views.
-- Offline PWA shell and local workout storage.
-- Optional account sync in D1 and encrypted device pairing.
-- Optional remote MCP access with explicit consent controls.
-- Exercise illustrations and animations from the separately licensed Workout Guide collection; attribution and terms are in `frontend/public/exercise-media/workout-guide/`.
+- Browse exercises, build routines, log workouts, and review training history and progress.
+- Use the app shell and locally stored workout data offline.
+- Optionally sync account data through D1 and pair devices with encrypted sharing.
+- Connect remote MCP tools with explicit authorization controls.
+- Browse exercise illustrations and animations from the separately licensed Workout Guide collection. See the attribution and terms in `frontend/public/exercise-media/workout-guide/`.
 
-## Development
+## Architecture
 
-Install the root tooling and PWA dependencies, then build or run the frontend:
+| Layer | Cloudflare service |
+| --- | --- |
+| PWA and API | Pages and Pages Functions (Workers) |
+| Account and workout data | D1 |
+| Media and pairing objects | R2 |
+| Background jobs | Queues |
+
+The frontend is built with Vite. Pages serves the generated PWA from `frontend/dist` and runs API handlers from `functions/`.
+
+## Run locally
+
+Install dependencies and build the PWA:
 
 ```sh
 npm ci
 npm ci --prefix frontend
 npm run build
-npm --prefix frontend run dev
 ```
 
-The Vite server serves the PWA and proxies `/api` to `API_TARGET` (default `http://127.0.0.1:3000`). For the full local Pages Functions and Jobs runtime, configure local Wrangler files and use `node scripts/radian-local-runtime.mjs`; local D1/R2/Queue state is temporary and discarded when the process stops.
+Start the frontend development server with:
 
-Focused checks:
+```sh
+npm run dev
+```
+
+The Vite server proxies `/api` to `API_TARGET`, which defaults to `http://127.0.0.1:3000`. To run the full local Pages Functions and Jobs runtime, configure local Wrangler bindings and use `node scripts/radian-local-runtime.mjs`. Local D1, R2, and Queue state is temporary and discarded when the process stops.
+
+## Checks
 
 ```sh
 npm test
 npm --prefix frontend test
 npm run lint:functions
-npx wrangler pages functions build functions
+npm run build:functions
 ```
 
-## Cloudflare Pages
+## Deploy to Cloudflare Pages
 
-Set the Pages build command to:
+Create a Pages project for the repository and use:
 
-```sh
-npm ci && npm ci --prefix frontend && npm run build
-```
+| Setting | Value |
+| --- | --- |
+| Build command | `npm ci && npm ci --prefix frontend && npm run build` |
+| Build output directory | `frontend/dist` |
 
-Use `frontend/dist` as the build output directory. Pages discovers the Functions in `functions/`. Configure a D1 database bound as `DB` and apply the numbered migrations in `migrations/`. Add R2 and Queue bindings only for the features you enable. Configure `SESSION_SECRET`, WebAuthn origin values, and the MCP origin as environment secrets or variables in Cloudflare; never commit them.
-
-Use separate Cloudflare projects, databases, buckets, queues, and secrets for production, previews, and personal deployments. `wrangler.jsonc` is a generic Pages configuration; account-specific files such as `wrangler.radian-new.jsonc` are local-only and ignored by Git.
+Pages discovers the Functions in `functions/`. Bind a D1 database as `DB` and apply the SQL files in `migrations/`. Configure R2 buckets and Queues for the features you enable. Set `SESSION_SECRET`, WebAuthn origins, and MCP origin in Cloudflare as secrets or variables; never commit credentials or account-specific resource IDs.
 
 ## Upstream and licensing
 
-Radian is maintained as an independent project and includes code derived from openGym. Its upstream license and third-party attributions are preserved in `LICENSE`, `frontend/UPSTREAM-NOTICE.md`, and `frontend/THIRD-PARTY-NOTICES.md`. The exercise media is governed by its own license; it is not covered by the application license.
+Radian is a fork of [OpenGym](https://github.com/DuarteSantos8/openGym). Upstream attribution and third-party notices are preserved in `frontend/UPSTREAM-NOTICE.md` and `frontend/THIRD-PARTY-NOTICES.md`.
 
-The application is distributed under the GNU AGPL v3.0 or later. See `LICENSE` and the upstream notices before reusing or redistributing any part of the project.
+The application is distributed under the GNU Affero General Public License v3.0 or later. Exercise media has separate licensing terms and is not covered by the application license. See `LICENSE` and the notices before reusing or redistributing the project or its media.
