@@ -1,7 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "radian",
-  "pages_build_output_dir": "./frontend/dist",
   "compatibility_date": "2026-10-26",
   "compatibility_flags": ["nodejs_compat"]
 }
