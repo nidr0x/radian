@@ -1,0 +1,23 @@
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+coverage/
+.claude/
+.taste-skill/
+.wrangler/
+.dev.vars*
+.env*
+.DS_Store
+*.tsbuildinfo
+_worker.bundle
+/AGENTS.md
+
+# Local Cloudflare accounts and resource identifiers
+wrangler.radian-new*.jsonc
+wrangler.radian*.local.jsonc
+wrangler.personal*.jsonc
+
+# Local Codex coordination state, except the project marker
+.codex/coordination/*
+!.codex/coordination/project.yaml
