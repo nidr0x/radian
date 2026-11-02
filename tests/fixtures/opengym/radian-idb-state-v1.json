@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "onboardingComplete": true,
+  "profile": {
+    "theme": "dark",
+    "nutritionContext": "Example nutrition context"
+  },
+  "exercises": [
+    {
+      "id": "guest-row",
+      "name": "Example exercise",
+      "muscleGroup": "back",
+      "equipment": "cable",
+      "aliases": []
+    }
+  ],
+  "plan": {
+    "id": "guest-plan",
+    "version": 1,
+    "days": [
+      {
+        "id": "guest-routine",
+        "weekday": 1,
+        "name": "Example day",
+        "exercises": [
+          {
+            "id": "guest-slot",
+            "exerciseId": "guest-row",
+            "name": "Example exercise",
+            "sets": 3,
+            "repMin": 8,
+            "repMax": 10,
+            "restSeconds": 60
+          }
+        ]
+      }
+    ]
+  },
+  "sessions": [
+    {
+      "id": "guest-workout",
+      "workoutDayId": "guest-routine",
+      "dateKey": "2020-01-01",
+      "startedAt": "2020-01-01T10:00:00.000Z",
+      "status": "completed",
+      "plannedExercises": [
+        {
+          "plannedExerciseId": "guest-slot",
+          "exerciseId": "guest-row",
+          "name": "Example exercise",
+          "sets": 3,
+          "repMin": 8,
+          "repMax": 10,
+          "warmupSets": 1,
+          "actualWeightKg": 40,
+          "actualReps": 9,
+          "completed": true
+        }
+      ]
+    }
+  ],
+  "progress": [
+    {
+      "id": "guest-weight",
+      "date": "2020-01-01",
+      "weightKg": 75
+    }
+  ],
+  "checkins": [
+    {
+      "id": "guest-checkin",
+      "weekKey": "2020-W01",
+      "energy": "low",
+      "soreness": "high"
+    }
+  ]
+}

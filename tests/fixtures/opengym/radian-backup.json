@@ -1,0 +1,122 @@
+{
+  "app": "radian",
+  "exportedAt": "2020-01-01T00:00:00.000Z",
+  "data": {
+    "schemaVersion": 1,
+    "onboardingComplete": true,
+    "profile": {
+      "goal": "general fitness",
+      "gym": "Example Gym",
+      "trainingDays": [
+        1,
+        3
+      ],
+      "sessionMinutes": 60,
+      "experienceLevel": "beginner",
+      "availableEquipment": [
+        "barbell"
+      ],
+      "largeText": false,
+      "nutritionContext": "Example nutrition context",
+      "theme": "dark"
+    },
+    "exercises": [
+      {
+        "id": "custom-row",
+        "name": "Example exercise",
+        "muscleGroup": "back",
+        "equipment": "barbell",
+        "aliases": []
+      }
+    ],
+    "plan": {
+      "id": "plan-fixture",
+      "version": 2,
+      "days": [
+        {
+          "id": "day-fixture",
+          "weekday": 1,
+          "shortLabel": "A",
+          "name": "Example day",
+          "focus": "upper",
+          "exercises": [
+            {
+              "id": "slot-fixture",
+              "exerciseId": "custom-row",
+              "name": "Example exercise",
+              "sets": 3,
+              "repMin": 6,
+              "repMax": 8,
+              "restSeconds": 90,
+              "active": true,
+              "progressionPolicy": "double",
+              "progressionIncrementKg": 2.5
+            }
+          ]
+        }
+      ]
+    },
+    "sessions": [
+      {
+        "id": "session-fixture",
+        "workoutDayId": "day-fixture",
+        "dateKey": "2020-01-01",
+        "startedAt": "2020-01-01T10:00:00.000Z",
+        "completedAt": "2020-01-01T10:30:00.000Z",
+        "status": "completed",
+        "activeExerciseIndex": 0,
+        "readiness": {
+          "energy": "low",
+          "soreness": "high"
+        },
+        "plannedExercises": [
+          {
+            "plannedExerciseId": "slot-fixture",
+            "exerciseId": "custom-row",
+            "name": "Example exercise",
+            "sets": 3,
+            "repMin": 6,
+            "repMax": 8,
+            "restSeconds": 90,
+            "warmupSets": 0,
+            "progressionPolicy": "double",
+            "progressionIncrementKg": 2.5,
+            "completed": true,
+            "discomfort": true,
+            "discomfortNote": "Example note",
+            "setLogs": [
+              {
+                "setNumber": 1,
+                "phase": "work",
+                "targetReps": 8,
+                "actualReps": 8,
+                "weightKg": 40,
+                "completed": true
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "progress": [
+      {
+        "id": "progress-fixture",
+        "date": "2020-01-01",
+        "weightKg": 75,
+        "waistCm": 80,
+        "chestCm": 100
+      }
+    ],
+    "checkins": [
+      {
+        "id": "checkin-fixture",
+        "weekKey": "2020-W01",
+        "createdAt": "2020-01-01T00:00:00.000Z",
+        "energy": "low",
+        "soreness": "high",
+        "feeling": "Example check-in",
+        "completedWorkouts": 2
+      }
+    ]
+  }
+}

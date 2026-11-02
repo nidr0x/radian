@@ -1,0 +1,5 @@
+# Exercise illustration credits
+
+Selected exercise illustrations are from [Workout Guide](https://github.com/bryllim/workout-guide), created by Bryl Lim and based on [Everkinetic exercise artwork](https://github.com/everkinetic/data). The artwork is licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
+
+The PWA maps all 80 distinct exercises used by its 60 routine programs to 125 local Workout Guide illustrations. Forty illustrations (120 PNG frames) were added from [commit `aac5992`](https://github.com/bryllim/workout-guide/tree/aac599224bb9780305239607ef98540b7e0ce389). Some illustrate a close variation in equipment or stance; `mappings.json` records the match for each app exercise. The PWA displays the white line art inverted to black with CSS and does not modify the distributed PNG frames. `manifest.json` records attribution and source details for each illustration. See [`ATTRIBUTION.md`](./ATTRIBUTION.md) and [`LICENSE-ASSETS`](./LICENSE-ASSETS) for attribution and the asset license.
