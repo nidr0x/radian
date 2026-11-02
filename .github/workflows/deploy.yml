@@ -1,0 +1,57 @@
+name: Validate Radian
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate PWA and Pages Functions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install PWA dependencies
+        run: npm ci --prefix frontend
+
+      - name: Lint and type-check Functions
+        run: |
+          npm run lint
+          npm run lint:functions
+
+      - name: Check backend contracts
+        run: npm test
+
+      - name: Check PWA and build
+        run: |
+          npm --prefix frontend test -- --reporter=dot
+          npm run build
+
+      - name: Build Pages Functions
+        run: npm run build:functions
+
+      - name: Check diff formatting
+        run: git diff --check

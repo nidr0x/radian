@@ -1,0 +1,119 @@
+{
+  "app": "radian",
+  "exportedAt": "2020-01-01T00:00:00.000Z",
+  "data": {
+    "schemaVersion": 7,
+    "onboardingComplete": true,
+    "profile": {
+      "theme": "light",
+      "gym": "Example Gym"
+    },
+    "exercises": [
+      {
+        "id": "custom-deadlift",
+        "name": "Example exercise",
+        "muscleGroup": "legs",
+        "equipment": "barbell",
+        "aliases": [
+          "deadlift"
+        ]
+      }
+    ],
+    "plan": {
+      "id": "plan-current",
+      "version": 4,
+      "days": [
+        {
+          "id": "day-beta",
+          "weekday": 5,
+          "name": "Example day",
+          "exercises": [
+            {
+              "id": "slot-beta",
+              "exerciseId": "custom-deadlift",
+              "name": "Example exercise",
+              "sets": 2,
+              "repMin": 5,
+              "repMax": 5,
+              "restSeconds": 120
+            }
+          ]
+        },
+        {
+          "id": "day-alpha",
+          "weekday": 1,
+          "name": "Example day",
+          "exercises": []
+        }
+      ]
+    },
+    "sessions": [
+      {
+        "id": "session-beta",
+        "workoutDayId": "day-beta",
+        "dateKey": "2020-01-01",
+        "startedAt": "2020-01-01T10:00:00.000Z",
+        "completedAt": "2020-01-01T10:30:00.000Z",
+        "status": "completed",
+        "plannedExercises": [
+          {
+            "plannedExerciseId": "slot-beta",
+            "exerciseId": "custom-deadlift",
+            "name": "Example exercise",
+            "completed": true,
+            "setLogs": [
+              {
+                "setNumber": 2,
+                "phase": "work",
+                "actualReps": 5,
+                "weightKg": 40,
+                "completed": true
+              },
+              {
+                "setNumber": 1,
+                "phase": "warmup",
+                "actualReps": 8,
+                "weightKg": 40,
+                "completed": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "session-orphan",
+        "workoutDayId": "removed-day",
+        "dateKey": "2020-01-01",
+        "startedAt": "2020-01-01T10:00:00.000Z",
+        "status": "in_progress",
+        "plannedExercises": [
+          {
+            "plannedExerciseId": "removed-slot",
+            "exerciseId": "removed-exercise",
+            "name": "Example exercise",
+            "completed": false,
+            "setLogs": []
+          }
+        ]
+      }
+    ],
+    "progress": [
+      {
+        "id": "progress-current",
+        "date": "2020-01-01",
+        "weightKg": 75,
+        "waistCm": 80,
+        "armCm": 32
+      },
+      {
+        "id": "progress-invalid-date",
+        "date": "2020-01-01",
+        "weightKg": 75,
+        "chestCm": 100
+      }
+    ],
+    "readiness": {
+      "energy": "synthetic-only"
+    }
+  }
+}
