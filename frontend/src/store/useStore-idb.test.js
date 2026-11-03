@@ -219,6 +219,49 @@ describe('persistencia del store web', () => {
     expect(await stateStore.get('account-a')).toMatchObject({ base: { rev: 6, wid: 'server-a6' }, owed: false, outbox: null })
   })
 
+  it('conserva la revisión nueva tras combinar una copia local pendiente', async () => {
+    await stateStore.open()
+    const pending = { ...useStore.getState().S, theme: 'dark', workouts: [{ id: 'offline-workout' }], _ts: 40 }
+    const remote = { ...useStore.getState().S, theme: 'light', workouts: [{ id: 'server-workout' }], _ts: 50, _wid: 'server-a5' }
+    await stateStore.save('account-a', {
+      state: pending,
+      base: { rev: 4, ts: 30, wid: 'server-a4' },
+      wid: 'local-a',
+      owed: true,
+    })
+    localStorage.setItem('gym_owner', 'account-a')
+    localStorage.setItem('gym_state_owner', 'account-a')
+    localStorage.setItem('gym_user', JSON.stringify({ id: 'account-a', name: 'Ada' }))
+
+    const putBodies = []
+    mocks.api.mockImplementation(async (path, options = {}) => {
+      if (path === '/api/config') return { allow_guest: true, invite_only: false, password_login: false }
+      if (path === '/api/me') return { user: { id: 'account-a', name: 'Ada' } }
+      if (path === '/api/data' && options.method === 'PUT') {
+        const body = JSON.parse(options.body)
+        putBodies.push(body)
+        if (body.baseRev !== 5 || body.baseWid !== 'server-a5') {
+          throw Object.assign(new Error('conflict'), {
+            status: 409,
+            data: { error: 'conflict', state: remote, rev: 5, wid: 'server-a5' },
+          })
+        }
+        return { rev: 6, wid: 'server-a6' }
+      }
+      if (path === '/api/data') return { state: remote, rev: 5 }
+      throw new Error(`Unexpected API request: ${path}`)
+    })
+    vi.resetModules()
+    ;({ useStore } = await import('./useStore.js'))
+    ;({ stateStore } = await import('../lib/state-store-idb.js'))
+
+    await useStore.getState().boot()
+    await useStore.getState().saveNow()
+
+    expect(putBodies[0]).toMatchObject({ baseRev: 5, baseWid: 'server-a5' })
+    expect(await stateStore.get('account-a')).toMatchObject({ base: { rev: 6, wid: 'server-a6' }, owed: false })
+  })
+
   it('conserva y actualiza la copia local si IndexedDB no se puede abrir', async () => {
     const legacy = { ...useStore.getState().S, theme: 'light', workouts: [{ id: 'legacy-a' }] }
     localStorage.setItem('gym_owner', 'account-a')
