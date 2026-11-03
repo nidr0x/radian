@@ -61,7 +61,7 @@ Create a Pages project for the repository and use:
 | Build command | `npm ci && npm ci --prefix frontend && npm run build` |
 | Build output directory | `frontend/dist` |
 
-Pages discovers the Functions in `functions/`. Bind a D1 database as `DB` and apply the SQL files in `migrations/`. Configure R2 buckets and Queues for the features you enable. Set `SESSION_SECRET`, WebAuthn origins, and MCP origin in Cloudflare as secrets or variables; never commit credentials or account-specific resource IDs.
+Pages discovers the Functions in `functions/`. Bind a D1 database as `DB` and apply the SQL files in `migrations/`. Configure R2 buckets and Queues for the features you enable. For encrypted device pairing, bind `PAIR_OBJECTS` on both Pages and the Jobs Worker to the same R2 bucket; the Jobs Worker drains queued pairing-object deletions on its scheduled trigger. Set `SESSION_SECRET`, WebAuthn origins, and MCP origin in Cloudflare as secrets or variables; never commit credentials or account-specific resource IDs.
 
 For optional Umami analytics, set `VITE_UMAMI_SRC` and `VITE_UMAMI_ID` at build time, then set the Pages runtime variable `UMAMI_ORIGIN` to the matching HTTPS origin (for example, `https://stats.example`). The origin is added only to the script and connection sources in the Content Security Policy.
 

@@ -22,6 +22,7 @@ vi.mock('../functions/lib/db/radian/state', () => ({ readGymState: mocks.readGym
 vi.mock('../functions/lib/radian-api/jobs', () => ({ enqueueDurableJob: mocks.enqueueDurableJob }));
 
 import { onRequestPost as startCoachPlan } from '../functions/api/coach/plan';
+import { onRequestGet as getCoachStatus } from '../functions/api/coach/status';
 
 const database = {
   prepare: vi.fn<(sql: string) => D1PreparedStatementLike>((sql: string) => {
@@ -61,6 +62,17 @@ beforeEach(() => {
 });
 
 describe('rutas de trabajos Coach', () => {
+  it('usa el bucket de limitación específico del sondeo de estado', async () => {
+    const routeContext = context({});
+    const response = await getCoachStatus({
+      ...routeContext,
+      request: new Request('https://gym.example.test/api/coach/status'),
+    });
+
+    expect(response.status).toBe(200);
+    expect(mocks.enforceAuthRateLimit).toHaveBeenCalledWith(expect.any(Object), 'coach-status', 'account-a');
+  });
+
   it('encola el plan bajo la cuenta autenticada con la opción de intake validada', async () => {
     const response = await startCoachPlan(context({ intake: { goal: 'strength' }, lang: 'es' }));
 

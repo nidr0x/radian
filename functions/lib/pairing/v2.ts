@@ -103,6 +103,9 @@ export const pairRow = (database: D1DatabaseLike, pairId: string) => database.pr
 export const pairRateLimit = async (context: PairContext, pairId: string): Promise<Response | undefined> =>
   enforceAuthRateLimit(context, 'sync-pair-v2', pairId.slice(0, 8));
 
+export const pairWriteRateLimit = async (context: PairContext): Promise<Response | undefined> =>
+  enforceAuthRateLimit(context, 'pair-v2-write-ip');
+
 export const authorizePair = async (
   database: D1DatabaseLike,
   pairId: string,
@@ -117,10 +120,6 @@ export const authorizePair = async (
   if (Date.parse(row.expiresAt) <= Date.now()) return { response: json({ error: 'pair_expired' }, 410) };
   return { row };
 };
-
-const queueCleanup = (database: D1DatabaseLike, pairId: string, objectKey: string, queuedAt: string) => database.prepare(
-  'INSERT OR IGNORE INTO gym_pair_cleanup_objects (object_key, pair_id, queued_at) VALUES (?, ?, ?)',
-).bind(objectKey, pairId, queuedAt);
 
 const queueCleanupAfterSnapshotSwap = (
   database: D1DatabaseLike,
@@ -271,14 +270,22 @@ export const revokePair = async (context: PairContext, pairId: string, authKey: 
   const current = await pairRow(database, pairId);
   if (!current) return json({ revoked: true });
   if (!constantTimeHexEqual(await sha256Hex(authKey), current.authorizationVerifier)) return json({ error: 'pair_forbidden' }, 403);
+  if (current.revokedAt) return json({ error: 'pair_revoked' }, 410);
   const now = new Date().toISOString();
   const retainUntil = new Date(Date.now() + TOMBSTONE_DAYS * 86400000).toISOString();
-  const media = await database.prepare('SELECT object_key AS objectKey FROM gym_pair_media_objects WHERE pair_id = ?').bind(pairId).all<{ objectKey: string }>();
-  const keys = [...new Set([current.r2ObjectKey, ...media.results.map((row) => row.objectKey)].filter((key): key is string => !!key))];
   const statements = [
     database.prepare('UPDATE gym_pair_channels SET revoked_at = ?, ciphertext = NULL, r2_object_key = NULL WHERE pair_id = ? AND authorization_verifier = ? AND revoked_at IS NULL').bind(now, pairId, current.authorizationVerifier),
+    database.prepare(
+      `INSERT OR IGNORE INTO gym_pair_cleanup_objects (object_key, pair_id, queued_at)
+       SELECT ?, ?, ? WHERE ? IS NOT NULL AND changes() = 1
+       UNION ALL
+       SELECT object_key, pair_id, ? FROM gym_pair_media_objects WHERE pair_id = ? AND changes() = 1`,
+    ).bind(current.r2ObjectKey, pairId, now, current.r2ObjectKey, now, pairId),
     database.prepare('INSERT INTO gym_pair_tombstones (pair_id, revoked_at, retain_until) VALUES (?, ?, ?) ON CONFLICT(pair_id) DO UPDATE SET revoked_at = excluded.revoked_at, retain_until = excluded.retain_until').bind(pairId, now, retainUntil),
-    ...keys.map((key) => queueCleanup(database, pairId, key, now)),
+    database.prepare(
+      `DELETE FROM gym_pair_media_objects WHERE pair_id = ?
+       AND EXISTS (SELECT 1 FROM gym_pair_channels WHERE pair_id = ? AND revoked_at = ?)`,
+    ).bind(pairId, pairId, now),
   ];
   const results = await database.batch(statements);
   if ((results[0]?.meta?.changes ?? 0) !== 1) return json({ error: 'pair_revoked' }, 410);
