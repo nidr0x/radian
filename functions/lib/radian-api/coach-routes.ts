@@ -2,6 +2,7 @@ import { enforceAuthRateLimit, getAuthenticatedContext, isRecord, json, randomId
 import { readGymState } from '../db/radian/state';
 import { enqueueDurableJob, type JobQueueLike } from './jobs';
 import { coachRuntime, type CoachWorkerEnvironment } from './coach.js';
+import { readSmallText } from './request';
 import type { SyncContext, SyncEnv } from '../../types';
 
 export type CoachApiEnvironment = SyncEnv & CoachWorkerEnvironment & { PUSH_QUEUE?: JobQueueLike };
@@ -10,11 +11,10 @@ export type CoachApiContext = SyncContext & { env: CoachApiEnvironment };
 const MAX_REQUEST_BYTES = 12_000;
 
 const readCoachBody = async (request: Request): Promise<Record<string, unknown> | null> => {
-  let text: string;
-  try { text = await request.text(); } catch { return null; }
-  if (new TextEncoder().encode(text).byteLength > MAX_REQUEST_BYTES) return null;
+  const text = await readSmallText(request, MAX_REQUEST_BYTES);
+  if (!text.ok) return null;
   try {
-    const body: unknown = JSON.parse(text);
+    const body: unknown = JSON.parse(text.value);
     return isRecord(body) ? body : null;
   } catch { return null; }
 };

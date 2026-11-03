@@ -31,14 +31,19 @@ export const onRequestPost = async (context: MediaContext): Promise<Response> =>
   let removed = 0;
   for (const row of rows.results) {
     if (referenced.has(row.mediaId)) continue;
-    const deleted = await authenticated.env.DB!.prepare(
-      `DELETE FROM gym_media_objects
-        WHERE account_id = ? AND media_id = ? AND object_key = ? AND created_at = ?
-          AND EXISTS (SELECT 1 FROM gym_sync_state WHERE account_id = ? AND revision = ?)
-          AND NOT EXISTS (SELECT 1 FROM gym_media_references WHERE account_id = ? AND media_id = ?)`
-    ).bind(authenticated.user.id, row.mediaId, row.objectKey, row.createdAt, authenticated.user.id, snapshot.rev, authenticated.user.id, row.mediaId).run();
+    const [deleted] = await authenticated.env.DB!.batch([
+      authenticated.env.DB!.prepare(
+        `DELETE FROM gym_media_objects
+          WHERE account_id = ? AND media_id = ? AND object_key = ? AND created_at = ?
+            AND EXISTS (SELECT 1 FROM gym_sync_state WHERE account_id = ? AND revision = ?)
+            AND NOT EXISTS (SELECT 1 FROM gym_media_references WHERE account_id = ? AND media_id = ?)`
+      ).bind(authenticated.user.id, row.mediaId, row.objectKey, row.createdAt, authenticated.user.id, snapshot.rev, authenticated.user.id, row.mediaId),
+      authenticated.env.DB!.prepare(
+        `INSERT OR IGNORE INTO gym_media_cleanup_objects (object_key, queued_at)
+         SELECT ?, ? WHERE changes() = 1`,
+      ).bind(row.objectKey, new Date().toISOString()),
+    ]);
     if ((deleted.meta?.changes ?? 0) !== 1) continue;
-    await bucket.delete(row.objectKey).catch(() => {});
     removed++;
   }
   return json({ removed });

@@ -1,6 +1,7 @@
 import { readGymState, writeGymState, MAX_DOCUMENT_BYTES } from '../db/radian/state';
 import { authenticateMcpRequest, hasMcpScope, MCP_WRITE_SCOPE, mcpJson, mcpOptions, rateLimitMcp } from '../mcpAuth';
 import { requestFingerprint } from '../mcpReceipts';
+import { readSmallText } from './request';
 import type { McpAuthenticatedRequest } from '../mcpAuth';
 import type { SyncContext } from '../../types';
 import * as syncMerge from '../../../frontend/src/lib/sync-merge.js';
@@ -559,11 +560,9 @@ const restoreRevision = async (auth: McpAuthenticatedRequest, args: Record<strin
 };
 
 const readBody = async (request: Request) => {
-  const length = Number(request.headers.get('Content-Length'));
-  if (Number.isFinite(length) && length > MAX_DOCUMENT_BYTES) throw new Error('too_large');
-  const text = await request.text();
-  if (new TextEncoder().encode(text).byteLength > MAX_DOCUMENT_BYTES) throw new Error('too_large');
-  return JSON.parse(text);
+  const text = await readSmallText(request, MAX_DOCUMENT_BYTES);
+  if (!text.ok) throw new Error(text.reason === 'too-large' ? 'too_large' : 'invalid_json');
+  return JSON.parse(text.value);
 };
 
 const validateArguments = (name: string, args: Record<string, unknown>) => {

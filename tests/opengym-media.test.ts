@@ -3,6 +3,7 @@ import { detectMediaMime, mediaConfig, mediaLimitBytes, readBoundedBytes, sha256
 import { mp4, webm } from '../frontend/src/lib/media-samples.test-util.js';
 import type { D1PreparedStatementLike, SyncContext } from '../functions/types';
 import type { R2BucketLike } from '../functions/lib/media/objects';
+import { writeGymState } from '../functions/lib/db/radian/state';
 import { openTestDatabase } from './support/opengym-d1';
 
 const mocks = vi.hoisted(() => ({ getAuthenticatedContext: vi.fn(), enforceAuthRateLimit: vi.fn() }));
@@ -12,6 +13,7 @@ vi.mock('../functions/lib/auth', async (importOriginal) => {
 });
 
 import { onRequestPut } from '../functions/api/media/[hash]';
+import { onRequestPost as sweepMedia } from '../functions/api/media/sweep';
 
 const openDatabases: Array<ReturnType<typeof openTestDatabase>> = [];
 const makeDatabase = () => {
@@ -140,5 +142,25 @@ describe('almacén de medios openGym', () => {
       expect(response.status).toBe(503);
       expect(objectBytes.size).toBe(0);
     } finally { spy.mockRestore(); }
+  });
+
+  it('encola la limpieza R2 después de quitar una referencia huérfana', async () => {
+    const { database, d1 } = makeDatabase();
+    const state = await writeGymState(d1, 'account-a', { state: { workouts: [] }, baseRev: 0 });
+    expect(state.ok).toBe(true);
+    database.prepare(
+      'INSERT INTO gym_media_objects (account_id, media_id, object_key, sha256, mime_type, byte_size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run('account-a', 'a'.repeat(64), 'orphan/photo', 'a'.repeat(64), 'image/jpeg', 4, '2020-01-01T00:00:00.000Z');
+    const bucket = { ...makeBucket(), delete: vi.fn(async () => { throw new Error('temporary R2 failure'); }) };
+
+    const response = await sweepMedia({
+      request: new Request('https://opengym.local/api/media/sweep', { method: 'POST' }),
+      env: { DB: d1, MEDIA_BUCKET: bucket },
+    });
+
+    expect(response.status).toBe(200);
+    expect(database.prepare('SELECT object_key FROM gym_media_cleanup_objects').all()).toEqual([{ object_key: 'orphan/photo' }]);
+    expect(database.prepare('SELECT object_key FROM gym_media_objects WHERE media_id = ?').all('a'.repeat(64))).toEqual([]);
+    expect(bucket.delete).not.toHaveBeenCalled();
   });
 });

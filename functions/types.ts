@@ -193,6 +193,7 @@ export interface SyncEnv {
   WEBAUTHN_RP_NAME?: string;
   WEBAUTHN_ORIGIN?: string;
   MCP_ORIGIN?: string;
+  UMAMI_ORIGIN?: string;
   RADIAN_API?: string;
   OPENGYM_API?: string;
   PASSWORD_LOGIN?: string;

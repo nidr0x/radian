@@ -32,7 +32,7 @@ import { t } from './i18n-core.js'
 const MIN = 60000
 const DEDUPE_MS = 10 * MIN
 const SETTLE_BUDGET_MS = 60000
-const MISSING_CHUNK = 1000
+const MISSING_CHUNK = 100
 const UPLOAD_BACKOFF = [1, 2, 5, 15, 60].map(m => m * MIN)
 const MISSING_BACKOFF = [30000, 2 * MIN, 10 * MIN, 30 * MIN]
 // How many of the latest workouts with photos or videos get their posters made local ahead of

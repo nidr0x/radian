@@ -1,4 +1,5 @@
 import { enforceAuthRateLimit, getAuthenticatedContext, isRecord, json, randomId, requireAuthConfiguration, requireDatabase } from './auth';
+import { readSmallText } from './radian-api/request';
 import type { AuthenticatedContext } from './auth';
 import type { D1DatabaseLike, SyncContext } from '../types';
 
@@ -130,7 +131,10 @@ export const normalizeScope = (value: string | undefined): string | undefined =>
 
 export const hasMcpScope = (scope: string, requiredScope: string): boolean => scope.split(/\s+/).includes(requiredScope);
 
-export const parseForm = async (request: Request): Promise<URLSearchParams> => new URLSearchParams(await request.text());
+export const parseForm = async (request: Request): Promise<URLSearchParams> => {
+  const text = await readSmallText(request);
+  return new URLSearchParams(text.ok ? text.value : '');
+};
 
 export const requireMcpDatabase = (context: SyncContext): D1DatabaseLike | Response => {
   const configurationError = requireAuthConfiguration(context);
