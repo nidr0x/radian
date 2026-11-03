@@ -729,14 +729,15 @@ export const useStore = create((set, get) => {
     const wid = Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
     const saveLocal = () => {
       try {
-        saveMarker(base)
+        const savedBase = metaOf(S).base
+        saveMarker(savedBase)
         localStorage.setItem(KEY, JSON.stringify(S))
         localStorage.setItem(WID_OWNER_KEY, seenOwner || '')
         localStorage.setItem(WID_KEY, wid)
         seenWid = wid
         seenOwner = readOwner()
         toldNoRoom = false
-        if (storeLag) { storeLag = false; saveMarker(base) }
+        if (storeLag) { storeLag = false; saveMarker(savedBase) }
         return true
       } catch {
         storeLag = true
@@ -761,7 +762,7 @@ export const useStore = create((set, get) => {
       save.then(record => {
         if (!record) {
           const fallbackSaved = saveLocal()
-          meta.set(S, { ...copyMeta, owed: true })
+          meta.set(S, { ...metaOf(S), owed: true })
           saveOwed(true)
           setSync({ pending: true })
           if (!fallbackSaved) saveMarker(null)
@@ -771,17 +772,20 @@ export const useStore = create((set, get) => {
         seenOwner = readOwner()
         storeLag = false
         toldNoRoom = false
-        saveMarker(record.base || null)
-        saveOwed(record.owed === true)
+        const stored = sanitizeAccent(Object.assign(clone(DEF), record.state))
+        const changedBySave = JSON.stringify(stored) !== JSON.stringify(S)
+        const latestMeta = metaOf(S)
+        const persistedMeta = restoredProfileMeta(record, owner)
+        const savedMeta = latestMeta === copyMeta ? persistedMeta : { ...latestMeta, owed: latestMeta.owed || changedBySave }
+        saveMarker(savedMeta.base)
+        saveOwed(savedMeta.owed)
         try {
           localStorage.removeItem(KEY)
           localStorage.setItem(WID_OWNER_KEY, seenOwner || '')
           localStorage.setItem(WID_KEY, seenWid)
         } catch { /* IndexedDB remains the durable profile copy. */ }
-        const stored = sanitizeAccent(Object.assign(clone(DEF), record.state))
-        const savedMeta = restoredProfileMeta(record, owner)
         meta.set(S, savedMeta)
-        if (JSON.stringify(stored) !== JSON.stringify(S) && get().S === S) {
+        if (changedBySave && get().S === S) {
           stored.customEx = healCustomEx(stored.customEx)
           registerCustom(stored.customEx)
           meta.set(stored, savedMeta)
@@ -794,7 +798,7 @@ export const useStore = create((set, get) => {
         } else if (get().S === S) setSync({ pending: savedMeta.owed, lastSynced: savedMeta.lastSynced })
       }).catch(() => {
         saveLocal()
-        meta.set(S, { ...copyMeta, owed: true })
+        meta.set(S, { ...metaOf(S), owed: true })
         saveOwed(true)
       })
     }
