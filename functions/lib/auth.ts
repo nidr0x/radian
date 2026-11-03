@@ -67,8 +67,10 @@ const clientAddress = (context: SyncContext): string => context.request.headers.
 
 const rateLimitMax = (route: string): number => {
   if (route.endsWith('-options')) return 30;
+  if (route === 'coach-status') return 30;
   if (route === 'sync-put-ip') return 5;
   if (route.startsWith('sync-')) return 120;
+  if (route === 'pair-v2-write-ip') return 55;
   if (route === 'passkeys-list') return 60;
   return 10;
 };

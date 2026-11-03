@@ -4,6 +4,7 @@ import {
   isPairId,
   pairAuthKey,
   pairRateLimit,
+  pairWriteRateLimit,
   pairRow,
   readBoundedBytes,
   readPairSnapshot,
@@ -52,6 +53,8 @@ export const onRequestPut = async (context: PairContext): Promise<Response> => {
   const pairId = context.request.headers.get('X-Pair-Id') ?? '';
   const authKey = pairAuthKey(context.request) ?? '';
   if (!isPairId(pairId)) return json({ error: 'invalid_pair_id' }, 400);
+  const writeLimited = await pairWriteRateLimit(context);
+  if (writeLimited) return writeLimited;
   const limited = await pairRateLimit(context, pairId);
   if (limited) return limited;
   const ifMatch = context.request.headers.get('If-Match') ?? '';

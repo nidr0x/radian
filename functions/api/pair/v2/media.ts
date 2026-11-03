@@ -5,6 +5,7 @@ import {
   pairAuthKey,
   PAIR_MEDIA_CIPHERTEXT_LIMIT,
   pairRateLimit,
+  pairWriteRateLimit,
   readBoundedBytes,
   readPairMedia,
   storePairMedia,
@@ -41,6 +42,8 @@ export const onRequestPut = async (context: PairContext): Promise<Response> => {
   const { pairId, objectId } = query(context.request);
   if (!isPairId(pairId) || !/^[A-Za-z0-9_-]{16,96}$/.test(objectId)) return json({ error: 'invalid_pair_media_id' }, 400);
   if (!context.env.DB) return json({ error: 'database_unavailable' }, 503);
+  const writeLimited = await pairWriteRateLimit(context);
+  if (writeLimited) return writeLimited;
   const limited = await pairRateLimit(context, pairId);
   if (limited) return limited;
   const authorized = await authorizePair(context.env.DB, pairId, pairAuthKey(context.request));
