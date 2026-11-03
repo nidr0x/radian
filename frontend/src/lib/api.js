@@ -59,7 +59,7 @@ export async function api(path, opts) {
   // there and the change was marked as synced while the server never saw it. status 0, not
   // undefined: this is not "offline", and the store must not show it as such.
   if (MOBILE && !remoteBase) throw failure(t('This phone is not connected to a server.'), 'not-paired', 0)
-  const contractHeaders = !MOBILE && (path === '/api/data' || path === '/api/data/rev')
+  const contractHeaders = path === '/api/data' || path === '/api/data/rev'
     ? { Accept: 'application/vnd.radian+json' }
     : {}
   const headers = Object.assign({ 'Content-Type': 'application/json' }, contractHeaders, init.headers, remoteHeaders())
