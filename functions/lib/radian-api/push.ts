@@ -1,4 +1,5 @@
 import { decodeBase64Url, randomId } from '../auth';
+import { readSmallText } from './request';
 import { isSafePushEndpoint } from './webpush';
 import type { D1DatabaseLike } from '../../types';
 import type { JobQueueLike } from './jobs';
@@ -56,12 +57,12 @@ export const parsePushSubscription = (value: unknown): ParsedPushSubscription | 
 };
 
 export const readPushJson = async (request: Request, maxBytes = 12_000, allowEmpty = false): Promise<Record<string, unknown> | null> => {
-  let text: string;
-  try { text = await request.text(); } catch { return null; }
-  if (!text.trim() && allowEmpty) return {};
-  if (new TextEncoder().encode(text).byteLength > maxBytes) return null;
+  if (allowEmpty && request.body === null) return {};
+  const text = await readSmallText(request, maxBytes);
+  if (!text.ok) return null;
+  if (!text.value.trim() && allowEmpty) return {};
   try {
-    const body: unknown = JSON.parse(text);
+    const body: unknown = JSON.parse(text.value);
     return body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null;
   } catch { return null; }
 };

@@ -1,4 +1,5 @@
 import { mcpJson, mcpOptions, normalizeScope, parseRedirectUris, randomId, rateLimitMcp, requireMcpDatabase, isRecordValue } from '../../lib/mcpAuth';
+import { readSmallJson } from '../../lib/radian-api/request';
 import type { SyncContext } from '../../types';
 
 export const onRequestPost = async (context: SyncContext): Promise<Response> => {
@@ -7,7 +8,9 @@ export const onRequestPost = async (context: SyncContext): Promise<Response> => 
   const rateLimitResponse = await rateLimitMcp(context, 'register');
   if (rateLimitResponse) return rateLimitResponse;
 
-  const body: unknown = await context.request.json().catch(() => undefined);
+  const read = await readSmallJson(context.request);
+  if (!read.ok) return mcpJson({ error: 'invalid_client_metadata', error_description: 'El registro del cliente no es válido.' }, read.reason === 'too-large' ? 413 : 400);
+  const body: unknown = read.value;
   if (!isRecordValue(body)) return mcpJson({ error: 'invalid_client_metadata', error_description: 'El registro del cliente no es válido.' }, 400);
   const clientName = typeof body.client_name === 'string' && body.client_name.trim() ? body.client_name.trim().slice(0, 120) : 'Cliente MCP';
   const redirectUris = parseRedirectUris(body.redirect_uris);

@@ -1,5 +1,6 @@
 import { enforceAuthRateLimit, getAuthenticatedContext, isRecord, json } from '../lib/auth';
 import { MAX_DOCUMENT_BYTES, readGymState, writeGymState } from '../lib/db/radian/state';
+import { readSmallText } from '../lib/radian-api/request';
 import type { SyncContext } from '../types';
 
 const validBaseRevision = (value: unknown): boolean => value === undefined
@@ -44,10 +45,12 @@ const radianGet = async (context: SyncContext): Promise<Response> => {
 const radianPut = async (context: SyncContext): Promise<Response> => {
   const authenticated = await getAuthenticatedContext(context);
   if (authenticated instanceof Response) return authenticated;
-  const bodyText = await context.request.text();
-  if (new TextEncoder().encode(bodyText).byteLength > MAX_DOCUMENT_BYTES) return json({ error: 'payload_too_large', message: 'Los datos de Radian son demasiado grandes.' }, 413);
+  const input = await readSmallText(context.request, MAX_DOCUMENT_BYTES);
+  if (!input.ok) return json(input.reason === 'too-large'
+    ? { error: 'payload_too_large', message: 'Los datos de Radian son demasiado grandes.' }
+    : { error: 'invalid_json', message: 'El contenido enviado no es válido.' }, input.reason === 'too-large' ? 413 : 400);
   let body: unknown;
-  try { body = JSON.parse(bodyText); } catch { return json({ error: 'invalid_json', message: 'El contenido enviado no es válido.' }, 400); }
+  try { body = JSON.parse(input.value); } catch { return json({ error: 'invalid_json', message: 'El contenido enviado no es válido.' }, 400); }
   if (!isRecord(body) || !validRadianData(body.data)) return json({ error: 'invalid_payload', message: 'Faltan datos válidos de Radian.' }, 400);
   const database = authenticated.env.DB!;
   const current = await database.prepare('SELECT payload, updated_at AS updatedAt FROM user_data WHERE user_id = ?')
@@ -84,13 +87,13 @@ export const onRequestPut = async (context: SyncContext): Promise<Response> => {
   const rateLimit = await enforceAuthRateLimit(context, 'sync-put', authenticated.user.id);
   if (rateLimit) return rateLimit;
 
-  const bodyText = await context.request.text();
-  if (new TextEncoder().encode(bodyText).byteLength > MAX_REQUEST_BYTES) {
-    return json({ error: 'payload_too_large', message: 'Los datos de entrenamiento superan el límite permitido.' }, 413);
-  }
+  const input = await readSmallText(context.request, MAX_REQUEST_BYTES);
+  if (!input.ok) return json(input.reason === 'too-large'
+    ? { error: 'payload_too_large', message: 'Los datos de entrenamiento superan el límite permitido.' }
+    : { error: 'invalid_json', message: 'El contenido enviado no es JSON válido.' }, input.reason === 'too-large' ? 413 : 400);
 
   let body: unknown;
-  try { body = JSON.parse(bodyText); }
+  try { body = JSON.parse(input.value); }
   catch { return json({ error: 'invalid_json', message: 'El contenido enviado no es JSON válido.' }, 400); }
   if (!isRecord(body) || !isRecord(body.state) || !validBaseRevision(body.baseRev) || !validBaseWriteId(body.baseWid)) {
     return json({ error: 'invalid_payload', message: 'El documento o su revisión base no son válidos.' }, 400);
