@@ -1,4 +1,5 @@
 import type { D1DatabaseLike, D1ResultLike, SyncContext } from '../types';
+import { readSmallJson } from './radian-api/request';
 
 export interface AuthUser {
   id: string;
@@ -48,8 +49,8 @@ export const json = (body: unknown, status = 200, extraHeaders: Record<string, s
 });
 
 export const readJson = async (request: Request): Promise<Record<string, unknown>> => {
-  const body: unknown = await request.json().catch(() => null);
-  return isRecord(body) ? body : {};
+  const body = await readSmallJson(request);
+  return body.ok ? body.value : {};
 };
 
 export const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;

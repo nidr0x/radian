@@ -1,13 +1,14 @@
 import { enforceAuthRateLimit, getAuthenticatedContext, isRecord, json } from '../../lib/auth';
+import { readSmallText } from '../../lib/radian-api/request';
 import { mediaConfig, MEDIA_MB, type MediaEnvironment } from '../../lib/media/objects';
 import type { SyncContext } from '../../types';
 
 interface MediaContext extends SyncContext { env: SyncContext['env'] & MediaEnvironment }
 
 const boundedJson = async (request: Request): Promise<Record<string, unknown> | null> => {
-  const text = await request.text();
-  if (new TextEncoder().encode(text).byteLength > 12_000) return null;
-  try { const body: unknown = JSON.parse(text); return isRecord(body) ? body : null; } catch { return null; }
+  const text = await readSmallText(request, 12_000);
+  if (!text.ok) return null;
+  try { const body: unknown = JSON.parse(text.value); return isRecord(body) ? body : null; } catch { return null; }
 };
 
 export const onRequestPost = async (context: MediaContext): Promise<Response> => {

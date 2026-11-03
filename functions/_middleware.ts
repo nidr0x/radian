@@ -10,8 +10,16 @@ const securityHeaders: Record<string, string> = {
   'Referrer-Policy': 'strict-origin-when-cross-origin',
   'Permissions-Policy': 'camera=(self), microphone=(), geolocation=()',
   'X-Frame-Options': 'DENY',
-  'Content-Security-Policy': "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'sha256-+fk/NZNDTDYSJvdWoenF6+KV7NFE14k3qZ9vqz5xdhY='; connect-src 'self'; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'self'",
 };
+
+const umamiOrigin = (value?: string): string | undefined => {
+  try {
+    const url = new URL(value ?? '');
+    return url.protocol === 'https:' && url.origin === value ? url.origin : undefined;
+  } catch { return undefined; }
+};
+
+const contentSecurityPolicy = (analyticsOrigin?: string): string => `default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'sha256-+fk/NZNDTDYSJvdWoenF6+KV7NFE14k3qZ9vqz5xdhY='${analyticsOrigin ? ` ${analyticsOrigin}` : ''}; connect-src 'self'${analyticsOrigin ? ` ${analyticsOrigin}` : ''}; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'self'`;
 
 const safeMethods = new Set(['GET', 'HEAD', 'OPTIONS']);
 const publicOAuthMutations = new Set(['/api/mcp/register', '/api/mcp/token']);
@@ -58,6 +66,7 @@ export const onRequest = async (context: MiddlewareContext): Promise<Response> =
   }
   const headers = new Headers(response.headers);
   Object.entries(securityHeaders).forEach(([name, value]) => headers.set(name, value));
+  headers.set('Content-Security-Policy', contentSecurityPolicy(umamiOrigin(context.env.UMAMI_ORIGIN)));
   if (new URL(context.request.url).protocol === 'https:') headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 };

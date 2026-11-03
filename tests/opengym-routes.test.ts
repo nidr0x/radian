@@ -212,6 +212,31 @@ describe('contrato Pages de openGym', () => {
     expect(response.headers.get('Content-Security-Policy')).toContain(`'sha256-${hash}'`);
   });
 
+  it('permite el origen configurado de Umami para cargar el script y enviar eventos', async () => {
+    const response = await (await import('../functions/_middleware')).onRequest({
+      request: new Request('https://radian.example/'),
+      env: { UMAMI_ORIGIN: 'https://stats.example' },
+      next: async () => new Response('ok'),
+    });
+    const policy = response.headers.get('Content-Security-Policy') ?? '';
+
+    expect(policy).toContain("script-src 'self'");
+    expect(policy).toContain('script-src');
+    expect(policy).toContain('https://stats.example');
+    expect(policy).toMatch(/connect-src[^;]*https:\/\/stats\.example/);
+  });
+
+  it('no añade a la CSP un origen Umami inseguro o con rutas', async () => {
+    const middleware = (await import('../functions/_middleware')).onRequest;
+    const response = await middleware({
+      request: new Request('https://radian.example/'),
+      env: { UMAMI_ORIGIN: 'https://stats.example/path' },
+      next: async () => new Response('ok'),
+    });
+
+    expect(response.headers.get('Content-Security-Policy')).not.toContain('stats.example');
+  });
+
   it('no usa la excepción MCP bearer para una ruta de datos con origen ajeno', async () => {
     let nextCalls = 0;
     const response = await (await import('../functions/_middleware')).onRequest({
