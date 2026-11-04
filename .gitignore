@@ -18,6 +18,5 @@ wrangler.radian-new*.jsonc
 wrangler.radian*.local.jsonc
 wrangler.personal*.jsonc
 
-# Local Codex coordination state, except the project marker
-.codex/coordination/*
-!.codex/coordination/project.yaml
+# Local Codex coordination state
+/.codex/coordination/
