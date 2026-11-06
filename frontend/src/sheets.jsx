@@ -1,7 +1,7 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from './store/useStore.js'
 import { useUI } from './store/useUI.js'
-import { EXDB, EXIDX, BODYPARTS, isCardio, isBodyweightEq, allExercises, equipmentOf, byCategory, smOf, searchExercises, similarExercises, exOr, isAssisted, betterWeight, beatsWeight, isCustomEx } from './lib/exercises.js'
+import { EXDB, EXIDX, BODYPARTS, isCardio, isBodyweightEq, allExercises, equipmentOf, byCategory, smOf, searchExercises, similarExercises, exOr, isAssisted, betterWeight, beatsWeight, isCustomEx, normalizeStr } from './lib/exercises.js'
 import { activeProfile, exAvailable, ALL_EQUIPMENT, newProfile, profileEquipment, ACC_V } from './lib/equipment.js'
 import { fmtDate, fmtDateRange, fmtNum, fmtPlate, exerciseNameText, fmtVol, fmtDur, durPart, todayISO, isoOf, uid, exCount, routineCount, setsWorkCount, DAYN, DAYS, weekOrder, weekStartOf, weekDayOffset, MONTHS_LONG, ACCENTS } from './lib/format.js'
 import { lastEntryFor, bestWeightFor, bestWeightForEntry, buildSets, effectiveRoutineIds, workoutDay, workoutVolume, setsDone, setsDoneActive, setUnitsTotal, lastBW, sessionSections, setLabel, defaultConfig, cleanupSg, modeOf, effortOf, EFFORT, capEffort, stepEffort, isBw, isPerSide, sideReps, workSetsDone, applyIntensifierPlan, MAX_PLANNED_WARMUPS, NOTE_MAX } from './lib/history.js'
@@ -165,15 +165,17 @@ export function confirmSheet(opts) {
 
 /* ============================ starter plan ============================ */
 const catalogText = (en, es) => getLang().toLowerCase().startsWith('es') ? es : en
-const catalogName = p => catalogText(p?.name || '', p?.nameEs || p?.name || '')
-const catalogAbout = p => catalogText(p?.about || '', p?.aboutEs || p?.about || '')
+// shortcut: legacy catalog prose is English/Spanish until a full content locale set is added.
+const catalogName = p => p?.nameKey ? t(p.nameKey) : catalogText(p?.name || '', p?.nameEs || p?.name || '')
+const catalogAbout = p => p?.aboutKey ? t(p.aboutKey) : catalogText(p?.about || '', p?.aboutEs || p?.about || '')
+const catalogSessionName = (name, nameEs, nameKey) => nameKey ? t(nameKey) : catalogText(name || '', nameEs || name || '')
 const catalogTerms = {
-  goal: { strength: () => t('Strength'), hypertrophy: () => catalogText('Hypertrophy', 'Hipertrofia'), general: () => catalogText('General fitness', 'Preparación general') },
-  level: { beginner: () => catalogText('Beginner', 'Principiante'), intermediate: () => catalogText('Intermediate', 'Intermedio'), advanced: () => catalogText('Advanced', 'Avanzado') },
+  goal: { strength: () => t('Strength'), hypertrophy: () => t('Hypertrophy'), general: () => t('General fitness'), power: () => t('Power') },
+  level: { beginner: () => t('Beginner'), intermediate: () => t('Intermediate'), advanced: () => t('Advanced') },
   equipment: {
-    gym: () => catalogText('Gym', 'Gimnasio'), machines: () => catalogText('Machines', 'Máquinas'),
-    dumbbells: () => catalogText('Dumbbells', 'Mancuernas'), bands: () => catalogText('Resistance bands', 'Bandas'),
-    bodyweight: () => catalogText('Bodyweight', 'Peso corporal'), kettlebell: () => catalogText('Kettlebell', 'Pesa rusa')
+    gym: () => t('Gym'), machines: () => t('Machines'),
+    dumbbells: () => t('Dumbbells'), bands: () => t('Resistance bands'),
+    bodyweight: () => t('Bodyweight'), kettlebell: () => t('Kettlebell')
   }
 }
 const catalogTag = (group, value) => catalogTerms[group]?.[value]?.() || value
@@ -222,15 +224,15 @@ export function loadStarterPlan(planId, profile, preparedPlan) {
   const result = applyStarterPlan(plan)
   if (!result) return false
   toast(result.added
-    ? catalogText('Routines added. Your week is unchanged.', 'Rutinas añadidas. Tu semana no ha cambiado.')
-    : catalogText('These routines are already in your plan. Your week is unchanged.', 'Estas rutinas ya están en tu plan. Tu semana no ha cambiado.'))
+    ? t('Routines added. Your week is unchanged.')
+    : t('These routines are already in your plan. Your week is unchanged.'))
   return true
 }
 
 export function assignStarterPlanToWeek(plan) {
   const result = applyStarterPlan(plan, true)
   if (!result) return false
-  toast(catalogText('Weekly plan updated.', 'Plan semanal actualizado.'))
+  toast(t('Weekly plan updated.'))
   return true
 }
 
@@ -248,19 +250,25 @@ function StarterPlanChooser({ close }) {
   const [level, setLevel] = useState('')
   const [days, setDays] = useState('')
   const [equipment, setEquipment] = useState('')
+  const detailsTitleRef = useRef(null)
   const fit = profiles.find(p => p.id === fitId) || null
   const fitKey = fit ? `${fit.id}:${profileEquipment(fit).join('|')}` : 'as-written'
   const selectedPlan = useMemo(() => selectedId
     ? buildStarterPlan(selectedId, fit ? profileEquipment(fit) : undefined)
     : null, [selectedId, fitId, fitKey])
+  useEffect(() => {
+    if (!selectedId) return
+    detailsTitleRef.current?.focus({ preventScroll: true })
+    detailsTitleRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [selectedId])
   const options = starterPlanOptions()
   const clearFilters = () => { setQuery(''); setGoal(''); setLevel(''); setDays(''); setEquipment('') }
   const visible = options.filter(p => {
-    const text = `${p.name} ${p.nameEs} ${p.about} ${p.aboutEs} ${p.goal} ${p.level} ${p.equipment.join(' ')}`.toLowerCase()
-    return (!query || text.includes(query.trim().toLowerCase())) && (!goal || p.goal === goal) &&
+    const text = normalizeStr(`${catalogName(p)} ${catalogAbout(p)} ${p.name} ${p.nameEs} ${p.about} ${p.aboutEs} ${p.goal} ${p.level} ${p.equipment.join(' ')}`)
+    return (!query || text.includes(normalizeStr(query.trim()))) && (!goal || p.goal === goal) &&
       (!level || p.level === level) && (!days || p.days === Number(days)) && (!equipment || p.equipment.includes(equipment))
   })
-  const goalOptions = [{ value: '', label: t('All') }, ...['strength', 'hypertrophy', 'general'].map(value => ({ value, label: catalogTag('goal', value) }))]
+  const goalOptions = [{ value: '', label: t('All') }, ...['strength', 'hypertrophy', 'general', 'power'].map(value => ({ value, label: catalogTag('goal', value) }))]
   const levelOptions = [{ value: '', label: t('All') }, ...['beginner', 'intermediate', 'advanced'].map(value => ({ value, label: catalogTag('level', value) }))]
   const dayOptions = [{ value: '', label: t('All') }, ...[2, 3, 4, 5, 6].map(value => ({ value: String(value), label: t('{0} days per week', value) }))]
   const equipmentOptions = [{ value: '', label: t('All') }, ...['gym', 'machines', 'dumbbells', 'bands', 'bodyweight', 'kettlebell'].map(value => ({ value, label: catalogTag('equipment', value) }))]
@@ -279,7 +287,7 @@ function StarterPlanChooser({ close }) {
       title: t('Load {0}?', title),
       message: t('The new plan goes on {0}. Your existing routines stay; only those days of the weekly plan change.', dayList(affected)),
       confirmText: t('Use this weekly schedule'),
-      onConfirm: () => { if (!assignStarterPlanToWeek(selectedPlan)) toast(catalogText('Switch to Fixed Week before assigning this plan.', 'Cambia a Semana fija antes de asignar este plan.')) }
+      onConfirm: () => { if (!assignStarterPlanToWeek(selectedPlan)) toast(t('Switch to Fixed Week before assigning this plan.')) }
     })
   }
   return <>
@@ -299,42 +307,45 @@ function StarterPlanChooser({ close }) {
       <SelectRow title={t('Days per week')} sheetTitle={t('Days per week')} value={days} options={dayOptions} onChange={setDays} />
       <SelectRow title={t('Equipment')} sheetTitle={t('Equipment')} value={equipment} options={equipmentOptions} onChange={setEquipment} />
     </div>
-    {starterCatalogErrors.length > 0 && <div className="empty">{catalogText('The routine catalog has invalid data; imports are disabled.', 'El catálogo tiene datos no válidos; las importaciones están desactivadas.')}</div>}
+    {starterCatalogErrors.length > 0 && <div className="empty">{t('The routine catalog has invalid data; imports are disabled.')}</div>}
     {!starterCatalogErrors.length && selectedPlan && <div className="card" style={{ margin: '10px 0', padding: 14 }}>
       <div className="row between" style={{ alignItems: 'flex-start', gap: 10 }}>
-        <div className="grow"><h4 style={{ margin: '0 0 4px' }}>{catalogName(selectedPlan.template)}</h4>
+        <div className="grow"><h4 ref={detailsTitleRef} tabIndex={-1} style={{ margin: '0 0 4px' }}>{catalogName(selectedPlan.template)}</h4>
           <div className="small dim">{catalogTag('goal', selectedPlan.template.goal)} · {catalogTag('level', selectedPlan.template.level)} · {t('{0} days per week', selectedPlan.effectiveSessions ?? 0)}</div>
         </div>
         <button className="chip" onClick={() => setSelectedId('')}>{t('Close')}</button>
       </div>
       <p className="small" style={{ lineHeight: 1.45 }}>{catalogAbout(selectedPlan.template)}</p>
-      {selectedPlan.invalid && <div className="small danger">{catalogText('This program has invalid catalog data and cannot be imported.', 'Este programa tiene datos no válidos y no se puede importar.')}</div>}
+      {selectedPlan.invalid && <div className="small danger">{t('This program has invalid catalog data and cannot be imported.')}</div>}
       {selectedPlan.fit && <div className="small" style={{ margin: '8px 0', lineHeight: 1.5 }}>
-        <strong>{catalogText('Equipment fit', 'Ajuste al equipo')}</strong>
-        <div>{catalogText(`${selectedPlan.fit.effectiveSessions} of ${selectedPlan.fit.requestedSessions} sessions remain`, `Quedan ${selectedPlan.fit.effectiveSessions} de ${selectedPlan.fit.requestedSessions} sesiones`)} · {selectedPlan.fit.swapped} {catalogText('substituted', 'sustituidos')} · {selectedPlan.fit.dropped} {catalogText('removed', 'eliminados')}</div>
+        <strong>{t('Equipment fit')}</strong>
+        <div>{t('{0} of {1} sessions remain', selectedPlan.fit.effectiveSessions, selectedPlan.fit.requestedSessions)} · {selectedPlan.fit.swapped} {t('substituted')} · {selectedPlan.fit.dropped} {t('removed')}</div>
         {selectedPlan.fit.changes.length > 0 && <ul style={{ paddingInlineStart: 20, margin: '4px 0' }}>
           {selectedPlan.fit.changes.map((change, i) => <li key={`${change.day}-${change.exerciseId}-${i}`}>
             {change.type === 'substituted'
-              ? <>{catalogText(change.sessionName, change.sessionNameEs)} · {t(DAYN[change.day])}: {exerciseNameFor(exOr(change.exerciseId))} → {exerciseNameFor(exOr(change.substituteId))}</>
-              : <>{catalogText(change.sessionName, change.sessionNameEs)} · {t(DAYN[change.day])}: {exerciseNameFor(exOr(change.exerciseId))} · {catalogText('removed', 'eliminado')}</>}
+              ? <>{catalogSessionName(change.sessionName, change.sessionNameEs, change.sessionNameKey)} · {t(DAYN[change.day])}: {exerciseNameFor(exOr(change.exerciseId))} → {exerciseNameFor(exOr(change.substituteId))}</>
+              : <>{catalogSessionName(change.sessionName, change.sessionNameEs, change.sessionNameKey)} · {t(DAYN[change.day])}: {exerciseNameFor(exOr(change.exerciseId))} · {t('removed')}</>}
           </li>)}
         </ul>}
-        {selectedPlan.fit.droppedSessions.map(s => <div key={s.day}>{catalogText(`${s.sessionName} was removed because no exercises remained.`, `Se eliminó ${s.sessionNameEs} porque no quedaron ejercicios.`)}</div>)}
-        {selectedPlan.fit.changes.length === 0 && <div>{catalogText('No exercise changes were needed.', 'No ha sido necesario cambiar ejercicios.')}</div>}
+        {selectedPlan.fit.droppedSessions.map(s => <div key={s.day}>{t('{0} was removed because no exercises remained.', catalogSessionName(s.sessionName, s.sessionNameEs, s.sessionNameKey))}</div>)}
+        {selectedPlan.fit.changes.length === 0 && <div>{t('No exercise changes were needed.')}</div>}
       </div>}
-      {selectedPlan.schedule?.length === 0 && <div className="small danger">{catalogText('No sessions remain after equipment fitting. Choose another profile or use the plan as written.', 'No quedan sesiones tras adaptar el equipo. Elige otro perfil o usa el plan tal como está.')}</div>}
+      {selectedPlan.schedule?.length === 0 && <div className="small danger">{t('No sessions remain after equipment fitting. Choose another profile or use the plan as written.')}</div>}
       {selectedPlan.sessions?.length > 0 && <>
         <h5 style={{ margin: '12px 0 4px' }}>{t('Sessions')}</h5>
-        {selectedPlan.sessions.map(s => <div key={`${s.day}-${s.name}`} style={{ margin: '8px 0' }}>
-          <div className="tt">{catalogText(s.name, s.nameEs)} · {t(DAYN[s.day])}</div>
+        {selectedPlan.sessions.map(s => {
+          const cue = s.exercises.find(e => e.note)?.note
+          return <div key={`${s.day}-${s.name}`} style={{ margin: '8px 0' }}>
+          <div className="tt">{catalogSessionName(s.name, s.nameEs, s.nameKey)} · {t(DAYN[s.day])}</div>
           <div className="small dim">{s.exercises.map(e => `${exerciseNameFor(exOr(e.id))} — ${e.sets} × ${e.repsMin < e.reps ? `${e.repsMin}–${e.reps}` : e.reps} · ${e.restSec}s`).join(' · ')}</div>
-        </div>)}
+          {cue && <div className="small dim">{t(cue)}</div>}
+        </div>})}
       </>}
       <div className="row" style={{ gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
         <Button size="sm" variant="tinted" onClick={addSelected} disabled={!canImport}>{t('Add to my plan')}</Button>
         <Button size="sm" onClick={assignSelected} disabled={!canAssign}>{t('Use this weekly schedule')}</Button>
       </div>
-      {scheduleMode !== 'week' && <div className="small dim" style={{ marginTop: 7 }}>{catalogText('Routines can be added while using Rotation; weekly assignment is available in Fixed Week.', 'Puedes añadir rutinas en Rotación; la asignación semanal está disponible en Semana fija.')}</div>}
+      {scheduleMode !== 'week' && <div className="small dim" style={{ marginTop: 7 }}>{t('Routines can be added while using Rotation; weekly assignment is available in Fixed Week.')}</div>}
     </div>}
     {!starterCatalogErrors.length && (visible.length === 0
       ? <div className="empty">{t('No programs match these filters.')}

@@ -2,7 +2,8 @@
 // The companion to check-locales.mjs, which compares the locale packs to each other and so
 // cannot see a key that is missing from all of them: that renders English in every language
 // while every check stays green. This walks src/ instead, collects the literals actually
-// passed to t(), and reports the ones no pack defines.
+// passed to t(), plus explicit translation keys carried in routine catalog data, and reports
+// the ones no pack defines.
 //
 //   node scripts/check-source-strings.mjs          # report only, exit 0
 //   node scripts/check-source-strings.mjs --strict # exit 1 if anything is missing
@@ -44,6 +45,20 @@ for (const file of walk(srcDir)) {
     if (!key) continue
     if (!used.has(key)) used.set(key, new Set())
     used.get(key).add(relative(root, file))
+  }
+}
+
+// These values are passed to t() dynamically by the catalog chooser/builder, so the literal-call
+// scan above cannot see them. Import the static catalog and validate its declared locale keys too.
+const { ROUTINE_CATALOG } = await import(pathToFileURL(join(srcDir, 'lib', 'routine-catalog.js')).href)
+for (const program of ROUTINE_CATALOG) {
+  const keys = [program.nameKey, program.aboutKey, ...(program.sessions || []).flatMap(session => [
+    session.nameKey,
+    ...(session.exercises || []).map(exercise => exercise.note)
+  ])]
+  for (const key of keys.filter(Boolean)) {
+    if (!used.has(key)) used.set(key, new Set())
+    used.get(key).add(relative(root, join(srcDir, 'lib', 'routine-catalog.js')))
   }
 }
 
