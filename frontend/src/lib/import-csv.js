@@ -77,6 +77,7 @@ const COLUMNS = [
   ['endTime', ['end time']],
   ['workoutNo', ['workout no']],
   ['workoutName', ['workout name', 'title', 'workout']],
+  ['setIndex', ['set order', 'set index']],
   ['category', ['category', 'body part', 'muscle group']],
   ['weightKg', ['weight kg']],
   ['weightLb', ['weight lbs', 'weight lb']],
@@ -382,6 +383,14 @@ const monthOf = w => {
 /** "2020-12-30 18:51:52" · "2024-03-07" · "2024/03/07" · "2024.03.07" · "22 Dec 2025, 08:00" · "21 août 2024, 18:00" · "07/03/2024" -> { d, t } */
 export function parseWhen(s) {
   const v = String(s || '').trim()
+  // Hevy CSV timestamps carry an explicit UTC offset. Match the API importer by converting
+  // those instants to local calendar time; reading only the written clock breaks identity
+  // matching between the CSV and API imports for anyone outside that offset.
+  if (/^\d{4}-\d{2}-\d{2}T.+(?:Z|[+-]\d{2}:?\d{2})$/i.test(v)) {
+    const instant = new Date(v)
+    if (isNaN(instant.getTime())) return null
+    return calendarDay(instant.getFullYear(), instant.getMonth() + 1, instant.getDate(), instant.getHours(), instant.getMinutes())
+  }
   let m = v.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[T ](\d{1,2}):(\d{2}))?/)
   if (m) return calendarDay(m[1], m[2], m[3], m[4], m[5])
   // \p{L} rather than [A-Za-z]: the month word carries an accent in most languages.
@@ -604,7 +613,7 @@ export function parseWorkoutCSV(text, { unit = 'kg', customEx = [] } = {}) {
       : when.d
     let day = byDate.get(sessionKey)
     if (!day) {
-      day = { d: when.d, ex: new Map(), name: cell(r, 'workoutName') || '', start: when.t, end: null, note: '', notes: new Map(), sg: new Map(), groups: new Map() }
+      day = { d: when.d, entries: [], blocks: new Map(), name: cell(r, 'workoutName') || '', start: when.t, end: null, note: '', groups: new Map() }
       byDate.set(sessionKey, day)
     }
     if (!day.name) day.name = cell(r, 'workoutName') || ''
@@ -618,18 +627,29 @@ export function parseWorkoutCSV(text, { unit = 'kg', customEx = [] } = {}) {
         : toMinutes(cell(r, 'workoutDuration'))
       if (len > 0) day.end = (day.start ?? 18 * 3600000) + Math.round(len * 60000)
     }
-    if (!day.ex.has(id)) day.ex.set(id, [])
-    day.ex.get(id).push(set)
-    // A note written against a set belongs to the exercise that day; the app keeps one per entry.
-    if (setNote) {
-      const list = day.notes.get(id) || []
-      if (!list.includes(setNote)) list.push(setNote)
-      day.notes.set(id, list)
-    }
     const ss = cell(r, 'superset')
-    if (ss && !day.sg.has(id)) {
-      if (!day.groups.has(ss)) day.groups.set(ss, importId('is', sessionKey + '|' + ss))
-      day.sg.set(id, day.groups.get(ss))
+    const blockKey = JSON.stringify([id, ss])
+    const rawSetIndex = cell(r, 'setIndex')
+    const setIndex = rawSetIndex !== '' && /^\d+$/.test(rawSetIndex) ? Number(rawSetIndex) : null
+    let block = day.blocks.get(blockKey)
+    // Explicit set indexes let a block continue across interleaved superset rows. A reset
+    // starts another occurrence of the same exercise, even when its catalogue id is equal.
+    if (setIndex != null && (!block || setIndex <= block.lastSetIndex)) block = null
+    // Without indexes, only adjacent rows belong to the same occurrence; joining across a
+    // different exercise would erase the original order and notes.
+    if (setIndex == null && day.entries[day.entries.length - 1]?.blockKey !== blockKey) block = null
+    if (!block) {
+      if (ss && !day.groups.has(ss)) day.groups.set(ss, importId('is', sessionKey + '|' + ss))
+      block = { id, blockKey, sets: [], notes: [], sg: ss ? day.groups.get(ss) : null, lastSetIndex: null }
+      day.entries.push(block)
+      day.blocks.set(blockKey, block)
+    }
+    if (setIndex != null) block.lastSetIndex = setIndex
+    block.sets.push(set)
+    // A note written against a set belongs to this occurrence; duplicate per-set copies are
+    // collapsed while distinct cues stay attached to their respective repeated blocks.
+    if (setNote) {
+      if (!block.notes.includes(setNote)) block.notes.push(setNote)
     }
     sets++
   }
@@ -657,11 +677,11 @@ export function parseWorkoutCSV(text, { unit = 'kg', customEx = [] } = {}) {
   const dates = days.map(day => day.d)
   const workouts = days.map(day => {
     const d = day.d
-    const entries = [...day.ex.entries()].map(([id, ss]) => {
-      const conv2 = ss.map(({ u, ...s }) => (s.w !== undefined ? { ...s, w: convRow({ ...s, u }) } : s))
+    const entries = day.entries.map(block => {
+      const conv2 = block.sets.map(({ u, ...s }) => (s.w !== undefined ? { ...s, w: convRow({ ...s, u }) } : s))
       const mx = Math.max(0, ...conv2.filter(s => !isWarmupRow(s)).map(s => s.w || 0))
-      const note = (day.notes.get(id) || []).join(' · ').slice(0, 280)
-      return { id, sets: conv2, topW: mx || null, ...(day.sg.has(id) ? { sg: day.sg.get(id) } : {}), ...(note ? { note } : {}) }
+      const note = block.notes.join(' · ').slice(0, 280)
+      return { id: block.id, sets: conv2, topW: mx || null, ...(block.sg ? { sg: block.sg } : {}), ...(note ? { note } : {}) }
     })
     // A superset is exercises next to each other; one left without a neighbour sharing its
     // tag is not a superset (the same rule history.js's cleanupSg applies).
@@ -669,8 +689,10 @@ export function parseWorkoutCSV(text, { unit = 'kg', customEx = [] } = {}) {
     const base = new Date(d + 'T00:00:00').getTime()
     const start = base + (day.start ?? 18 * 3600000)
     const end = day.end != null ? base + day.end : start
+    const identity = `${d}|${start}|${String(day.name || '').trim().toLowerCase()}`
+    const dateOnly = !((source === 'Strong' || source === 'Hevy') && day.start != null)
     const w = {
-      id: importId('iw', JSON.stringify([source, d, start, day.name || '', entries.map(e => [e.id, e.sets])])), d, start, end: end > start ? end : start,
+      id: importId('iw', JSON.stringify([source, identity, entries.map(e => [e.id, e.sets])])), importKey: `${source}|${identity}`, importDateOnly: dateOnly, d, start, end: end > start ? end : start,
       routineId: null, name: day.name || 'Imported', entries, prs: [],
       ...(day.note ? { note: day.note } : {}),
     }
@@ -778,10 +800,67 @@ export function parseImport(text, opts) {
 
 /* --------------------------------------------------------------- merge ---- */
 
+const dateOnlyWorkout = w => {
+  if (typeof w?.importDateOnly === 'boolean') return w.importDateOnly
+  if (!Number.isFinite(w?.start)) return true
+  // The previous CSV parser stored date-only sessions at 18:00 with no duration. Recognize
+  // that exact legacy shape so re-importing does not create a duplicate; newly parsed timed
+  // records carry importDateOnly:false and bypass this heuristic.
+  if (!w.d || !Number.isFinite(w.end) || w.end !== w.start) return false
+  const syntheticStart = new Date(w.d + 'T00:00:00').getTime() + 18 * 3600000
+  return w.start === syntheticStart
+}
+const preciseSessionKey = w => !dateOnlyWorkout(w) && w?.d
+  // CSV exports retain minute precision while Hevy API timestamps may include seconds. The
+  // normalized title keeps two workouts from a timestamp-granular source distinct in that minute.
+  ? `${w.d}|${Math.floor(w.start / 60000)}|${String(w.name || '').trim().toLowerCase().replace(/\s+/g, ' ')}`
+  : null
+const hevyWorkoutId = w => typeof w?.importKey === 'string' && w.importKey.startsWith('Hevy|id|')
+  ? w.importKey
+  : null
+
 /**
- * Merge into state. Existing days win — importing twice never duplicates a workout. A day the
- * file has two sessions on brings both (they are checked against the state before the merge,
- * not against each other); a day already in the history brings neither.
+ * Return imported workouts not already represented in history. Timed sessions match by their
+ * recorded start (and stable import key where available); date-only records use a date fallback
+ * only against other date-only records so a morning session never suppresses an evening one.
+ * This is shared by the confirmation summary and merge to keep their counts in sync.
+ */
+export function freshImportedWorkouts(incoming = [], existing = []) {
+  const exact = new Set()
+  const timed = new Map()
+  const dateOnly = new Set()
+  const addIdentity = workout => {
+    if (typeof workout?.importKey === 'string' && workout.importKey) exact.add(workout.importKey)
+    const session = preciseSessionKey(workout)
+    if (session) {
+      const matches = timed.get(session) || []
+      matches.push(hevyWorkoutId(workout))
+      timed.set(session, matches)
+    }
+    else if (workout?.d) dateOnly.add(workout.d)
+  }
+  const alreadyHas = workout => {
+    if (typeof workout?.importKey === 'string' && exact.has(workout.importKey)) return true
+    const session = preciseSessionKey(workout)
+    if (session) {
+      const id = hevyWorkoutId(workout)
+      return (timed.get(session) || []).some(existingId => !id || !existingId || id === existingId)
+    }
+    return !!workout?.d && dateOnly.has(workout.d)
+  }
+  existing.forEach(addIdentity)
+  const fresh = []
+  for (const workout of incoming) {
+    if (alreadyHas(workout)) continue
+    fresh.push(workout)
+    addIdentity(workout)
+  }
+  return fresh
+}
+
+/**
+ * Merge into state. Existing sessions win — importing twice never duplicates a workout, while
+ * distinct sessions on the same date are kept.
  */
 export function mergeImport(S, parsed) {
   if (parsed.kind === 'bodyweight') {
@@ -790,7 +869,6 @@ export function mergeImport(S, parsed) {
     S.bodyweight = [...S.bodyweight, ...fresh].sort((a, b) => (a.d < b.d ? -1 : 1))
     return { added: fresh.length, skipped: parsed.bodyweight.length - fresh.length }
   }
-  const have = new Set(S.workouts.map(w => w.d))
   // Every parse invents fresh ids for the names it cannot match, and a later export of the same
   // account names those exercises again. So a custom exercise is looked up by name among the ones
   // already here — from an earlier import or made by hand — and the new days are pointed at it,
@@ -802,7 +880,7 @@ export function mergeImport(S, parsed) {
     const same = S.customEx.find(x => x.id !== c.id && nameKey(x.n) === nameKey(c.n))
     if (same) exIdMap[c.id] = same.id
   })
-  const fresh = parsed.workouts.filter(w => !have.has(w.d))
+  const fresh = freshImportedWorkouts(parsed.workouts, S.workouts)
     .map(w => ({ ...w, entries: w.entries.map(e => (exIdMap[e.id] ? { ...e, id: exIdMap[e.id] } : e)) }))
   const used = new Set(fresh.flatMap(w => w.entries.map(e => e.id)))
   // (one an earlier import of the same name already made has the same id now: kept once)

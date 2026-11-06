@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mergeImport, parseImport, parseWorkoutCSV } from './import-csv.js'
+import { freshImportedWorkouts, importId, mergeImport, parseImport, parseWorkoutCSV } from './import-csv.js'
 
 const FITNOTES = '\uFEFFDate,Exercise,Category,Weight,Weight Unit,Reps,Distance,Distance Unit,Time,Comment\r\n2024-01-02,Deadlift,back,135.5,lb,5,,,,"top set"\r\n'
 const STRONG = [
@@ -7,9 +7,22 @@ const STRONG = [
   ['2024-03-02 07:00:00', 'Morning', '1h 5m', 'Barbell Bench Press', '1', '80,5', '8', '', '', 'top set', 'early session', '8,5'].join(';'),
   ['2024-03-02 18:00:00', 'Evening', '52m', 'Barbell Bench Press', '1', '75', '6', '', '', 'back-off', 'late session', '9'].join(';'),
 ].join('\r\n')
+const STRONG_SAME_MINUTE = [
+  'Date;Workout Name;Duration;Exercise Name;Set Order;Weight;Reps;Distance;Seconds;Notes;Workout Notes;RPE',
+  ['2024-03-02 07:00:00', 'Morning', '', 'Barbell Bench Press', '1', '80', '8', '', '', '', '', ''].join(';'),
+  ['2024-03-02 07:00:00', 'Evening', '', 'Barbell Bench Press', '1', '75', '6', '', '', '', '', ''].join(';'),
+].join('\r\n')
 const HEVY = [
   'title,start_time,end_time,description,exercise_title,superset_id,exercise_notes,set_index,set_type,weight_kg,reps,distance_km,duration_seconds,rpe',
   'Morning,2024-03-03T08:00:00Z,2024-03-03T08:40:00Z,Push day,Bench Press (Barbell),,top set,0,failure,60.25,8,,,9.5',
+].join('\n')
+const HEVY_BLOCKS = [
+  'title,start_time,end_time,description,exercise_title,superset_id,exercise_notes,set_index,set_type,weight_kg,reps,distance_km,duration_seconds,rpe',
+  ['Morning', '2024-03-03T08:00:00Z', '2024-03-03T08:40:00Z', 'session note', 'Bench Press (Barbell)', 'A', 'bench cue', 0, 'normal', 60, 8, '', '', ''].join(','),
+  ['Morning', '2024-03-03T08:00:00Z', '2024-03-03T08:40:00Z', 'session note', 'Barbell Row', 'A', 'row cue', 0, 'normal', 40, 10, '', '', ''].join(','),
+  ['Morning', '2024-03-03T08:00:00Z', '2024-03-03T08:40:00Z', 'session note', 'Bench Press (Barbell)', 'A', 'bench cue', 1, 'normal', 60, 6, '', '', ''].join(','),
+  ['Morning', '2024-03-03T08:00:00Z', '2024-03-03T08:40:00Z', 'session note', 'Barbell Row', 'A', 'row cue', 1, 'normal', 40, 9, '', '', ''].join(','),
+  ['Morning', '2024-03-03T08:00:00Z', '2024-03-03T08:40:00Z', 'session note', 'Bench Press (Barbell)', 'B', 'second bench cue', 0, 'normal', 55, 5, '', '', ''].join(','),
 ].join('\n')
 
 const emptyState = () => ({ workouts: [], bodyweight: [], customEx: [], exWeights: {} })
@@ -65,6 +78,18 @@ describe('CSV history imports', () => {
     expect(set).toMatchObject({ r: 8, failure: true, rpe: 9.5 })
   })
 
+  it('keeps repeated exercise blocks, their order, notes, and supersets', () => {
+    const workout = parseImport(HEVY_BLOCKS).workouts[0]
+
+    expect(workout.note).toBe('session note')
+    expect(workout.entries.map(e => e.id)).toEqual(['0025', '0027', '0025'])
+    expect(workout.entries.map(e => e.note)).toEqual(['bench cue', 'row cue', 'second bench cue'])
+    expect(workout.entries.map(e => e.sets.map(s => s.r))).toEqual([[8, 6], [10, 9], [5]])
+    expect(workout.entries[0].sg).toBeTruthy()
+    expect(workout.entries[1].sg).toBe(workout.entries[0].sg)
+    expect(workout.entries[2].sg).toBeUndefined()
+  })
+
   it('does not modify state for missing required columns or malformed quoted CSV', () => {
     const state = emptyState()
     const before = structuredClone(state)
@@ -96,6 +121,57 @@ describe('CSV history imports', () => {
     const firstImport = structuredClone(state)
     expect(mergeImport(state, parseImport(STRONG, { unit: 'kg' }))).toEqual({ added: 0, skipped: 2 })
     expect(state).toEqual(firstImport)
+  })
+
+  it('deduplicates by session identity and uses the same fresh-session count as merge', () => {
+    const parsed = parseImport(STRONG, { unit: 'kg' })
+    const state = emptyState()
+    state.workouts.push(structuredClone(parsed.workouts[0]))
+
+    expect(freshImportedWorkouts(parsed.workouts, state.workouts)).toEqual([parsed.workouts[1]])
+    expect(mergeImport(state, parsed)).toEqual({ added: 1, skipped: 1 })
+    expect(state.workouts.map(w => w.name)).toEqual(['Morning', 'Evening'])
+  })
+
+  it('uses date-only fallback only when both records lack a more precise session identity', () => {
+    const dateOnly = { id: 'old', d: '2024-03-02' }
+    const anotherDateOnly = { id: 'new', d: '2024-03-02' }
+    const timed = { id: 'timed', d: '2024-03-02', start: 10, name: 'Evening' }
+
+    expect(freshImportedWorkouts([anotherDateOnly], [dateOnly])).toEqual([])
+    expect(freshImportedWorkouts([timed], [dateOnly])).toEqual([timed])
+    expect(freshImportedWorkouts([timed], [{ ...timed, id: 'existing' }])).toEqual([])
+  })
+
+  it('recognizes legacy date-only imports stored at the synthetic 18:00 time', () => {
+    const incoming = parseWorkoutCSV(FITNOTES).workouts[0]
+    const legacy = {
+      id: importId('iw', JSON.stringify(['FitNotes', incoming.d, incoming.start, '', incoming.entries.map(e => [e.id, e.sets])])),
+      d: incoming.d,
+      start: incoming.start,
+      end: incoming.start,
+      routineId: null,
+      name: 'Imported',
+      entries: incoming.entries,
+      prs: [],
+      vol: incoming.vol,
+    }
+
+    expect(legacy.start).toBe(legacy.end)
+    expect(new Date(legacy.start).getHours()).toBe(18)
+    expect(legacy.importDateOnly).toBeUndefined()
+    expect(freshImportedWorkouts([incoming], [legacy])).toEqual([])
+
+    const reliableAt18 = { ...legacy, id: 'precise-18', name: 'Evening', importDateOnly: false }
+    expect(freshImportedWorkouts([reliableAt18], [legacy])).toEqual([reliableAt18])
+  })
+
+  it('keeps precise sessions with different titles even when their start minute matches', () => {
+    const parsed = parseWorkoutCSV(STRONG_SAME_MINUTE)
+
+    expect(parsed.workouts).toHaveLength(2)
+    expect(parsed.workouts.map(w => w.name)).toEqual(['Morning', 'Evening'])
+    expect(freshImportedWorkouts(parsed.workouts, [parsed.workouts[0]])).toEqual([parsed.workouts[1]])
   })
 })
 

@@ -32,7 +32,7 @@ import MuscleExplorer from './components/MuscleExplorer.jsx'
 import ExerciseViewToggle from './components/ExerciseViewToggle.jsx'
 import { sameMuscleFirst, swapMuscleOf } from './lib/similar-exercises.js'
 import { exerciseMuscleSnapshot, loadOfWorkouts, MUSCLES, MUSCLE_NAME, muscleWeightsOf, normalizeMuscleGroups, hasExplicitMuscleMetadata, inMuscleOrder } from './lib/muscles.js'
-import { parseImport, mergeImport } from './lib/import-csv.js'
+import { parseImport, mergeImport, freshImportedWorkouts } from './lib/import-csv.js'
 import { importHevyData, HevyApiError, HEVY_DEV_SETTINGS, mergeHevyRoutines } from './lib/import-hevy.js'
 import { buildPlanBundle, parsePlan, mergePlan, printPlan, planPrintHTML } from './lib/plan-share.js'
 import { estimate1RM, best1RM, is1RMRecord, REP_CAP, formulaOf, FORMULA_NAMES } from './lib/onerm.js'
@@ -548,10 +548,11 @@ const effortLine = (effort, n, scale) => effort === 'none'
 function ImportSummary({ parsed, close }) {
   const st = useStore(s => s.S)
   const isBW = parsed.kind === 'bodyweight'
+  const freshWorkouts = isBW ? null : freshImportedWorkouts(parsed.workouts, st.workouts)
   const have = isBW
     ? parsed.bodyweight.filter(b => st.bodyweight.some(x => x.d === b.d)).length
-    : parsed.workouts.filter(w => st.workouts.some(x => x.d === w.d)).length
-  const fresh = (isBW ? parsed.bodyweight.length : parsed.workouts.length) - have
+    : parsed.workouts.length - freshWorkouts.length
+  const fresh = isBW ? parsed.bodyweight.length - have : freshWorkouts.length
 
   const doImport = () => {
     let res
@@ -589,7 +590,7 @@ function ImportSummary({ parsed, close }) {
       {t('The file doesn’t say which unit it uses, so numbers are imported as they are.')}
     </div>}
     {have > 0 && <div className="small dim" style={{ marginBottom: 10 }}>
-      {t('{0} days already have data here and will be left alone.', have)}
+      {t('{0} workouts already exist here and will be left alone.', have)}
     </div>}
     {/* The file rated its sets. Say so: the column is off by default, so the ratings would
         otherwise arrive invisibly and look like they had been dropped. */}
@@ -760,8 +761,9 @@ function HevyImportSheet({ close }) {
   const w = payload.workouts
   const r = payload.routines
   const b = payload.bodyweight
-  const haveW = w.workouts.filter(x => st.workouts.some(y => y.d === x.d)).length
-  const freshW = w.workouts.length - haveW
+  const freshWorkouts = freshImportedWorkouts(w.workouts, st.workouts)
+  const haveW = w.workouts.length - freshWorkouts.length
+  const freshW = freshWorkouts.length
   const haveB = b.bodyweight.filter(x => st.bodyweight.some(y => y.d === x.d)).length
   const freshB = b.bodyweight.length - haveB
   // Routines are always added as new copies (same as plan import).
@@ -789,7 +791,7 @@ function HevyImportSheet({ close }) {
     {w.workouts.length > 0 && <div className="row between" style={{ padding: '10px 2px', borderTop: '1px solid var(--sep)', gap: 12 }}>
       <div>
         <div className="tt" style={{ fontSize: 15 }}>{t('Import workouts')}</div>
-        <div className="small dim">{t('{0} new · {1} days already here', freshW, haveW)}</div>
+        <div className="small dim">{t('{0} new · {1} workouts already here', freshW, haveW)}</div>
       </div>
       <Switch checked={wantWorkouts} onChange={setWantWorkouts} />
     </div>}

@@ -4,7 +4,7 @@ import { useStore } from '../store/useStore.js'
 import { useUI } from '../store/useUI.js'
 import {
   MEASUREMENT_FIELDS, MEASUREMENT_KEYS, emptyMeasurement, enabledMeasurementFields,
-  fromMeasurementDisplay, latestMeasurement, measurementEntryHasValues,
+  fromMeasurementDisplayEdit, latestMeasurement, measurementEntryHasValues,
   measurementSeries, measurementUnit, measurementValue, normalizeMeasurementEntry,
   toMeasurementDisplay, normalizeMeasurementsState,
 } from '../lib/measurements.js'
@@ -43,7 +43,8 @@ function MeasurementLog({ sourceDate, close }) {
     }
   }
   const [date, setDate] = useState(source?.d || todayISO())
-  const [values, setValues] = useState(() => Object.fromEntries(fields.map(f => [f.key, shownValue(source, f, S.unit)])))
+  const [initialValues] = useState(() => Object.fromEntries(fields.map(f => [f.key, shownValue(source, f, S.unit)])))
+  const [values, setValues] = useState(initialValues)
 
   const save = () => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > todayISO()) { toast(t('Choose a valid date')); return }
@@ -59,9 +60,9 @@ function MeasurementLog({ sourceDate, close }) {
       if (field.key === 'bodyFat' && value > 100) { toast(t('Body fat must be between 0 and 100%.')); return }
       if (field.custom) {
         const item = base.other.find(o => o.id === field.key.slice(6))
-        if (item) item.value = value == null ? null : fromMeasurementDisplay(value, S.unit)
+        if (item) item.value = fromMeasurementDisplayEdit(value, initialValues[field.key], item.value, S.unit)
       } else if (field.key === 'bodyFat') base.bodyFat = value
-      else base[field.key] = value == null ? null : fromMeasurementDisplay(value, S.unit)
+      else base[field.key] = fromMeasurementDisplayEdit(value, initialValues[field.key], base[field.key], S.unit)
     }
     if (!measurementEntryHasValues(base)) { toast(t('Enter at least one measurement')); return }
     // `t` is when the check-in was last saved: the newer one of a day wins a sync merge, the
