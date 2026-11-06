@@ -5,7 +5,7 @@
 // with `node scripts/build-hevy-id-map.mjs`. The API key never leaves this module's
 // callers: nothing here stores it.
 
-import { EXIDX, canonicalExId } from './exercises.js'
+import { EXIDX, canonicalExId, isCardio as isCardioEx } from './exercises.js'
 import { uid } from './format.js'
 import { isWarmupRow } from './workout-model.js'
 import { HEVY_ID_MAP, HEVY_TITLE_MAP } from './hevy-id-map.js'
@@ -185,7 +185,7 @@ function makeResolver(templates, customEx) {
       const name = (t?.title || fallbackTitle || 'exercise').toLowerCase()
       c = {
         id: importId('im', 'Hevy|' + key), n: name, custom: true, eq: 'custom', tg: '', desc: '',
-        bp: bpOfTemplate(t) || (t?.type === 'distance_duration' || t?.type === 'duration' ? 'cardio' : null)
+        bp: t?.type === 'distance_duration' ? 'cardio' : bpOfTemplate(t)
           || 'upper legs',
       }
       created.set(key, c)
@@ -223,6 +223,7 @@ const toProfileWeight = (wKg, unit) => {
 export function parseHevyWorkouts(workouts, templates, { unit = 'kg', customEx = [] } = {}) {
   const R = makeResolver(templates, customEx)
   const byDate = new Map()           // Hevy workout -> the session being built
+  const seenWorkouts = new Set()
   let sets = 0, skipped = 0, matched = 0, warmups = 0, rpeSets = 0
 
   for (const w of workouts || []) {
@@ -233,10 +234,13 @@ export function parseHevyWorkouts(workouts, templates, { unit = 'kg', customEx =
     const title = typeof w.title === 'string' ? w.title : ''
 
     // One workout per Hevy workout, not per day: a morning and an evening session stay two (#505).
-    const key = w.id != null ? 'id|' + w.id : start.d + '|' + start.t + '|' + title
+    const importKey = w.id != null ? `Hevy|id|${w.id}` : `Hevy|${start.d}|${start.t}|${title.trim().toLowerCase()}`
+    const key = importKey
+    if (seenWorkouts.has(key)) continue
+    seenWorkouts.add(key)
     let day = byDate.get(key)
     if (!day) {
-      day = { d: start.d, ex: new Map(), name: title, start: start.t, end: end?.t ?? null }
+      day = { d: start.d, entries: [], groups: new Map(), name: title, note: typeof w.description === 'string' ? w.description.trim() : '', importKey, start: start.t, end: end?.t ?? null }
       byDate.set(key, day)
     } else if (!day.name && title) day.name = title
     // Past midnight the end's clock restarts; count it from the start day's midnight instead.
@@ -249,7 +253,8 @@ export function parseHevyWorkouts(workouts, templates, { unit = 'kg', customEx =
 
       // Filed only once a set lands in it: an exercise whose sets all had nothing measured would
       // otherwise import as an entry with no sets, which nothing that reads a session back expects.
-      const list = day.ex.get(id) || []
+      const list = []
+      const template = R.byId.get(ex.exercise_template_id)
 
       for (const s of ex.sets || []) {
         const warmup = /warm/i.test(String(s.type || ''))
@@ -262,43 +267,52 @@ export function parseHevyWorkouts(workouts, templates, { unit = 'kg', customEx =
         const km = isFinite(dist) ? dist / 1000 : 0
         if (!wgt && !reps && !secs && !km) { skipped++; continue }
 
-        const isCardio = (km > 0 || secs > 0) && !reps
+        const cardioExercise = isCardioEx(id) || template?.type === 'distance_duration' || bpOfTemplate(template) === 'cardio'
+        const isCardio = !reps && (km > 0 || cardioExercise && secs > 0)
+        const timed = !isCardio && secs > 0 && !reps && km <= 0
         const mins = secs > 0 ? Math.round(secs / 60 * 10) / 10 : 0
-        const set = isCardio
-          ? { min: mins, speed: mins > 0 ? Math.round(km / (mins / 60) * 10) / 10 : 0, done: true, ...(warmup ? { phase: 'warmup' } : {}) }
-          : { w: wgt, r: reps || 0, done: true, ...(warmup ? { phase: 'warmup' } : {}) }
+        const set = timed
+          ? { sec: Math.round(secs), w: wgt, done: true, ...(warmup ? { phase: 'warmup' } : {}) }
+          : isCardio
+            ? { min: mins, speed: mins > 0 ? Math.round(km / (mins / 60) * 10) / 10 : 0, done: true, ...(warmup ? { phase: 'warmup' } : {}) }
+            : { w: wgt, r: reps || 0, done: true, ...(warmup ? { phase: 'warmup' } : {}) }
         // Hevy's "failure" set type is the app's set taken to failure (workout-model isFailureSet).
         if (!isCardio && !warmup && /fail/i.test(String(s.type || ''))) set.failure = true
 
-        if (!isCardio && s.rpe != null && isFinite(Number(s.rpe)) && Number(s.rpe) > 0) {
+        if (!isCardio && !timed && s.rpe != null && isFinite(Number(s.rpe)) && Number(s.rpe) > 0) {
           set.rpe = Math.min(10, Math.round(Number(s.rpe) * 100) / 100)
           rpeSets++
         }
         list.push(set)
         sets++
       }
-      if (list.length && !day.ex.has(id)) day.ex.set(id, list)
+      if (list.length) {
+        const group = ex.superset_id == null || ex.superset_id === '' ? null : String(ex.superset_id)
+        if (group && !day.groups.has(group)) day.groups.set(group, importId('hs', `${day.importKey}|${group}`))
+        day.entries.push({ id, sets: list, note: String(ex.notes || ex.exercise_notes || '').trim().slice(0, 280), sg: group ? day.groups.get(group) : null })
+      }
     }
   }
 
   // A session in which nothing measurable landed is not a workout — and imported, it would block
   // the real one from a later export, since existing days win in mergeImport.
-  const days = [...byDate.values()].filter(day => day.ex.size)
+  const days = [...byDate.values()].filter(day => day.entries.length)
     .sort((a, b) => (a.d === b.d ? (a.start ?? 0) - (b.start ?? 0) : a.d < b.d ? -1 : 1))
   const dates = days.map(day => day.d)
   const outWorkouts = days.map(day => {
     const d = day.d
-    const entries = [...day.ex.entries()].map(([id, ss]) => {
-      const mx = Math.max(0, ...ss.filter(s => !isWarmupRow(s)).map(s => s.w || 0))
-      return { id, sets: ss, topW: mx || null }
+    const entries = day.entries.map(block => {
+      const mx = Math.max(0, ...block.sets.filter(s => !isWarmupRow(s)).map(s => s.w || 0))
+      return { id: block.id, sets: block.sets, topW: mx || null, ...(block.note ? { note: block.note } : {}), ...(block.sg ? { sg: block.sg } : {}) }
     })
+    entries.forEach((entry, i) => { if (entry.sg && entries[i - 1]?.sg !== entry.sg && entries[i + 1]?.sg !== entry.sg) delete entry.sg })
     const base = new Date(d + 'T00:00:00').getTime()
     const startMs = base + (day.start ?? 18 * 3600000)
     const endMs = day.end != null ? base + day.end : startMs
     const workout = {
       // From what it is (importId), so the same import on two devices merges into one.
-      id: importId('iw', JSON.stringify(['Hevy', d, startMs, day.name || '', entries.map(e => [e.id, e.sets])])), d, start: startMs, end: endMs > startMs ? endMs : startMs,
-      routineId: null, name: day.name || 'Imported', entries, prs: [],
+      id: importId('iw', day.importKey), importKey: day.importKey, importDateOnly: false, d, start: startMs, end: endMs > startMs ? endMs : startMs,
+      routineId: null, name: day.name || 'Imported', entries, prs: [], ...(day.note ? { note: day.note.slice(0, 280) } : {}),
     }
     // Work sets only, the number `workoutVolume` gives a workout finished in the app; it is stored for good.
     workout.vol = entries.reduce((a, e) => a + e.sets.reduce((b, s) => b + (isWarmupRow(s) ? 0 : (s.w || 0) * (s.r || 0)), 0), 0)
@@ -355,14 +369,16 @@ export function parseHevyRoutines(routines, templates, { unit = 'kg', customEx =
       const nWork = Math.max(1, work.length)
 
       let cfg
-      if (km > 0 && !reps) {
+      const template = R.byId.get(he.exercise_template_id)
+      const cardioExercise = isCardioEx(id) || template?.type === 'distance_duration' || bpOfTemplate(template) === 'cardio'
+      if ((km > 0 || cardioExercise && secs > 0) && !reps) {
         const mins = secs > 0 ? Math.round(secs / 60 * 10) / 10 : 20
         cfg = {
           id, sets: nWork, min: mins || 20,
           speed: mins > 0 ? Math.round(km / (mins / 60) * 10) / 10 : 0,
         }
-      } else if (secs > 0 && !reps && !wgt) {
-        cfg = { id, sets: nWork, sec: Math.round(secs), weight: 0, mode: 'time' }
+      } else if (secs > 0 && !reps) {
+        cfg = { id, sets: nWork, sec: Math.round(secs), weight: wgt || 0, mode: 'time' }
       } else {
         cfg = { id, sets: nWork, reps: reps || 10, weight: wgt || 0, mode: 'reps' }
       }

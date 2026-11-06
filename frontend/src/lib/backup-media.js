@@ -96,6 +96,14 @@ export function backupImportError(e) {
   return t('Couldn’t read that file.')
 }
 
+/** The import confirmation toast, including the number of media entries that could not be kept. */
+export function backupImportNotice(skipped = 0) {
+  const count = Math.max(0, Math.floor(Number(skipped) || 0))
+  return count
+    ? { key: 'Backup imported. Media files skipped: {0}.', args: [count] }
+    : { key: 'Backup imported', args: [] }
+}
+
 /**
  * Reads a picked backup, .json or .zip (told apart by its first bytes, not its name):
  * { state, files: [{ hash, entry }], zip }. `files` are the zip's media entries the state refers

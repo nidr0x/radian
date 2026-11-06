@@ -5,6 +5,7 @@ import { readZip, zipStore } from './zip.js'
 import {
   BACKUP_JSON,
   exportBackupZip,
+  backupImportNotice,
   readBackupFile,
   storeBackupMedia,
 } from './backup-media.js'
@@ -63,8 +64,12 @@ describe('backup ZIP media', () => {
     const imported = await readBackupFile(archive)
     const destination = { put: vi.fn(async () => {}) }
 
-    await expect(storeBackupMedia(imported.files, { media: destination }))
-      .resolves.toEqual({ stored: 0, skipped: 1 })
+    const result = await storeBackupMedia(imported.files, { media: destination })
+    expect(result).toEqual({ stored: 0, skipped: 1 })
+    expect(backupImportNotice(result.skipped)).toEqual({
+      key: 'Backup imported. Media files skipped: {0}.',
+      args: [1],
+    })
     expect(destination.put).not.toHaveBeenCalled()
     expect(imported.state).toEqual(state)
   })

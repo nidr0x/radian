@@ -34,6 +34,15 @@ export const measurementUnit = unit => unit === 'lb' ? 'in' : 'cm'
 export const toMeasurementDisplay = (cm, unit) => cm == null ? null : round(unit === 'lb' ? cm / 2.54 : cm)
 export const fromMeasurementDisplay = (value, unit) => value == null ? null : valid(unit === 'lb' ? +value * 2.54 : +value)
 
+// Display values are rounded to one decimal, so converting an untouched inch value back to cm
+// can drift (100 cm displays as 39.4 in and converts to 100.1 cm). Preserve the canonical value
+// while the visible input still equals its initial display; convert only an actual edit.
+export function fromMeasurementDisplayEdit(value, originalDisplay, originalCanonical, unit) {
+  const comparable = v => v == null || v === '' ? null : Number(v)
+  if (comparable(value) === comparable(originalDisplay)) return valid(originalCanonical)
+  return fromMeasurementDisplay(value, unit)
+}
+
 export function emptyMeasurement(date, custom = []) {
   const entry = { d: date, t: new Date(date + 'T12:00:00').getTime() }
   for (const key of MEASUREMENT_KEYS) entry[key] = null

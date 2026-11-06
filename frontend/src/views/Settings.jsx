@@ -254,15 +254,18 @@ export default function Settings({ page = null, find = null, via = null, entryKe
       toast(backupImportError(e)); return
     }
     const apply = async mergeWith => {
+      let importedToast = t('Backup imported')
       if (read.files.length) {
-        const { storeBackupMedia } = await import('../lib/backup-media.js')
-        await storeBackupMedia(read.files, { limits: limitsFrom(useStore.getState().config) })
+        const { storeBackupMedia, backupImportNotice } = await import('../lib/backup-media.js')
+        const result = await storeBackupMedia(read.files, { limits: limitsFrom(useStore.getState().config) })
+        const notice = backupImportNotice(result.skipped)
+        importedToast = t(notice.key, ...notice.args)
       }
       importBackup(read.state, { mergeWith })
       // The photos it brought are pending here and maybe gone from the server (a reset): sent now,
       // not after the ten-minute dedupe of the run before the reset.
       if (read.files.length) syncMedia({ force: true })
-      toast(t('Backup imported'))
+      toast(importedToast)
     }
     // Signed in, the server is asked first: a workout logged since the backup was made, or on
     // another device meanwhile, would be deleted from the profile by the replace — said, with the
