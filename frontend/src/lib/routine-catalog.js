@@ -5,9 +5,11 @@ import { CATALOGUE } from './exercises.js'
 const lift = (id, sets, repsMin, reps, restSec, prog) => ({
   id, sets, repsMin, reps, restSec, prog, mode: 'reps'
 })
-const session = (day, name, nameEs, emoji, exercises) => ({ day, name, nameEs, emoji, exercises })
-const program = (id, name, nameEs, about, aboutEs, goal, level, equipment, sessions) => ({
-  id, name, nameEs, about, aboutEs, goal, level, equipment, sessions
+const session = (day, name, nameEs, emoji, exercises, nameKey) => ({
+  day, name, nameEs, emoji, exercises, ...(nameKey && { nameKey })
+})
+const program = (id, name, nameEs, about, aboutEs, goal, level, equipment, sessions, localized = {}) => ({
+  id, name, nameEs, about, aboutEs, goal, level, equipment, sessions, ...localized
 })
 
 // Each entry carries its complete saved prescription. No exercise here is time-based.
@@ -61,6 +63,10 @@ const X = {
 }
 
 const D = (day, name, nameEs, emoji, exercises) => session(day, name, nameEs, emoji, exercises)
+const powerLift = id => ({
+  ...lift(id, 3, 3, 5, 180, 'double'),
+  note: 'Power cue: use a moderate load and lift quickly with control; stop when speed or technique drops.'
+})
 const CATALOG = [
   // The four existing choices remain available, now with full, explicit prescriptions.
   program('ppl', 'Push / Pull / Legs', 'Empuje / Tirón / Piernas', 'Three focused sessions split by movement group.', 'Tres sesiones centradas en cada grupo de movimientos.', 'hypertrophy', 'intermediate', ['gym'], [
@@ -402,11 +408,18 @@ const CATALOG = [
     D(3, 'Pull', 'Tirón', 'dumbbell', [X.dbRow, X.supportedRow, X.dbCurl, X.rearDelt]),
     D(5, 'Lower B', 'Inferior B', 'dumbbell', [X.dbLunge, X.dbHip, X.goblet, X.dbCalf]),
     D(6, 'Upper Mix', 'Superior mixto', 'dumbbell', [X.dbIncline, X.dbArnold, X.hammer, X.dbFly])
-  ])
+  ]),
+  program('full-body-power-2', 'Evidence-Based Power (Two Days)', 'Potencia basada en evidencia (dos días)', 'This two-day program develops muscular power with moderate-load, full-body lifts. Train on nonconsecutive days; aim for 30–70% of 1RM when known and lift as quickly as good technique allows. Stop a set when speed or form drops.', 'Este programa de dos días desarrolla la potencia muscular con ejercicios de cuerpo completo y cargas moderadas. Entrena en días no consecutivos; si conoces tu 1RM, usa como referencia el 30–70 %. Levanta tan rápido como te permita una técnica correcta. Termina la serie si baja la velocidad o se deteriora la técnica.', 'power', 'intermediate', ['gym'], [
+    session(1, 'Power A', 'Potencia A', 'barbell', [powerLift('0043'), powerLift('0025'), powerLift('0027')], 'Power A'),
+    session(4, 'Power B', 'Potencia B', 'barbell', [powerLift('0085'), powerLift('0091'), powerLift('2330')], 'Power B')
+  ], {
+    nameKey: 'Evidence-Based Power (Two Days)',
+    aboutKey: 'This two-day program develops muscular power with moderate-load, full-body lifts. Train on nonconsecutive days; aim for 30–70% of 1RM when known and lift as quickly as good technique allows. Stop a set when speed or form drops.'
+  })
 ]
 
 const BUILTIN_IDS = new Set(CATALOGUE.map(ex => ex.id))
-const GOALS = new Set(['strength', 'hypertrophy', 'general'])
+const GOALS = new Set(['strength', 'hypertrophy', 'general', 'power'])
 const LEVELS = new Set(['beginner', 'intermediate', 'advanced'])
 const EQUIPMENT = new Set(['gym', 'machines', 'dumbbells', 'bands', 'bodyweight', 'kettlebell'])
 
@@ -446,7 +459,7 @@ export function validateRoutineCatalog(catalog = CATALOG) {
     if (signatures.has(signature)) errors.push(`${p.id}: duplicate program content`)
     signatures.add(signature)
   }
-  if (ids.size !== 60 || catalog.length !== 60) errors.push(`expected 60 programs, found ${catalog.length}`)
+  if (ids.size !== 61 || catalog.length !== 61) errors.push(`expected 61 programs, found ${catalog.length}`)
   return errors
 }
 

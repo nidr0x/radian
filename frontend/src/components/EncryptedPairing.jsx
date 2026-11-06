@@ -28,10 +28,16 @@ export default function EncryptedPairing({ close }) {
     setMessage('')
     try {
       const result = await action()
+      if (result === false) {
+        setMessage(t('The encrypted pairing could not be completed.'))
+        return false
+      }
       if (result?.link) setLink(result.link)
       setMessage(t('Encrypted pairing is ready.'))
+      return true
     } catch (error) {
       setMessage(errorText(error?.message))
+      return false
     } finally { setBusy(false) }
   }
 
@@ -44,8 +50,7 @@ export default function EncryptedPairing({ close }) {
 
   const revoke = async () => {
     if (!window.confirm(t('Revoke this encrypted pairing? Devices using its link will stop syncing.'))) return
-    await run(() => client.revoke())
-    setLink('')
+    if (await run(() => client.revoke())) setLink('')
   }
 
   return <>

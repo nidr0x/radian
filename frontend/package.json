@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && node scripts/check-pwa-bundle.mjs",
+    "build": "npm run check:locales && vite build && node scripts/check-pwa-bundle.mjs",
+    "check:locales": "node scripts/check-locales.mjs && node scripts/check-source-strings.mjs --strict",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",

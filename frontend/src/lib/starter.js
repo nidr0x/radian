@@ -4,6 +4,7 @@ import { uid } from './format.js'
 import { EXIDX } from './exercises.js'
 import { eqAvailable, ALL_EQUIPMENT } from './equipment.js'
 import { ROUTINE_CATALOG, ROUTINE_CATALOG_ERRORS } from './routine-catalog.js'
+import { getLang, t } from './i18n-core.js'
 export { ROUTINE_CATALOG_ERRORS as starterCatalogErrors }
 
 const PPL = [
@@ -78,16 +79,16 @@ const fitSessions = (sessions, equipment) => {
       const sub = substituteFor(ex, equipment, taken)
       if (!sub) {
         dropped++
-        changes.push({ type: 'removed', day: session.day, sessionName: session.name, sessionNameEs: session.nameEs, exerciseId: exercise.id })
+        changes.push({ type: 'removed', day: session.day, sessionName: session.name, sessionNameEs: session.nameEs, sessionNameKey: session.nameKey, exerciseId: exercise.id })
         continue
       }
       taken.add(sub.id)
       swapped++
-      changes.push({ type: 'substituted', day: session.day, sessionName: session.name, sessionNameEs: session.nameEs, exerciseId: exercise.id, substituteId: sub.id })
+      changes.push({ type: 'substituted', day: session.day, sessionName: session.name, sessionNameEs: session.nameEs, sessionNameKey: session.nameKey, exerciseId: exercise.id, substituteId: sub.id })
       out.push({ ...exercise, id: sub.id })
     }
     if (!out.length) {
-      droppedSessions.push({ day: session.day, sessionName: session.name, sessionNameEs: session.nameEs })
+      droppedSessions.push({ day: session.day, sessionName: session.name, sessionNameEs: session.nameEs, sessionNameKey: session.nameKey })
       return null
     }
     return { ...session, exercises: out }
@@ -106,9 +107,9 @@ export const buildStarterPlan = (id, equipment) => {
   const sessions = fit ? fit.sessions : template.sessions
   const routines = sessions.map(session => ({
     id: uid(),
-    name: session.name,
+    name: session.nameKey ? t(session.nameKey) : getLang().toLowerCase().startsWith('es') ? session.nameEs || session.name : session.name,
     emoji: session.emoji,
-    ex: session.exercises.map(exercise => ({ ...exercise, weight: 0 }))
+    ex: session.exercises.map(exercise => ({ ...exercise, ...(exercise.note ? { note: t(exercise.note) } : {}), weight: 0 }))
   }))
   return {
     template,
