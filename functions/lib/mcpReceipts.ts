@@ -20,7 +20,10 @@ export const receiptStatement = (db: D1DatabaseLike, userId: string, clientId: s
 
 export const listMcpAudit = async (db: D1DatabaseLike, userId: string) => {
   const now = new Date().toISOString();
-  await db.prepare("DELETE FROM mcp_write_receipts WHERE user_id = ? AND datetime(created_at) <= datetime(?, '-90 days')").bind(userId, now).run();
+  await db.prepare(`DELETE FROM mcp_write_receipts WHERE rowid IN (
+    SELECT rowid FROM mcp_write_receipts WHERE user_id = ? AND datetime(created_at) <= datetime(?, '-90 days')
+    ORDER BY created_at LIMIT 100
+  )`).bind(userId, now).run();
   const rows = await db.prepare(`SELECT tool, client_id AS clientId, created_at AS createdAt, result
     FROM mcp_write_receipts WHERE user_id = ? ORDER BY created_at DESC, request_key DESC LIMIT 100`).bind(userId).all<{ tool: string; clientId: string; createdAt: string; result: string }>();
   return { entries: rows.results.map(({ result, ...entry }) => ({ ...entry, revisionId: (JSON.parse(result) as McpMutationResult).revisionId })), limit: 100 };

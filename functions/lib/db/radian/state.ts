@@ -6,6 +6,9 @@ export const MAX_COLLECTION_ROWS = 10_000;
 export const MAX_ROUTINE_EXERCISES = 200;
 export const MAX_SESSION_EXERCISES = 200;
 export const MAX_SESSION_SETS = 500;
+export const MAX_SYNC_CHANGE_BYTES = MAX_FIELD_BYTES + 1_024;
+export const MAX_SYNC_BATCH_BYTES = 256_000;
+export const MAX_SYNC_BATCH_CHANGES = 100;
 
 const ARRAY_FIELDS = ['routines', 'workouts', 'bodyweight', 'measurements', 'customEx', 'favEx', 'equipProfiles', 'gymCards'] as const;
 const MAP_FIELDS = ['exNotes', 'exWeights'] as const;
@@ -51,6 +54,10 @@ export interface WriteGymStateOptions {
   baseRev?: number | null;
   baseWid?: string | null;
   replaceDocument?: boolean;
+  allowLarge?: boolean;
+  operationId?: string;
+  changeFingerprint?: string;
+  changes?: GymSyncChange[];
   mcp?: {
     operationId: string;
     clientId: string;
@@ -65,6 +72,105 @@ export interface WriteGymStateOptions {
   };
 }
 
+export type GymSyncChange =
+  | { kind: 'field'; key: string; value: unknown }
+  | { kind: 'field'; key: string; deleted: true }
+  | { kind: 'collection'; key: CollectionKey; present: boolean }
+  | { kind: 'entity'; collection: typeof ARRAY_FIELDS[number]; id: string; position: number; value: unknown }
+  | { kind: 'entity'; collection: typeof ARRAY_FIELDS[number]; id: string; deleted: true }
+  | { kind: 'map'; map: typeof MAP_FIELDS[number]; key: string; value: unknown }
+  | { kind: 'map'; map: typeof MAP_FIELDS[number]; key: string; deleted: true };
+
+export interface WriteGymChangesOptions {
+  baseRev: number;
+  baseWid: string | null;
+  operationId: string;
+  changes: GymSyncChange[];
+}
+
+const changeEntityId = (collection: string, value: unknown): string | null => {
+  if (collection === 'favEx') return typeof value === 'string' ? value : null;
+  if (!isObject(value)) return null;
+  if (collection === 'bodyweight') return `${String(value.d ?? '')}|${String(value.t ?? '')}`;
+  if (collection === 'measurements') return asId(value.id, `${String(value.d ?? '')}|${String(value.t ?? '')}`);
+  if (collection === 'workouts') return asId(value.id, `${String(value.d ?? '')}|${String(value.start ?? '')}`);
+  return typeof value.id === 'string' && value.id ? value.id : null;
+};
+
+export const gymStateToChanges = (value: unknown): GymSyncChange[] | string => {
+  const encoded = encodeState(value, true);
+  if (typeof encoded === 'string') return encoded;
+  const state = encoded.state;
+  const changes: GymSyncChange[] = [];
+  for (const [key, item] of Object.entries(state)) {
+    if (isCollectionKey(key)) continue;
+    changes.push({ kind: 'field', key, value: item });
+  }
+  for (const key of [...ARRAY_FIELDS, ...MAP_FIELDS]) {
+    changes.push({ kind: 'collection', key, present: own(state, key) });
+    if (!own(state, key)) continue;
+    if (ARRAY_FIELDS.includes(key as typeof ARRAY_FIELDS[number])) {
+      for (const [position, item] of (state[key] as unknown[]).entries()) {
+        const id = changeEntityId(key, item);
+        if (!id) return `invalid_${key}_id`;
+        changes.push({ kind: 'entity', collection: key as typeof ARRAY_FIELDS[number], id, position, value: item });
+      }
+    } else {
+      for (const [entryKey, item] of Object.entries(state[key] as JsonObject))
+        changes.push({ kind: 'map', map: key as typeof MAP_FIELDS[number], key: entryKey, value: item });
+    }
+  }
+  if (changes.some((change) => bytesOf(JSON.stringify(change)) > MAX_SYNC_CHANGE_BYTES)) return 'sync_change_too_large';
+  return changes;
+};
+
+const validSyncChanges = (changes: unknown): changes is GymSyncChange[] => Array.isArray(changes)
+  && changes.length > 0 && changes.length <= MAX_SYNC_BATCH_CHANGES
+  && bytesOf(JSON.stringify(changes)) <= MAX_SYNC_BATCH_BYTES
+  && changes.every((value) => {
+    if (!isObject(value) || bytesOf(JSON.stringify(value)) > MAX_SYNC_CHANGE_BYTES) return false;
+    if (value.kind === 'field') return typeof value.key === 'string' && value.key.length > 0 && value.key.length <= 128
+      && !LOCAL_FIELDS.has(value.key) && (value.deleted === true || own(value, 'value'));
+    if (value.kind === 'collection') return isCollectionKey(String(value.key)) && typeof value.present === 'boolean';
+    if (value.kind === 'entity') return (ARRAY_FIELDS as readonly unknown[]).includes(value.collection)
+      && typeof value.id === 'string' && value.id.length > 0 && value.id.length <= 256
+      && (value.deleted === true || (Number.isSafeInteger(value.position) && Number(value.position) >= 0 && own(value, 'value')));
+    if (value.kind === 'map') return (MAP_FIELDS as readonly unknown[]).includes(value.map)
+      && typeof value.key === 'string' && value.key.length > 0 && value.key.length <= 256
+      && (value.deleted === true || own(value, 'value'));
+    return false;
+  });
+
+const applySyncChanges = (state: JsonObject | null, changes: GymSyncChange[]): JsonObject => {
+  const next: JsonObject = { ...(state ?? {}) };
+  for (const change of changes) {
+    if (change.kind === 'field') {
+      if ('deleted' in change && change.deleted) delete next[change.key];
+      else if ('value' in change) next[change.key] = change.value;
+    } else if (change.kind === 'collection') {
+      if (!change.present) delete next[change.key];
+      else if (!own(next, change.key)) next[change.key] = ARRAY_FIELDS.includes(change.key as typeof ARRAY_FIELDS[number]) ? [] : {};
+    } else if (change.kind === 'map') {
+      const entries = isObject(next[change.map]) ? { ...next[change.map] as JsonObject } : {};
+      if ('deleted' in change && change.deleted) delete entries[change.key];
+      else if ('value' in change) entries[change.key] = change.value;
+      next[change.map] = entries;
+    } else {
+      const list = Array.isArray(next[change.collection]) ? [...next[change.collection] as unknown[]] : [];
+      const index = list.findIndex((item) => changeEntityId(change.collection, item) === change.id);
+      if ('deleted' in change && change.deleted) {
+        if (index >= 0) list.splice(index, 1);
+      } else if ('value' in change && 'position' in change) {
+        const value = change.value;
+        if (index >= 0) list.splice(index, 1);
+        list.splice(Math.min(change.position, list.length), 0, value);
+      }
+      next[change.collection] = list;
+    }
+  }
+  return next;
+};
+
 export type WriteGymStateResult =
   | { ok: true; rev: number; wid: string; replayed: boolean }
   | { ok: false; error: string }
@@ -74,6 +180,12 @@ const isObject = (value: unknown): value is JsonObject => typeof value === 'obje
 const own = (value: JsonObject, key: string): boolean => Object.prototype.hasOwnProperty.call(value, key);
 const omit = (value: JsonObject, keys: string[]): JsonObject => Object.fromEntries(Object.entries(value).filter(([key]) => !keys.includes(key)));
 const bytesOf = (value: string): number => new TextEncoder().encode(value).byteLength;
+export const mediaHashesInState = (value: unknown, found = new Set<string>()): Set<string> => {
+  if (typeof value === 'string' && /^[a-f\d]{64}$/i.test(value)) found.add(value.toLowerCase());
+  else if (Array.isArray(value)) for (const item of value) mediaHashesInState(item, found);
+  else if (isObject(value)) for (const item of Object.values(value)) mediaHashesInState(item, found);
+  return found;
+};
 const parseJson = <T>(value: string): T => {
   try { return JSON.parse(value) as T; } catch { throw new Error('invalid_stored_state'); }
 };
@@ -90,6 +202,70 @@ const stableStringify = (value: unknown): string => {
   if (isObject(value)) return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
   return JSON.stringify(value) ?? 'null';
 };
+
+const sameJson = (left: unknown, right: unknown): boolean => stableStringify(left) === stableStringify(right);
+
+const keyedDiff = <T>(before: T[], after: T[], key: (value: T) => string): { changed: T[]; removed: string[] } => {
+  const old = new Map(before.map((value) => [key(value), value]));
+  const next = new Map(after.map((value) => [key(value), value]));
+  return {
+    changed: after.filter((value) => !old.has(key(value)) || !sameJson(old.get(key(value)), value)),
+    removed: [...old.keys()].filter((id) => !next.has(id)),
+  };
+};
+
+const diffEncodedState = (before: EncodedState, after: EncodedState) => {
+  const deleted: Record<string, string[]> = {};
+  const changed = <T>(table: string, oldRows: T[], nextRows: T[], key: (value: T) => string): T[] => {
+    const diff = keyedDiff(oldRows, nextRows, key);
+    deleted[table] = [...new Set([...diff.removed, ...diff.changed.map(key)])];
+    return diff.changed;
+  };
+  const changedParents = <T extends { id: string }>(table: string, oldRows: T[], nextRows: T[], oldChildren: unknown[], nextChildren: unknown[], parentId: (child: unknown) => string): T[] => {
+    const oldMap = new Map(oldRows.map((row) => [row.id, row]));
+    const nextMap = new Map(nextRows.map((row) => [row.id, row]));
+    const childrenFor = (rows: unknown[], id: string) => rows.filter((child) => parentId(child) === id);
+    const ids = new Set([...oldMap.keys(), ...nextMap.keys()]);
+    const touched = [...ids].filter((id) => !oldMap.has(id) || !nextMap.has(id)
+      || !sameJson(oldMap.get(id), nextMap.get(id))
+      || !sameJson(childrenFor(oldChildren, id), childrenFor(nextChildren, id)));
+    deleted[table] = touched;
+    return nextRows.filter((row) => touched.includes(row.id));
+  };
+  const fields = changed('gym_state_fields', before.fields, after.fields, (row) => row.key);
+  const oldPresence = new Map(before.presence.map((row) => [row.key, row.present]));
+  const presence = after.presence.filter((row) => oldPresence.get(row.key) !== row.present);
+  const routines = changedParents('gym_routines', before.routines, after.routines,
+    before.routineExercises, after.routineExercises, (row) => (row as EncodedState['routineExercises'][number]).routineId);
+  const routineIds = new Set(routines.map((row) => row.id));
+  const routineExercises = after.routineExercises.filter((row) => routineIds.has(row.routineId));
+  const sessions = changedParents('gym_sessions', before.sessions, after.sessions,
+    [...before.sessionExercises, ...before.sessionSets], [...after.sessionExercises, ...after.sessionSets],
+    (row) => (row as EncodedState['sessionExercises'][number]).sessionId);
+  const sessionIds = new Set(sessions.map((row) => row.id));
+  const sessionExercises = after.sessionExercises.filter((row) => sessionIds.has(row.sessionId));
+  const sessionSets = after.sessionSets.filter((row) => sessionIds.has(row.sessionId));
+  const bodyweight = changed('gym_bodyweight', before.bodyweight, after.bodyweight, (row) => row.id);
+  const measurements = changed('gym_body_measurements', before.measurements, after.measurements, (row) => row.id);
+  const customExercises = changed('gym_custom_exercises', before.customExercises, after.customExercises, (row) => row.id);
+  const favourites = changed('gym_favourites', before.favourites, after.favourites, (row) => row.id);
+  const equipmentProfiles = changed('gym_equipment_profiles', before.equipmentProfiles, after.equipmentProfiles, (row) => row.id);
+  const gymCards = changed('gym_cards', before.gymCards, after.gymCards, (row) => row.id);
+  const exerciseNotes = changed('gym_exercise_notes', before.exerciseNotes, after.exerciseNotes, (row) => row.id);
+  const exerciseWeights = changed('gym_exercise_weights', before.exerciseWeights, after.exerciseWeights, (row) => row.id);
+  return {
+    encoded: { ...after, fields, presence, routines, routineExercises, sessions, sessionExercises, sessionSets,
+      bodyweight, measurements, customExercises, favourites, equipmentProfiles, gymCards, exerciseNotes, exerciseWeights },
+    deleted,
+    profileChanged: !sameJson(before.state && { unit: before.state.unit ?? null, language: before.state.lang ?? null, theme: before.state.theme ?? null },
+      after.state && { unit: after.state.unit ?? null, language: after.state.lang ?? null, theme: after.state.theme ?? null }),
+  };
+};
+
+const deleteIds = (database: D1DatabaseLike, table: string, column: string, ids: string[], accountId: string, revision: number, writeId: string): D1PreparedStatementLike | null =>
+  ids.length ? writeStatement(database,
+    `DELETE FROM ${table} WHERE account_id = ? AND ${column} IN (SELECT value FROM json_each(?)) AND ${GUARD}`,
+    [accountId, jsonArray(ids)], accountId, revision, writeId) : null;
 
 const sha256 = async (value: string): Promise<string> => {
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)));
@@ -222,11 +398,11 @@ interface EncodedState {
   activeEntities: Array<{ entityType: string; entityId: string }>;
 }
 
-const encodeState = (value: unknown): EncodedState | string => {
+const encodeState = (value: unknown, allowLarge = false): EncodedState | string => {
   if (!isObject(value)) return 'invalid_state';
   const state = omit(value, [...LOCAL_FIELDS]);
   const sourceJson = JSON.stringify(state);
-  if (sourceJson === undefined || bytesOf(sourceJson) > MAX_DOCUMENT_BYTES) return 'payload_too_large';
+  if (sourceJson === undefined || (!allowLarge && bytesOf(sourceJson) > MAX_DOCUMENT_BYTES)) return 'payload_too_large';
   const fields: EncodedState['fields'] = [];
   const presence: EncodedState['presence'] = [];
   const routines: EncodedState['routines'] = [];
@@ -407,9 +583,6 @@ const encodeState = (value: unknown): EncodedState | string => {
 const writeStatement = (database: D1DatabaseLike, sql: string, values: unknown[], accountId: string, revision: number, writeId: string): D1PreparedStatementLike =>
   database.prepare(sql).bind(...values, accountId, revision, writeId);
 
-const deleteRows = (database: D1DatabaseLike, table: string, accountId: string, revision: number, writeId: string): D1PreparedStatementLike =>
-  writeStatement(database, `DELETE FROM ${table} WHERE account_id = ? AND ${GUARD}`, [accountId], accountId, revision, writeId);
-
 const jsonInsert = (
   database: D1DatabaseLike,
   sql: string,
@@ -463,7 +636,7 @@ export const writeGymState = async (
   accountId: string,
   options: WriteGymStateOptions,
 ): Promise<WriteGymStateResult> => {
-  const incoming = encodeState(options.state);
+  const incoming = encodeState(options.state, options.allowLarge === true);
   if (typeof incoming === 'string') return { ok: false, error: incoming };
   if (options.baseRev != null && (!Number.isSafeInteger(options.baseRev) || options.baseRev < 0)) return { ok: false, error: 'invalid_base_revision' };
   if (options.baseWid != null && (typeof options.baseWid !== 'string' || options.baseWid.length > 128)) return { ok: false, error: 'invalid_base_write_id' };
@@ -475,12 +648,15 @@ export const writeGymState = async (
   const requestedRev = options.baseRev ?? 0;
   const hasRequestedWid = options.baseWid !== undefined;
   const requestedWid = options.baseWid ?? null;
-  const fingerprint = await sha256(stableStringify({
+  if (options.operationId !== undefined && (typeof options.operationId !== 'string' || !/^[\w-]{1,128}$/.test(options.operationId))) {
+    return { ok: false, error: 'invalid_operation_id' };
+  }
+  const fingerprint = options.changeFingerprint ?? await sha256(stableStringify({
     baseRev: requestedRev,
     ...(hasRequestedWid ? { baseWid: requestedWid } : {}),
     state: incoming.state,
   }));
-  const operationId = `doc-${fingerprint}`;
+  const operationId = options.operationId ?? `doc-${fingerprint}`;
   const priorReceipt = await database.prepare(
     'SELECT fingerprint, revision, write_id AS writeId FROM gym_sync_receipts WHERE account_id = ? AND operation_id = ?',
   ).bind(accountId, operationId).first<ReceiptRow>();
@@ -492,7 +668,7 @@ export const writeGymState = async (
   const current = await readGymState(database, accountId);
   if (current.rev !== requestedRev || (hasRequestedWid && current.wid !== requestedWid)) return { ok: false, conflict: current };
   const compareWid = hasRequestedWid ? requestedWid : current.wid;
-  const encoded = options.replaceDocument ? incoming : encodeState(mergeAbsentFields(current.state, incoming.state));
+  let encoded = options.replaceDocument ? incoming : encodeState(mergeAbsentFields(current.state, incoming.state), options.allowLarge === true);
   if (typeof encoded === 'string') return { ok: false, error: encoded };
   const now = new Date().toISOString();
   const expiresAt = new Date(Date.parse(now) + 30 * 24 * 60 * 60 * 1000).toISOString();
@@ -569,6 +745,11 @@ export const writeGymState = async (
     return { ok: true, rev: current.rev, wid: current.wid ?? '', replayed: false };
   }
 
+  const previousEncoded = encodeState(current.state ?? {}, true);
+  if (typeof previousEncoded === 'string') return { ok: false, error: 'invalid_stored_state' };
+  const rowDiff = diffEncodedState(previousEncoded, encoded);
+  encoded = rowDiff.encoded;
+
   const writeId = crypto.randomUUID();
   const revision = current.rev + 1;
   const deleted = removedEntities(current.state, encoded.state);
@@ -584,6 +765,13 @@ export const writeGymState = async (
   if (profile.theme !== null && typeof profile.theme !== 'string') return { ok: false, error: 'invalid_theme' };
 
   const activeJson = jsonArray(encoded.activeEntities);
+  const mediaIds = [...mediaHashesInState(encoded.state)];
+  const mediaJson = jsonArray(mediaIds);
+  const mediaGuard = ` AND NOT EXISTS (
+    SELECT 1 FROM gym_media_cleanup_objects q JOIN gym_media_objects m ON m.object_key = q.object_key
+      JOIN json_each(?) requested ON requested.value = m.media_id
+     WHERE m.account_id = ? AND q.deleting_at IS NOT NULL
+  )`;
   const pendingChangeGuard = options.mcp?.pendingChangeId
     ? ` AND EXISTS (SELECT 1 FROM gym_mcp_pending_changes
        WHERE account_id = ? AND client_id = ? AND change_id = ? AND used_at IS NULL AND expires_at > ?)`
@@ -604,16 +792,18 @@ export const writeGymState = async (
     initializeState,
     database.prepare(
       `UPDATE gym_sync_state SET revision = revision + 1, write_id = ?, updated_at = ?, state_timestamp = ?, reset_at = ?, revision_source = ?
-        WHERE account_id = ? AND revision = ? AND write_id IS ?${pendingChangeGuard}${restoreRevisionGuard}${tokenGuard}`,
+        WHERE account_id = ? AND revision = ? AND write_id IS ?${pendingChangeGuard}${restoreRevisionGuard}${tokenGuard}${mediaGuard}`,
     ).bind(writeId, now, stateTimestamp, resetAt, options.mcp ? 'mcp' : 'pwa', accountId, requestedRev, compareWid,
       ...(options.mcp?.pendingChangeId ? [accountId, options.mcp.clientId, options.mcp.pendingChangeId, now] : []),
       ...(options.mcp?.restoreRevisionId !== undefined ? [accountId, options.mcp.restoreRevisionId, now] : []),
-      ...tokenValues),
+      ...tokenValues, mediaJson, accountId),
   ];
   statements.push(writeStatement(database,
-    `DELETE FROM gym_mcp_revisions WHERE account_id = ? AND expires_at <= ? AND revision != ? AND ${GUARD}`,
-    [accountId, now, current.rev], accountId, revision, writeId));
-  if (current.state) statements.push(writeStatement(database,
+    `DELETE FROM gym_mcp_revisions WHERE account_id = ? AND revision_id IN (
+       SELECT revision_id FROM gym_mcp_revisions WHERE account_id = ? AND expires_at <= ? AND revision != ? LIMIT 100
+     ) AND ${GUARD}`,
+    [accountId, accountId, now, current.rev], accountId, revision, writeId));
+  if (current.state && bytesOf(JSON.stringify(omit(current.state, [...LOCAL_FIELDS]))) <= MAX_DOCUMENT_BYTES) statements.push(writeStatement(database,
     `INSERT INTO gym_mcp_revisions
       (account_id, revision, revision_id, write_id, source, state_json, created_at, expires_at)
      SELECT ?, ?, ?, ?, ?, ?, ?, ?
@@ -627,15 +817,24 @@ export const writeGymState = async (
     [accountId, current.rev, current.wid ?? crypto.randomUUID(), current.wid, current.source,
       JSON.stringify(omit(current.state, [...LOCAL_FIELDS])), current.updatedAt ?? now, expiresAt],
     accountId, revision, writeId));
-  for (const table of [
-    'gym_session_sets', 'gym_session_exercises', 'gym_routine_exercises', 'gym_custom_exercises', 'gym_sessions',
-    'gym_routines', 'gym_bodyweight', 'gym_body_measurements', 'gym_favourites', 'gym_equipment_profiles', 'gym_cards',
-    'gym_exercise_notes', 'gym_exercise_weights', 'gym_settings', 'gym_state_fields', 'gym_state_collection_presence', 'gym_profile',
-  ]) statements.push(deleteRows(database, table, accountId, revision, writeId));
-
-  statements.push(writeStatement(database,
+  for (const [table, column] of [
+    ['gym_routines', 'routine_id'], ['gym_sessions', 'session_id'], ['gym_bodyweight', 'entry_id'],
+    ['gym_body_measurements', 'entry_id'], ['gym_custom_exercises', 'exercise_id'], ['gym_favourites', 'exercise_id'],
+    ['gym_equipment_profiles', 'profile_id'], ['gym_cards', 'card_id'], ['gym_exercise_notes', 'exercise_id'],
+    ['gym_exercise_weights', 'exercise_id'], ['gym_state_fields', 'field_key'], ['gym_settings', 'setting_key'],
+  ]) {
+    const ids = table === 'gym_settings' ? rowDiff.deleted.gym_state_fields : rowDiff.deleted[table];
+    const statement = deleteIds(database, table, column, ids ?? [], accountId, revision, writeId);
+    if (statement) statements.push(statement);
+  }
+  const presenceDelete = deleteIds(database, 'gym_state_collection_presence', 'collection_key',
+    rowDiff.encoded.presence.map((row) => row.key), accountId, revision, writeId);
+  if (presenceDelete) statements.push(presenceDelete);
+  if (rowDiff.profileChanged) statements.push(writeStatement(database,
     `INSERT INTO gym_profile (account_id, unit, language, theme, created_at, updated_at)
-     SELECT ?, ?, ?, ?, ?, ? WHERE ${GUARD}`,
+     SELECT ?, ?, ?, ?, ?, ? WHERE ${GUARD}
+     ON CONFLICT(account_id) DO UPDATE SET unit = excluded.unit, language = excluded.language,
+       theme = excluded.theme, updated_at = excluded.updated_at`,
     [accountId, profile.unit, profile.language, profile.theme, now, now], accountId, revision, writeId));
   statements.push(jsonInsert(database,
     `INSERT INTO gym_state_fields (account_id, field_key, value_json, updated_revision)
@@ -732,24 +931,64 @@ export const writeGymState = async (
        FROM json_each(?) item WHERE ${GUARD}
      ON CONFLICT(account_id, entity_type, entity_id) DO UPDATE SET deleted_at = excluded.deleted_at, delete_revision = excluded.delete_revision`,
     [accountId, now, revision, jsonArray(deleted)], accountId, revision, writeId));
+  statements.push(writeStatement(database,
+    `DELETE FROM gym_media_references WHERE account_id = ? AND owner_type = 'state' AND owner_id = 'document'
+      AND media_id NOT IN (SELECT value FROM json_each(?)) AND ${GUARD}`,
+    [accountId, mediaJson], accountId, revision, writeId));
+  statements.push(writeStatement(database,
+    `INSERT OR IGNORE INTO gym_media_references (account_id, media_id, owner_type, owner_id)
+     SELECT ?, item.value, 'state', 'document' FROM json_each(?) item
+       WHERE EXISTS (SELECT 1 FROM gym_media_objects WHERE account_id = ? AND media_id = item.value)
+         AND ${GUARD}`,
+    [accountId, mediaJson, accountId], accountId, revision, writeId));
+  statements.push(writeStatement(database,
+    `DELETE FROM gym_media_cleanup_objects WHERE object_key IN (
+       SELECT m.object_key FROM gym_media_objects m JOIN gym_media_references r
+         ON r.account_id = m.account_id AND r.media_id = m.media_id
+        WHERE m.account_id = ? AND r.owner_type = 'state' AND r.owner_id = 'document'
+     ) AND ${GUARD}`,
+    [accountId], accountId, revision, writeId));
+  statements.push(writeStatement(database,
+    `INSERT OR IGNORE INTO gym_media_cleanup_objects (object_key, queued_at, not_before)
+     SELECT m.object_key, ?, ? FROM gym_media_objects m
+      WHERE m.account_id = ? AND NOT EXISTS (SELECT 1 FROM gym_media_references r
+        WHERE r.account_id = m.account_id AND r.media_id = m.media_id)
+        AND ${GUARD}`,
+    [now, new Date(Date.parse(now) + 24 * 60 * 60 * 1000).toISOString(), accountId], accountId, revision, writeId));
+  const changedFieldPaths = options.changes
+    ? options.changes.map((change) => JSON.stringify(change))
+    : encoded.fieldPaths;
   statements.push(jsonInsert(database,
     `INSERT INTO gym_sync_field_revisions (account_id, field_path, revision)
      SELECT ?, item.value, ? FROM json_each(?) item WHERE ${GUARD}
      ON CONFLICT(account_id, field_path) DO UPDATE SET revision = excluded.revision`,
-    accountId, revision, writeId, encoded.fieldPaths));
-  statements.push(writeStatement(database,
-    `INSERT INTO gym_sync_changes (account_id, revision, ordinal, operation_id, field_path, value_json, deleted, created_at)
-     SELECT ?, ?, 0, ?, '$document', NULL, 0, ? WHERE ${GUARD}`,
-    [accountId, revision, operationId, now], accountId, revision, writeId));
+    accountId, revision, writeId, changedFieldPaths));
+  if (options.changes) {
+    const changeRows = options.changes.map((change, ordinal) => {
+      const deleted = 'deleted' in change && change.deleted === true;
+      const json = JSON.stringify(change);
+      return { ordinal, path: json, valueJson: deleted ? null : json, deleted: deleted ? 1 : 0 };
+    });
+    statements.push(writeStatement(database,
+      `INSERT INTO gym_sync_changes (account_id, revision, ordinal, operation_id, write_id, field_path, value_json, deleted, created_at)
+       SELECT ?, ?, json_extract(item.value, '$.ordinal'), ?, ?, json_extract(item.value, '$.path'),
+         json_extract(item.value, '$.valueJson'), json_extract(item.value, '$.deleted'), ?
+         FROM json_each(?) item WHERE ${GUARD}`,
+      [accountId, revision, operationId, writeId, now, jsonArray(changeRows)], accountId, revision, writeId));
+  } else statements.push(writeStatement(database,
+    `INSERT INTO gym_sync_changes (account_id, revision, ordinal, operation_id, write_id, field_path, value_json, deleted, created_at)
+     SELECT ?, ?, 0, ?, ?, '$document', NULL, 0, ? WHERE ${GUARD}`,
+    [accountId, revision, operationId, writeId, now], accountId, revision, writeId));
   statements.push(writeStatement(database,
     `INSERT INTO gym_sync_receipts (account_id, operation_id, fingerprint, revision, write_id, created_at)
      SELECT ?, ?, ?, ?, ?, ? WHERE ${GUARD}`,
     [accountId, operationId, fingerprint, revision, writeId, now], accountId, revision, writeId));
-  statements.push(writeStatement(database,
+  const currentJson = JSON.stringify(encoded.state);
+  if (bytesOf(currentJson) <= MAX_DOCUMENT_BYTES) statements.push(writeStatement(database,
     `INSERT INTO gym_mcp_revisions
       (account_id, revision, revision_id, write_id, source, state_json, created_at, expires_at)
      SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE ${GUARD}`,
-    [accountId, revision, writeId, writeId, options.mcp ? 'mcp' : 'pwa', JSON.stringify(encoded.state), now, expiresAt],
+    [accountId, revision, writeId, writeId, options.mcp ? 'mcp' : 'pwa', currentJson, now, expiresAt],
     accountId, revision, writeId));
   if (options.mcp) {
     const recordGuard = 'EXISTS (SELECT 1 FROM gym_sync_state WHERE account_id = ? AND revision = ? AND write_id = ?)';
@@ -780,6 +1019,13 @@ export const writeGymState = async (
   const results = await database.batch(statements);
   if ((results[1]?.meta?.changes ?? 0) === 1) return { ok: true, rev: revision, wid: writeId, replayed: false };
 
+  const cleanupInProgress = await database.prepare(
+    `SELECT 1 AS present FROM gym_media_cleanup_objects q JOIN gym_media_objects m ON m.object_key = q.object_key
+      JOIN json_each(?) requested ON requested.value = m.media_id
+     WHERE m.account_id = ? AND q.deleting_at IS NOT NULL LIMIT 1`,
+  ).bind(mediaJson, accountId).first<{ present: number }>();
+  if (cleanupInProgress) return { ok: false, error: 'media_cleanup_in_progress' };
+
   const racedReceipt = await database.prepare(
     'SELECT fingerprint, revision, write_id AS writeId FROM gym_sync_receipts WHERE account_id = ? AND operation_id = ?',
   ).bind(accountId, operationId).first<ReceiptRow>();
@@ -794,4 +1040,37 @@ export const writeGymState = async (
     if (!available) return { ok: false, error: 'revision_unavailable' };
   }
   return { ok: false, conflict: await readGymState(database, accountId) };
+};
+
+export const writeGymChanges = async (
+  database: D1DatabaseLike,
+  accountId: string,
+  options: WriteGymChangesOptions,
+): Promise<WriteGymStateResult> => {
+  if (!Number.isSafeInteger(options.baseRev) || options.baseRev < 0) return { ok: false, error: 'invalid_base_revision' };
+  if (options.baseWid !== null && (typeof options.baseWid !== 'string' || !options.baseWid || options.baseWid.length > 128)) {
+    return { ok: false, error: 'invalid_base_write_id' };
+  }
+  if (typeof options.operationId !== 'string' || !/^[\w-]{1,128}$/.test(options.operationId)) return { ok: false, error: 'invalid_operation_id' };
+  if (!validSyncChanges(options.changes)) return { ok: false, error: 'invalid_changes' };
+  const fingerprint = await sha256(stableStringify({ baseRev: options.baseRev, baseWid: options.baseWid, changes: options.changes }));
+  const receipt = await database.prepare(
+    'SELECT fingerprint, revision, write_id AS writeId FROM gym_sync_receipts WHERE account_id = ? AND operation_id = ?',
+  ).bind(accountId, options.operationId).first<ReceiptRow>();
+  if (receipt) {
+    if (receipt.fingerprint !== fingerprint) return { ok: false, error: 'operation_id_reused' };
+    return { ok: true, rev: receipt.revision, wid: receipt.writeId, replayed: true };
+  }
+  const snapshot = await readGymState(database, accountId);
+  if (snapshot.rev !== options.baseRev || snapshot.wid !== options.baseWid) return { ok: false, conflict: snapshot };
+  return writeGymState(database, accountId, {
+    state: applySyncChanges(snapshot.state, options.changes),
+    baseRev: options.baseRev,
+    baseWid: options.baseWid,
+    replaceDocument: true,
+    allowLarge: true,
+    operationId: options.operationId,
+    changeFingerprint: fingerprint,
+    changes: options.changes,
+  });
 };

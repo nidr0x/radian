@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readGymState, writeGymState } from '../functions/lib/db/radian/state';
+import { readGymState, writeGymChanges, writeGymState } from '../functions/lib/db/radian/state';
 import { openTestDatabase } from './support/opengym-d1';
 
 const openDatabase = openTestDatabase;
@@ -109,6 +109,140 @@ describe('repositorio relacional openGym', () => {
         (account_id, proposal_id, job_id, status, payload_json, created_at, updated_at)
         VALUES (?, ?, ?, 'pending', '{}', ?, ?)`)
         .run('account-b', 'proposal-b', 'job-a', '2026-10-26T12:00:00.000Z', '2026-10-26T12:00:00.000Z')).toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
+  it('writes a preference change without deleting unchanged workout rows', async () => {
+    const { database, d1 } = openDatabase();
+    try {
+      const first = await writeGymState(d1, 'account-a', {
+        state: {
+          workouts: Array.from({ length: 20 }, (_, index) => ({
+            id: `workout-${index}`, d: '2026-11-18', start: index, entries: [],
+          })),
+        },
+        baseRev: 0,
+      });
+      if (!first.ok) throw new Error('No se pudo preparar el historial inicial.');
+      database.exec(`CREATE TABLE test_session_deletes (count INTEGER NOT NULL);
+        INSERT INTO test_session_deletes VALUES (0);
+        CREATE TRIGGER test_count_session_deletes AFTER DELETE ON gym_sessions
+          BEGIN UPDATE test_session_deletes SET count = count + 1; END;`);
+
+      const updated = await writeGymState(d1, 'account-a', {
+        state: { unit: 'lb' }, baseRev: first.rev, baseWid: first.wid,
+      });
+
+      expect(updated).toMatchObject({ ok: true, rev: first.rev + 1 });
+      expect(database.prepare('SELECT count FROM test_session_deletes').get()).toEqual({ count: 0 });
+      expect(database.prepare('SELECT COUNT(*) AS count FROM gym_sessions').get()).toEqual({ count: 20 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it('applies bounded sync changes with revision guards and idempotent retries', async () => {
+    const { database, d1 } = openDatabase();
+    try {
+      const first = await writeGymState(d1, 'account-a', {
+        state: { workouts: [{ id: 'workout-1', d: '2026-11-17', entries: [] }] },
+        baseRev: 0,
+      });
+      if (!first.ok) throw new Error('No se pudo preparar la revisión inicial.');
+      const batch = {
+        baseRev: first.rev,
+        baseWid: first.wid,
+        operationId: 'client-batch-1',
+        changes: [
+          { kind: 'field' as const, key: 'theme', value: 'dark' },
+          { kind: 'entity' as const, collection: 'workouts' as const, id: 'workout-2', position: 1,
+            value: { id: 'workout-2', d: '2026-11-18', entries: [] } },
+        ],
+      };
+
+      const applied = await writeGymChanges(d1, 'account-a', batch);
+      const replay = await writeGymChanges(d1, 'account-a', batch);
+
+      expect(applied).toMatchObject({ ok: true, rev: first.rev + 1, replayed: false });
+      expect(replay).toMatchObject({ ok: true, rev: first.rev + 1, replayed: true });
+      expect((await readGymState(d1, 'account-a')).state).toMatchObject({
+        theme: 'dark', workouts: [{ id: 'workout-1' }, { id: 'workout-2' }],
+      });
+      expect(await writeGymChanges(d1, 'account-a', {
+        ...batch, operationId: 'client-batch-stale', changes: [{ kind: 'field', key: 'theme', value: 'light' }],
+      })).toMatchObject({ ok: false, conflict: { rev: first.rev + 1 } });
+      expect((await readGymState(d1, 'account-a')).state?.theme).toBe('dark');
+    } finally {
+      database.close();
+    }
+  });
+
+  it('updates and reorders legacy workouts by their stable date and start keys', async () => {
+    const { database, d1 } = openDatabase();
+    try {
+      const first = await writeGymState(d1, 'account-a', { state: {
+        workouts: [
+          { d: '2026-11-17', start: 10, entries: [] },
+          { d: '2026-11-18', start: 20, entries: [] },
+        ],
+      }, baseRev: 0 });
+      if (!first.ok) throw new Error('No se pudo preparar el historial legacy.');
+
+      const result = await writeGymChanges(d1, 'account-a', {
+        baseRev: first.rev, baseWid: first.wid, operationId: 'legacy-workout-reorder', changes: [
+          { kind: 'entity', collection: 'workouts', id: '2026-11-18|20', position: 0,
+            value: { d: '2026-11-18', start: 20, entries: [], note: 'moved' } },
+          { kind: 'entity', collection: 'workouts', id: '2026-11-17|10', position: 1,
+            value: { d: '2026-11-17', start: 10, entries: [] } },
+        ],
+      });
+
+      expect(result.ok).toBe(true);
+      expect((await readGymState(d1, 'account-a')).state?.workouts).toEqual([
+        { d: '2026-11-18', start: 20, entries: [], note: 'moved' },
+        { d: '2026-11-17', start: 10, entries: [] },
+      ]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it('synchronizes a state larger than the snapshot limit in bounded entity batches', async () => {
+    const { database, d1 } = openDatabase();
+    try {
+      let baseRev = 0;
+      let baseWid: string | null = null;
+      const workouts = Array.from({ length: 100 }, (_, index) => ({
+        kind: 'entity' as const,
+        collection: 'workouts' as const,
+        id: `large-workout-${index}`,
+        position: index,
+        value: { id: `large-workout-${index}`, d: `2026-11-${String(index % 28 + 1).padStart(2, '0')}`, note: 'x'.repeat(10_000), entries: [] },
+      }));
+      for (let offset = 0; offset < workouts.length; offset += 10) {
+        const result = await writeGymChanges(d1, 'account-a', {
+          baseRev, baseWid, operationId: `large-batch-${offset}`,
+          changes: workouts.slice(offset, offset + 10),
+        });
+        if (!result.ok) throw new Error('No se pudo sincronizar un lote de entrenamientos.');
+        baseRev = result.rev;
+        baseWid = result.wid;
+      }
+      const loaded = await readGymState(d1, 'account-a');
+      expect(new TextEncoder().encode(JSON.stringify(loaded.state)).byteLength).toBeGreaterThan(900_000);
+      expect(loaded.state?.workouts).toHaveLength(100);
+
+      const preference = await writeGymChanges(d1, 'account-a', {
+        baseRev, baseWid, operationId: 'large-history-preference',
+        changes: [{ kind: 'field', key: 'theme', value: 'dark' }],
+      });
+
+      expect(preference).toMatchObject({ ok: true, rev: baseRev + 1 });
+      const updated = await readGymState(d1, 'account-a');
+      expect(updated.state?.theme).toBe('dark');
+      expect(updated.state?.workouts).toHaveLength(100);
     } finally {
       database.close();
     }

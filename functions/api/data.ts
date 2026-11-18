@@ -110,7 +110,8 @@ export const onRequestPut = async (context: SyncContext): Promise<Response> => {
     return json({ error: 'conflict', message: 'Hay una versión más reciente en otro dispositivo.', ...result.conflict }, 409);
   }
   if (!result.ok) {
-    const status = result.error === 'payload_too_large' || result.error === 'field_too_large' ? 413 : 400;
+    const status = result.error === 'payload_too_large' || result.error === 'field_too_large' ? 413
+      : result.error === 'media_cleanup_in_progress' ? 409 : 400;
     return json({ error: result.error, message: 'No se han podido guardar los datos enviados.' }, status);
   }
   return json({ rev: result.rev, wid: result.wid });

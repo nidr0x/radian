@@ -200,6 +200,8 @@ describe('persistencia del store web', () => {
     mocks.api.mockImplementation(async (path, options = {}) => {
       if (path === '/api/config') return { allow_guest: true, invite_only: false, password_login: false }
       if (path === '/api/me') return { user: { id: 'account-a', name: 'Ada' } }
+      if (path === '/api/data/rev') return { rev: 5, wid: 'server-a5' }
+      if (path === '/api/data/snapshot') throw Object.assign(new Error('Not found'), { status: 404 })
       if (path === '/api/data' && options.method === 'PUT') {
         putBodies.push(JSON.parse(options.body))
         return { rev: 6, wid: 'server-a6' }
@@ -237,6 +239,8 @@ describe('persistencia del store web', () => {
     mocks.api.mockImplementation(async (path, options = {}) => {
       if (path === '/api/config') return { allow_guest: true, invite_only: false, password_login: false }
       if (path === '/api/me') return { user: { id: 'account-a', name: 'Ada' } }
+      if (path === '/api/data/rev') return { rev: 5, wid: 'server-a5' }
+      if (path === '/api/data/snapshot') throw Object.assign(new Error('Not found'), { status: 404 })
       if (path === '/api/data' && options.method === 'PUT') {
         const body = JSON.parse(options.body)
         putBodies.push(body)
@@ -260,6 +264,127 @@ describe('persistencia del store web', () => {
 
     expect(putBodies[0]).toMatchObject({ baseRev: 5, baseWid: 'server-a5' })
     expect(await stateStore.get('account-a')).toMatchObject({ base: { rev: 6, wid: 'server-a6' }, owed: false })
+  })
+
+  it('sube solo los cambios locales en lotes versionados cuando la base es compatible', async () => {
+    await stateStore.open()
+    const baseline = { ...useStore.getState().S, theme: 'light', workouts: [{ id: 'workout-1', d: '2026-11-17', entries: [] }], _ts: 10 }
+    const pending = { ...baseline, theme: 'dark', _ts: 20 }
+    await stateStore.save('account-a', {
+      state: pending, base: { rev: 5, ts: 10, wid: 'server-a5' }, owed: true, fingerprint: syncFingerprint(baseline),
+    })
+    localStorage.setItem('gym_owner', 'account-a')
+    localStorage.setItem('gym_state_owner', 'account-a')
+    localStorage.setItem('gym_user', JSON.stringify({ id: 'account-a', name: 'Ada' }))
+    const batches = []
+    const snapshot = { ...baseline, _rev: 5, _wid: 'server-a5' }
+    mocks.api.mockImplementation(async (path, options = {}) => {
+      if (path === '/api/config') return { allow_guest: true, invite_only: false, password_login: false }
+      if (path === '/api/me') return { user: { id: 'account-a', name: 'Ada' } }
+      if (path === '/api/data' && options.method !== 'PUT') return { state: snapshot, rev: 5 }
+      if (path === '/api/data/changes' && options.method === 'POST') {
+        batches.push(JSON.parse(options.body))
+        return { version: 2, rev: 6, wid: 'server-a6' }
+      }
+      throw new Error(`Unexpected API request: ${path}`)
+    })
+    vi.resetModules()
+    ;({ useStore } = await import('./useStore.js'))
+    ;({ stateStore } = await import('../lib/state-store-idb.js'))
+
+    await useStore.getState().boot()
+    await useStore.getState().saveNow()
+
+    expect(batches).toHaveLength(1)
+    expect(batches[0]).toMatchObject({ version: 2, baseRev: 5, baseWid: 'server-a5' })
+    expect(batches[0].changes).toContainEqual({ kind: 'field', key: 'theme', value: 'dark' })
+    expect(batches[0].changes).toContainEqual({ kind: 'field', key: '_ts', value: 20 })
+    expect((await stateStore.get('account-a'))).toMatchObject({ base: { rev: 6, wid: 'server-a6' }, owed: false })
+  })
+
+  it('lee y aplica cambios remotos por revisión sin descargar el documento completo', async () => {
+    await stateStore.open()
+    const baseline = { ...useStore.getState().S, theme: 'light', workouts: [{ id: 'workout-1', d: '2026-11-17', entries: [] }], _ts: 10 }
+    await stateStore.save('account-a', {
+      state: baseline, base: { rev: 5, ts: 10, wid: 'server-a5' }, owed: false, fingerprint: syncFingerprint(baseline),
+    })
+    localStorage.setItem('gym_owner', 'account-a')
+    localStorage.setItem('gym_state_owner', 'account-a')
+    localStorage.setItem('gym_user', JSON.stringify({ id: 'account-a', name: 'Ada' }))
+    const deltas = []
+    mocks.api.mockImplementation(async path => {
+      if (path === '/api/config') return { allow_guest: true, invite_only: false, password_login: false }
+      if (path === '/api/me') return { user: { id: 'account-a', name: 'Ada' } }
+      if (path.startsWith('/api/data/changes?')) {
+        deltas.push(path)
+        return { version: 2, rev: 6, wid: 'server-a6', changes: [
+          { kind: 'field', key: 'theme', value: 'dark' },
+          { kind: 'entity', collection: 'workouts', id: 'workout-2', position: 1, value: { id: 'workout-2', d: '2026-11-18', entries: [] } },
+        ], more: false }
+      }
+      throw new Error(`Unexpected API request: ${path}`)
+    })
+    vi.resetModules()
+    ;({ useStore } = await import('./useStore.js'))
+    ;({ stateStore } = await import('../lib/state-store-idb.js'))
+
+    await useStore.getState().boot()
+    await useStore.getState().saveNow()
+
+    expect(deltas).toHaveLength(1)
+    expect(mocks.api).not.toHaveBeenCalledWith('/api/data', expect.anything())
+    expect(useStore.getState().S).toMatchObject({ theme: 'dark', workouts: [{ id: 'workout-1' }, { id: 'workout-2' }] })
+    expect(await stateStore.get('account-a')).toMatchObject({ base: { rev: 6, wid: 'server-a6' }, owed: false })
+  })
+
+  it('usa páginas de snapshot cuando el historial versionado requiere una base nueva', async () => {
+    await stateStore.open()
+    const baseline = { ...useStore.getState().S, theme: 'light', workouts: [{ id: 'workout-1', d: '2026-11-17', entries: [] }], _ts: 10 }
+    await stateStore.save('account-a', {
+      state: baseline, base: { rev: 5, ts: 10, wid: 'server-a5' }, owed: false, fingerprint: syncFingerprint(baseline),
+    })
+    localStorage.setItem('gym_owner', 'account-a')
+    localStorage.setItem('gym_state_owner', 'account-a')
+    localStorage.setItem('gym_user', JSON.stringify({ id: 'account-a', name: 'Ada' }))
+    const pages = []
+    const writes = []
+    mocks.api.mockImplementation(async (path, options = {}) => {
+      if (path === '/api/config') return { allow_guest: true, invite_only: false, password_login: false }
+      if (path === '/api/me') return { user: { id: 'account-a', name: 'Ada' } }
+      if (path.startsWith('/api/data/changes?')) return { version: 2, snapshotRequired: true, rev: 6, wid: 'server-a6' }
+      if (path === '/api/data/changes' && options.method === 'POST') {
+        writes.push(JSON.parse(options.body))
+        return { version: 2, rev: 7, wid: 'server-a7' }
+      }
+      if (path === '/api/data/snapshot') {
+        pages.push(path)
+        return { version: 2, rev: 6, wid: 'server-a6', offset: 0, nextOffset: 3, changes: [
+          { kind: 'field', key: 'theme', value: 'dark' },
+          { kind: 'field', key: '_ts', value: 30 },
+          { kind: 'entity', collection: 'workouts', id: 'workout-1', position: 0, value: baseline.workouts[0] },
+        ] }
+      }
+      if (path.startsWith('/api/data/snapshot?')) {
+        pages.push(path)
+        return { version: 2, rev: 6, wid: 'server-a6', offset: 3, nextOffset: null, changes: [
+          { kind: 'entity', collection: 'workouts', id: 'workout-2', position: 1,
+            value: { id: 'workout-2', d: '2026-11-18', entries: [] } },
+        ] }
+      }
+      throw new Error(`Unexpected API request: ${path}`)
+    })
+    vi.resetModules()
+    ;({ useStore } = await import('./useStore.js'))
+    ;({ stateStore } = await import('../lib/state-store-idb.js'))
+
+    await useStore.getState().boot()
+    await useStore.getState().saveNow()
+
+    expect(pages).toHaveLength(2)
+    expect(writes).toHaveLength(1)
+    expect(mocks.api).not.toHaveBeenCalledWith('/api/data', expect.anything())
+    expect(useStore.getState().S).toMatchObject({ theme: 'dark', workouts: [{ id: 'workout-1' }, { id: 'workout-2' }] })
+    expect(await stateStore.get('account-a')).toMatchObject({ base: { rev: 7, wid: 'server-a7' }, owed: false })
   })
 
   it('conserva y actualiza la copia local si IndexedDB no se puede abrir', async () => {
@@ -339,9 +464,15 @@ describe('persistencia del store web', () => {
     const firstWindow = window
     const secondWindow = new Window({ url: 'https://radian.example/' })
     const putBodies = []
+    const changeBatches = []
     mocks.api.mockImplementation(async (path, options = {}) => {
       if (path === '/api/config') return { allow_guest: true, invite_only: false, password_login: false }
       if (path === '/api/me') throw Object.assign(new Error('session expired'), { status: 401 })
+      if (path === '/api/data/rev') return { rev: 9, wid: 'server-b9' }
+      if (path === '/api/data/changes' && options.method === 'POST') {
+        changeBatches.push(JSON.parse(options.body))
+        return { version: 2, rev: 10, wid: 'server-b10' }
+      }
       if (path === '/api/data' && options.method === 'PUT') {
         putBodies.push(JSON.parse(options.body))
         return { rev: 10, wid: 'server-b10' }
@@ -378,12 +509,13 @@ describe('persistencia del store web', () => {
     await secondStore.getState().pushState()
     await secondStore.getState().saveNow()
 
-    expect(putBodies[0]).toMatchObject({ baseRev: 9, baseWid: 'server-b9', state: { theme: 'light', workouts: [{ id: 'workout-b' }] } })
+    expect(putBodies).toHaveLength(0)
+    expect(changeBatches).toHaveLength(0)
     expect(await firstStateStore.get('account-a')).toMatchObject({
       base: { rev: 7, ts: 70, wid: 'server-a7' }, owed: true, syncMetaVersion: 2, lastSynced: 100, fingerprint: fingerprintA,
       outbox: { state: { theme: 'dark', workouts: [{ id: 'workout-a' }] }, base: { rev: 7, ts: 70, wid: 'server-a7' } },
     })
-    expect(await firstStateStore.get('account-b')).toMatchObject({ state: { theme: 'light', workouts: [{ id: 'workout-b' }] }, base: { rev: 10, ts: 0, wid: 'server-b10' }, owed: false, syncMetaVersion: 2, lastSynced: expect.any(Number) })
+    expect(await firstStateStore.get('account-b')).toMatchObject({ state: { theme: 'light', workouts: [{ id: 'workout-b' }] }, base: { rev: 9, ts: 0, wid: 'server-b9' }, owed: false, syncMetaVersion: 2, lastSynced: expect.any(Number) })
 
     Object.assign(globalThis, { window: firstWindow, document: firstWindow.document, location: firstWindow.location })
     Object.defineProperty(globalThis, 'navigator', { configurable: true, value: firstWindow.navigator })
@@ -393,9 +525,16 @@ describe('persistencia del store web', () => {
     localStorage.setItem('gym_sync_owner', 'account-a')
     localStorage.setItem('gym_user', JSON.stringify({ id: 'account-a', name: 'Ada' }))
     const putBodiesA = []
+    const changeBatchesA = []
     mocks.api.mockImplementation(async (path, options = {}) => {
       if (path === '/api/config') return { allow_guest: true, invite_only: false, password_login: false }
       if (path === '/api/me') return { user: { id: 'account-a', name: 'Ada' } }
+      if (path === '/api/data/rev') return { rev: 7, wid: 'server-a7' }
+      if (path.startsWith('/api/data/changes?')) return { version: 2, rev: 7, wid: 'server-a7', changes: [], more: false }
+      if (path === '/api/data/changes' && options.method === 'POST') {
+        changeBatchesA.push(JSON.parse(options.body))
+        return { version: 2, rev: 8, wid: 'server-a8' }
+      }
       if (path === '/api/data' && options.method === 'PUT') {
         putBodiesA.push(JSON.parse(options.body))
         return { rev: 8, wid: 'server-a8' }
@@ -409,9 +548,9 @@ describe('persistencia del store web', () => {
     await useStore.getState().boot()
     await useStore.getState().saveNow()
 
-    expect(putBodiesA.length).toBeGreaterThanOrEqual(1)
-    expect(putBodiesA[0]).toMatchObject({ baseRev: 7, baseWid: 'server-a7', state: { theme: 'dark', workouts: [{ id: 'workout-a' }] } })
-    expect(putBodiesA.every(({ state }) => state.workouts.every(({ id }) => id !== 'workout-b'))).toBe(true)
+    expect(putBodiesA).toHaveLength(0)
+    expect(changeBatchesA.length).toBeGreaterThanOrEqual(1)
+    expect(changeBatchesA.every(({ changes }) => changes.every(change => change.id !== 'workout-b'))).toBe(true)
     expect(await stateStore.get('account-a')).toMatchObject({ owed: false, outbox: null })
     expect(await stateStore.get('account-b')).toMatchObject({ state: { theme: 'light', workouts: [{ id: 'workout-b' }] }, owed: false })
   })
