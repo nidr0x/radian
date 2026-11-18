@@ -1,4 +1,5 @@
 import { enforceAuthRateLimit, getAuthenticatedContext, json, randomId } from '../../lib/auth';
+import { mediaHashesInState, readGymState } from '../../lib/db/radian/state';
 import { MEDIA_MIME_TYPES, mediaConfig, mediaLimitBytes, MEDIA_MB, readBoundedBytes, sha256Hex, validateMediaPayload, type MediaEnvironment, type R2BucketLike } from '../../lib/media/objects';
 import type { SyncContext } from '../../types';
 
@@ -57,10 +58,13 @@ export const onRequestPut = async (context: MediaContext): Promise<Response> => 
 
   const database = authenticated.env.DB!;
   const existing = await ownerMedia(authenticated.env.DB!, authenticated.user.id, id);
+  const queuedCleanup = existing ? await database.prepare(
+    'SELECT deleting_at AS deletingAt FROM gym_media_cleanup_objects WHERE object_key = ?',
+  ).bind(existing.objectKey).first<{ deletingAt: string | null }>() : null;
   const quotaBytes = Math.floor(limits.quotaMB * MEDIA_MB);
-  const objectKey = existing?.objectKey ?? `media/${randomId(24)}`;
+  const objectKey = existing?.objectKey && !queuedCleanup ? existing.objectKey : `media/${randomId(24)}`;
   const deleteUnreservedObject = async (): Promise<void> => {
-    if (!existing) await bucket.delete(objectKey).catch(() => {});
+    if (!existing || existing.objectKey !== objectKey) await bucket.delete(objectKey).catch(() => {});
   };
   const cleanupCandidate = async (): Promise<void> => {
     if (existing) return;
@@ -83,7 +87,7 @@ export const onRequestPut = async (context: MediaContext): Promise<Response> => 
           OR EXISTS (SELECT 1 FROM gym_media_objects WHERE account_id = ? AND media_id = ? AND byte_size = ?)
           OR COALESCE((SELECT SUM(byte_size) FROM gym_media_objects WHERE account_id = ? AND media_id <> ?), 0) + ? <= ?
        ON CONFLICT(account_id, media_id) DO UPDATE SET
-         sha256 = excluded.sha256, mime_type = excluded.mime_type,
+         object_key = excluded.object_key, sha256 = excluded.sha256, mime_type = excluded.mime_type,
          byte_size = excluded.byte_size, created_at = excluded.created_at`,
     ).bind(authenticated.user.id, id, objectKey, id, declaredMime, bytes.byteLength, new Date().toISOString(),
       quotaBytes, authenticated.user.id, id, bytes.byteLength, authenticated.user.id, id, bytes.byteLength, quotaBytes).run();
@@ -97,6 +101,19 @@ export const onRequestPut = async (context: MediaContext): Promise<Response> => 
     const winner = await ownerMedia(authenticated.env.DB!, authenticated.user.id, id);
     if (!winner) throw new Error('media_metadata_missing');
     if (winner.objectKey !== objectKey) await bucket.delete(objectKey).catch(() => {});
+    const snapshot = await readGymState(database, authenticated.user.id);
+    if (snapshot.state && mediaHashesInState(snapshot.state).has(id)) await database.batch([
+      database.prepare(
+        `INSERT OR IGNORE INTO gym_media_references (account_id, media_id, owner_type, owner_id)
+         SELECT ?, ?, 'state', 'document' WHERE EXISTS (
+           SELECT 1 FROM gym_sync_state WHERE account_id = ? AND revision = ? AND write_id IS ?
+         ) AND EXISTS (SELECT 1 FROM gym_media_objects WHERE account_id = ? AND media_id = ? AND object_key = ?)`,
+      ).bind(authenticated.user.id, id, authenticated.user.id, snapshot.rev, snapshot.wid, authenticated.user.id, id, winner.objectKey),
+      database.prepare(
+        `DELETE FROM gym_media_cleanup_objects WHERE object_key = ? AND deleting_at IS NULL
+          AND EXISTS (SELECT 1 FROM gym_media_references WHERE account_id = ? AND media_id = ? AND owner_type = 'state' AND owner_id = 'document')`,
+      ).bind(winner.objectKey, authenticated.user.id, id),
+    ]);
   } catch {
     await cleanupCandidate();
     return json({ error: 'media_store_failed' }, 503);

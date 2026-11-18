@@ -160,7 +160,68 @@ describe('almacén de medios openGym', () => {
 
     expect(response.status).toBe(200);
     expect(database.prepare('SELECT object_key FROM gym_media_cleanup_objects').all()).toEqual([{ object_key: 'orphan/photo' }]);
-    expect(database.prepare('SELECT object_key FROM gym_media_objects WHERE media_id = ?').all('a'.repeat(64))).toEqual([]);
+    expect(database.prepare('SELECT object_key FROM gym_media_objects WHERE media_id = ?').all('a'.repeat(64))).toEqual([{ object_key: 'orphan/photo' }]);
+    expect(Date.parse(database.prepare('SELECT not_before FROM gym_media_cleanup_objects WHERE object_key = ?').get('orphan/photo')?.not_before))
+      .toBeGreaterThan(Date.now() + 23 * 60 * 60 * 1000);
     expect(bucket.delete).not.toHaveBeenCalled();
+  });
+
+  it('retains media while any reference remains and delays cleanup after the last one is removed', async () => {
+    const { database, d1 } = makeDatabase();
+    const hash = 'b'.repeat(64);
+    database.prepare(
+      'INSERT INTO gym_media_objects (account_id, media_id, object_key, sha256, mime_type, byte_size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run('account-a', hash, 'media/photo', hash, 'image/jpeg', 4, '2026-11-18T00:00:00.000Z');
+    const first = await writeGymState(d1, 'account-a', { state: { workouts: [
+      { id: 'workout-1', d: '2026-11-17', entries: [], media: [{ hash }] },
+      { id: 'workout-2', d: '2026-11-18', entries: [], media: [{ hash }] },
+    ] }, baseRev: 0 });
+    if (!first.ok) throw new Error('No se pudo guardar el estado inicial.');
+
+    const oneReference = await writeGymState(d1, 'account-a', { state: {
+      workouts: [{ id: 'workout-2', d: '2026-11-18', entries: [], media: [{ hash }] }],
+    }, baseRev: first.rev, baseWid: first.wid });
+    if (!oneReference.ok) throw new Error('No se pudo guardar la referencia restante.');
+    expect(database.prepare('SELECT COUNT(*) AS count FROM gym_media_references WHERE account_id = ? AND media_id = ?')
+      .get('account-a', hash)).toEqual({ count: 1 });
+    expect(database.prepare('SELECT COUNT(*) AS count FROM gym_media_cleanup_objects WHERE object_key = ?').get('media/photo'))
+      .toEqual({ count: 0 });
+
+    const removed = await writeGymState(d1, 'account-a', { state: { workouts: [] }, baseRev: oneReference.rev, baseWid: oneReference.wid });
+    expect(removed.ok).toBe(true);
+    expect(database.prepare('SELECT COUNT(*) AS count FROM gym_media_references WHERE account_id = ? AND media_id = ?')
+      .get('account-a', hash)).toEqual({ count: 0 });
+    expect(database.prepare('SELECT COUNT(*) AS count FROM gym_media_objects WHERE object_key = ?').get('media/photo'))
+      .toEqual({ count: 1 });
+    expect(Date.parse(database.prepare('SELECT not_before FROM gym_media_cleanup_objects WHERE object_key = ?').get('media/photo')?.not_before))
+      .toBeGreaterThan(Date.now() + 23 * 60 * 60 * 1000);
+  });
+
+  it('moves metadata to a fresh object key when the queued key is already being deleted', async () => {
+    const { database, d1 } = makeDatabase();
+    const bytes = Uint8Array.from([0xff, 0xd8, 0xff, 0x04]);
+    const hash = await sha256Hex(bytes);
+    objectBytes.set('media/old', bytes);
+    database.prepare(
+      'INSERT INTO gym_media_objects (account_id, media_id, object_key, sha256, mime_type, byte_size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run('account-a', hash, 'media/old', hash, 'image/jpeg', bytes.length, '2026-11-18T00:00:00.000Z');
+    database.prepare(
+      'INSERT INTO gym_media_cleanup_objects (object_key, queued_at, deleting_at) VALUES (?, ?, ?)',
+    ).run('media/old', '2026-11-18T00:00:00.000Z', new Date().toISOString());
+
+    const response = await onRequestPut({
+      request: new Request(`https://opengym.local/api/media/${hash}`, {
+        method: 'PUT', headers: { 'Content-Type': 'image/jpeg' }, body: requestBody(bytes),
+      }),
+      env: { DB: d1, MEDIA_BUCKET: makeBucket() },
+    });
+    const row = database.prepare('SELECT object_key AS objectKey FROM gym_media_objects WHERE account_id = ? AND media_id = ?')
+      .get('account-a', hash) as { objectKey: string };
+
+    expect(response.status).toBe(200);
+    expect(row.objectKey).not.toBe('media/old');
+    expect(objectBytes.has(row.objectKey)).toBe(true);
+    expect(database.prepare('SELECT COUNT(*) AS count FROM gym_media_cleanup_objects WHERE object_key = ?')
+      .get('media/old')).toEqual({ count: 1 });
   });
 });

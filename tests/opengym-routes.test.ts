@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   readGymState: vi.fn(),
   readGymRevision: vi.fn(),
   writeGymState: vi.fn(),
+  writeGymChanges: vi.fn(),
+  gymStateToChanges: vi.fn(),
 }));
 
 vi.mock('../functions/lib/auth', () => ({
@@ -27,11 +29,17 @@ vi.mock('../functions/lib/db/radian/state', () => ({
   readGymState: mocks.readGymState,
   readGymRevision: mocks.readGymRevision,
   writeGymState: mocks.writeGymState,
+  writeGymChanges: mocks.writeGymChanges,
+  gymStateToChanges: mocks.gymStateToChanges,
   MAX_DOCUMENT_BYTES: 900_000,
+  MAX_SYNC_BATCH_BYTES: 256_000,
+  MAX_SYNC_BATCH_CHANGES: 100,
 }));
 
 import { onRequestGet as getData, onRequestPut } from '../functions/api/data';
 import { onRequestGet as getRevision } from '../functions/api/data/rev';
+import { onRequestGet as getChanges, onRequestPost as postChanges } from '../functions/api/data/changes';
+import { onRequestGet as getSnapshotPage } from '../functions/api/data/snapshot';
 import { onRequestGet as getHealth } from '../functions/api/health';
 import { mapLegacyAuthResponse, rewriteJsonRequest } from '../functions/lib/radian-api/compat';
 
@@ -142,6 +150,39 @@ describe('contrato Pages de openGym', () => {
     expect(await saved.json()).toEqual({ rev: 5, wid: 'write-5' });
     expect(conflict.status).toBe(409);
     expect(await conflict.json()).toMatchObject({ error: 'conflict', state: { routines: [] }, rev: 6, wid: 'write-6' });
+  });
+
+  it('conserva la instantánea versionada y escribe cambios con sus guardas', async () => {
+    mocks.getAuthenticatedContext.mockResolvedValue(authenticated);
+    mocks.enforceAuthRateLimit.mockResolvedValue(undefined);
+    mocks.writeGymChanges.mockResolvedValue({ ok: true, rev: 5, wid: 'write-5', replayed: false });
+    const body = { version: 2, baseRev: 4, baseWid: 'write-4', operationId: 'sync-batch-1',
+      changes: [{ kind: 'field', key: 'theme', value: 'dark' }] };
+
+    const response = await postChanges(context(jsonRequest('https://radian.example/api/data/changes', 'POST', body)));
+
+    expect(mocks.writeGymChanges).toHaveBeenCalledWith(database, 'account-a', expect.objectContaining({
+      baseRev: 4, baseWid: 'write-4', operationId: 'sync-batch-1', changes: body.changes,
+    }));
+    expect(await response.json()).toEqual({ version: 2, rev: 5, wid: 'write-5', replayed: false });
+  });
+
+  it('lee cambios por revisión con cursor y sirve snapshots en páginas limitadas', async () => {
+    mocks.getAuthenticatedContext.mockResolvedValue(authenticated);
+    mocks.enforceAuthRateLimit.mockResolvedValue(undefined);
+    mocks.readGymRevision.mockResolvedValue({ rev: 0, wid: null });
+    const changes = await getChanges(context(new Request('https://radian.example/api/data/changes?v=2&after=0')));
+    expect(await changes.json()).toEqual({ version: 2, rev: 0, wid: null, changes: [], more: false });
+
+    mocks.readGymState.mockResolvedValue({ state: { _rev: 4, _wid: 'write-4' }, rev: 4, wid: 'write-4' });
+    mocks.gymStateToChanges.mockReturnValue(Array.from({ length: 101 }, (_, index) => ({ kind: 'field', key: `field-${index}`, value: index })));
+    const first = await getSnapshotPage(context(new Request('https://radian.example/api/data/snapshot')));
+    const firstPage = await first.json();
+    const last = await getSnapshotPage(context(new Request(`https://radian.example/api/data/snapshot?rev=4&wid=write-4&offset=${firstPage.nextOffset}`)));
+
+    expect(firstPage.changes).toHaveLength(100);
+    expect(firstPage.nextOffset).toBe(100);
+    expect(await last.json()).toMatchObject({ rev: 4, wid: 'write-4', offset: 100, nextOffset: null, changes: [{ key: 'field-100' }] });
   });
 
   it('rechaza JSON inválido, un estado no objeto y cuerpos sobredimensionados', async () => {

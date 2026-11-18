@@ -3,6 +3,7 @@
 
 import { dispatchDueJobs, processQueueBatch, type QueueBatchLike } from '../functions/lib/radian-api/jobs-worker';
 import { drainMediaCleanup, type MediaCleanupBucket } from '../functions/lib/radian-api/media-cleanup';
+import { cleanupExpiredOperationalRecords } from '../functions/lib/radian-api/retention-cleanup';
 import { flushPairCleanup, type PairR2Bucket } from '../functions/lib/pairing/v2';
 import type { PushEnvironment } from '../functions/lib/radian-api/push';
 
@@ -18,5 +19,6 @@ export default {
     if (env.PUSH_QUEUE) context.waitUntil(dispatchDueJobs(env.DB, env.PUSH_QUEUE));
     if (env.MEDIA_BUCKET) context.waitUntil(drainMediaCleanup(env.DB, env.MEDIA_BUCKET));
     if (env.PAIR_OBJECTS) context.waitUntil(flushPairCleanup(env.DB, env.PAIR_OBJECTS));
+    context.waitUntil(cleanupExpiredOperationalRecords(env.DB));
   },
 };

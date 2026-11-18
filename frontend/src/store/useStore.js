@@ -15,7 +15,7 @@ import { convertStateUnit } from '../lib/units.js'
 import { pendingRefCount, settleMedia, loadPending } from '../lib/media-owed.js'
 import { referencedHashes } from '../lib/media-refs.js'
 import { mediaStore, mediaStoreInUse } from '../lib/media-store.js'
-import { countChanges, syncFingerprint } from '../lib/sync-changes.js'
+import { applySyncChanges, countChanges, MAX_SYNC_BATCH_BYTES, MAX_SYNC_BATCH_CHANGES, MAX_SYNC_CHANGE_BYTES, syncChanges, syncFingerprint } from '../lib/sync-changes.js'
 import { saveWorkoutEdit, deleteEditedWorkout } from '../lib/session-edit.js'
 import { appBase } from '../lib/app-base.js'
 import { linkTokenFromSearch, stripLinkFromUrl } from '../lib/device-link.js'
@@ -1020,6 +1020,128 @@ export const useStore = create((set, get) => {
   // Take the server's copy as this device's own, timestamp and all (see persist).
   const adopt = (next, rev) => { persist(next, false, false); writeSync(rev, next._ts, next._wid); markOwed(false) }
 
+  const readVersionedSnapshot = async (context) => {
+    let path = '/api/data/snapshot'
+    let state = {}
+    let revision = null
+    let writeId = null
+    let offset = 0
+    for (;;) {
+      const page = await api(path)
+      if (!syncContextIsCurrent(context)) return null
+      if (page.version !== 2 || !Number.isSafeInteger(page.rev) || page.rev < 0
+        || (page.wid != null && typeof page.wid !== 'string') || !Array.isArray(page.changes) || page.offset !== offset) return null
+      if (revision === null) { revision = page.rev; writeId = page.wid || null }
+      else if (page.rev !== revision || (page.wid || null) !== writeId) return null
+      state = applySyncChanges(state, page.changes)
+      if (page.nextOffset == null) break
+      if (!Number.isSafeInteger(page.nextOffset) || page.nextOffset <= offset || page.nextOffset !== offset + page.changes.length) return null
+      offset = page.nextOffset
+      path = `/api/data/snapshot?rev=${revision}&wid=${encodeURIComponent(writeId || '')}&offset=${page.nextOffset}`
+    }
+    if (revision == null) return null
+    if (writeId) state._wid = writeId
+    if (revision) state._rev = revision
+    return { state: revision ? state : null, rev: revision, wid: writeId }
+  }
+
+  const readVersionedChanges = async (state, base, context) => {
+    let next = state
+    let cursor = { rev: base.rev, wid: base.wid || null }
+    let pages = 0
+    for (;;) {
+      let response
+      try {
+        response = await api(`/api/data/changes?v=2&after=${cursor.rev}&wid=${encodeURIComponent(cursor.wid || '')}`)
+      } catch (error) {
+        if (error?.status === 404 || error?.status === 405) return null
+        throw error
+      }
+      if (!syncContextIsCurrent(context) || response.snapshotRequired) return null
+      if (response.version !== 2 || !Array.isArray(response.changes) || response.rev < cursor.rev) return null
+      if (response.changes.length) next = applySyncChanges(next, response.changes)
+      cursor = { rev: response.rev, wid: response.wid || null }
+      if (!response.more) {
+        if (cursor.rev !== base.rev || cursor.wid !== base.wid) {
+          if (cursor.wid) next._wid = cursor.wid
+          next._rev = cursor.rev
+          return { state: next, rev: cursor.rev, wid: cursor.wid }
+        }
+        return { state, rev: cursor.rev, wid: cursor.wid }
+      }
+      if (++pages >= 20) return null
+    }
+  }
+
+  const prepareVersionedBaseline = async (S, context) => {
+    const current = metaOf(S)
+    if (current.fingerprint?.version === 2) return true
+    try {
+      const remote = await api('/api/data/rev')
+      if (!syncContextIsCurrent(context)) return false
+      if (current.base) {
+        if (remote.rev !== current.base.rev || (current.base.wid && remote.wid !== current.base.wid)) return false
+      } else if (remote.rev !== 0) return false
+      const snapshot = await readVersionedSnapshot(context)
+      if (!snapshot || snapshot.rev !== remote.rev || snapshot.wid !== remote.wid) return false
+      const base = { rev: snapshot.rev, ts: snapshot.state?._ts || 0, ...(snapshot.wid ? { wid: snapshot.wid } : {}) }
+      meta.set(S, { ...metaOf(S), base, fingerprint: syncFingerprint(snapshot.state || {}) })
+      saveMarker(base)
+      saveProfileMeta(S)
+      return true
+    } catch (error) {
+      if (error?.status === 404 || error?.status === 405
+        || (error?.status === 409 && error.data?.error === 'snapshot_changed')) return false
+      throw error
+    }
+  }
+
+  const syncChangesFrom = async (S, context) => {
+    if (!await prepareVersionedBaseline(S, context)) return false
+    const changes = syncChanges(S, metaOf(S).fingerprint)
+    if (!changes) return false
+    if (!changes.length) {
+      const base = metaOf(S).base
+      writeSync(base.rev, S._ts, base.wid)
+      markOwed(false)
+      confirmed(S)
+      return true
+    }
+    const batches = []
+    let batch = []
+    let batchBytes = 2
+    for (const change of changes) {
+      const size = new TextEncoder().encode(JSON.stringify(change)).byteLength + 1
+      if (size > MAX_SYNC_CHANGE_BYTES) return false
+      if (batch.length && (batch.length >= MAX_SYNC_BATCH_CHANGES || batchBytes + size > MAX_SYNC_BATCH_BYTES)) {
+        batches.push(batch)
+        batch = []
+        batchBytes = 2
+      }
+      batch.push(change)
+      batchBytes += size
+    }
+    if (batch.length) batches.push(batch)
+    for (const part of batches) {
+      if (!syncContextIsCurrent(context)) return true
+      const base = metaOf(S).base
+      const canonical = JSON.stringify({ baseRev: base.rev, baseWid: base.wid || null, changes: part })
+      const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical)))
+      const operationId = `sync-${Array.from(digest, byte => byte.toString(16).padStart(2, '0')).join('')}`
+      const result = await api('/api/data/changes', { method: 'POST', body: JSON.stringify({
+        version: 2, baseRev: base.rev, baseWid: base.wid || null, operationId, changes: part,
+      }) })
+      if (!syncContextIsCurrent(context)) return true
+      writeSync(result.rev, S._ts, result.wid)
+      markOwed(true)
+    }
+    if (get().S === S) {
+      markOwed(false)
+      confirmed(S)
+    } else markOwed(true)
+    return true
+  }
+
   const doPush = async (attempt = 0, context = syncContext()) => {
     if (!syncContextIsCurrent(context)) return
     await flushProfileSaves(context.owner)
@@ -1042,6 +1164,8 @@ export const useStore = create((set, get) => {
     if (asReplace != null) { body.baseRev = asReplace.rev; if (asReplace.wid) body.baseWid = asReplace.wid }
     else if (!force && base) { body.baseRev = base.rev; if (base.wid) body.baseWid = base.wid }
     try {
+      if (!force && asReplace == null && !(legacy && legacy.owner === get().user?.id)
+        && await syncChangesFrom(S, context)) return
       const r = await api('/api/data', { method: 'PUT', body: JSON.stringify(body) })
       if (!syncContextIsCurrent(context)) return
       // A server from before revisions answers without one — then there is nothing to hold the
@@ -2065,6 +2189,46 @@ export const useStore = create((set, get) => {
           if (pushTm) { clearTimeout(pushTm); pushTm = null; await get().pushState() }
           else if (pushing) await pushing
           if (!syncContextIsCurrent(context)) return
+          const local = get().S
+          const syncMeta = metaOf(local)
+          if (syncMeta.base && !syncMeta.owed && !pushPending && !localChanged(local)) {
+            const delta = await readVersionedChanges(local, syncMeta.base, context)
+            if (!syncContextIsCurrent(context)) return
+            if (delta) {
+              lastCheck = Date.now()
+              reached()
+              if (delta.state === local) confirmed(local)
+              else {
+                const next = sanitizeAccent(Object.assign(clone(DEF), delta.state))
+                next.active = carryActive(local, next)
+                adopt(next, delta.rev)
+                confirmed(get().S)
+              }
+              return
+            }
+            const snapshot = await readVersionedSnapshot(context).catch(error => {
+              if (error?.status === 404 || error?.status === 405
+                || (error?.status === 409 && error.data?.error === 'snapshot_changed')) return null
+              throw error
+            })
+            if (!syncContextIsCurrent(context)) return
+            if (snapshot) {
+              lastCheck = Date.now()
+              reached()
+              const { base } = metaOf(local)
+              if (snapshot.rev === base.rev && (snapshot.wid || null) === (base.wid || null)) confirmed(local)
+              else if (!snapshot.state) {
+                writeSync(snapshot.rev, 0, snapshot.wid)
+                if (hasData(local)) await get().pushState()
+                else confirmed(local)
+              } else {
+                mergeInto(local, snapshot.state, snapshot.rev)
+                pushPending = false
+                await get().pushState()
+              }
+              return
+            }
+          }
           const res = await api('/api/data')
           if (!syncContextIsCurrent(context)) return
           lastCheck = Date.now()

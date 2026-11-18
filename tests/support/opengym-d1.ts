@@ -67,7 +67,7 @@ export const openTestDatabase = (): { database: DatabaseSync; d1: D1DatabaseLike
     '0009_auth_challenge_browser_binding.sql', '0010_mcp_disabled_account_tokens.sql', '0011_sync_storage_quota.sql',
     '0012_opengym_core.sql', '0013_opengym_sync_media.sql', '0014_opengym_account_security.sql',
     '0015_opengym_accounts.sql', '0016_opengym_activity_presence.sql', '0017_opengym_coach_admin.sql',
-    '0018_opengym_mcp_revisions.sql',
+    '0018_opengym_mcp_revisions.sql', '0019_radian_reliability.sql',
   ];
   for (const migration of migrations) database.exec(readFileSync(resolve(process.cwd(), 'migrations', migration), 'utf8'));
   database.prepare('INSERT INTO users (id, display_name, created_at) VALUES (?, ?, ?)').run('account-a', 'A', '2026-10-26T00:00:00.000Z');
