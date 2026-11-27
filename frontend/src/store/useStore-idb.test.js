@@ -121,6 +121,63 @@ describe('persistencia del store web', () => {
     expect(localStorage.getItem('gym_state_v1')).toBeNull()
   })
 
+  it('intervalState_roundTripsIndexedDBAcrossReload', async () => {
+    localStorage.setItem('gym_owner', 'account-a')
+    localStorage.setItem('gym_state_owner', 'account-a')
+    localStorage.setItem('gym_user', JSON.stringify({ id: 'account-a', name: 'Ada' }))
+    await stateStore.open()
+    const plan = { v: 1, mode: 'emom', windowSec: 60, rounds: 10 }
+    const run = {
+      v: 1, plan, workoutId: 'active-workout', status: 'paused', phase: 'work', startedAt: 1000,
+      deadlineAt: 61000, pausedAt: 11000, pausedRemainingMs: 50000,
+      stations: [{ entryIndex: 0, entryKey: 'active-workout:0', exerciseId: 'squat' }],
+      blockIndex: 0, round: 0, station: 0, rounds: 0, confirmed: [], skipped: [],
+      loggedSetIndices: [{ station: 0, setIndex: 0 }], partialReps: 0, roundTimes: [],
+    }
+    const initial = {
+      ...useStore.getState().S,
+      routines: [{ id: 'routine-a', name: 'Minute', ex: [{ id: 'squat' }], interval: plan }],
+      workouts: [{ id: 'history-a', d: '2026-10-26', start: 1000, end: 61000, entries: [], interval: {
+        v: 1, plan, startedAt: 1000, endedAt: 61000, elapsedMs: 60000,
+        confirmed: [], skipped: [{ round: 0, station: 0 }], rounds: 0, partialReps: 0, roundTimes: [],
+      } }],
+      active: { id: 'active-workout', start: 1000, entries: [], interval: run },
+    }
+    await stateStore.save('account-a', { state: initial, base: { rev: 2 }, wid: 'local-a2', owed: false })
+
+    await useStore.getState().boot()
+    expect(useStore.getState().S.active.interval).toEqual(run)
+
+    vi.resetModules()
+    ;({ useStore } = await import('./useStore.js'))
+    ;({ stateStore } = await import('../lib/state-store-idb.js'))
+    await useStore.getState().boot()
+
+    expect(useStore.getState().S).toMatchObject({
+      active: { interval: run },
+      routines: [{ interval: plan }],
+      workouts: [{ interval: expect.objectContaining({ plan, skipped: [{ round: 0, station: 0 }] }) }],
+    })
+  })
+
+  it('intervalFields_surviveExportAndImport', () => {
+    const plan = { v: 1, mode: 'intervals', workSec: 20, restSec: 10, rounds: 8 }
+    const result = {
+      v: 1, plan, startedAt: 1000, endedAt: 241000, elapsedMs: 240000,
+      confirmed: [], skipped: Array.from({ length: 8 }, (_, round) => ({ round, station: 0 })),
+      rounds: 0, partialReps: 0, roundTimes: [],
+    }
+    const backup = JSON.parse(JSON.stringify({
+      ...useStore.getState().S,
+      routines: [{ id: 'routine-a', name: 'Tabata', ex: [{ id: 'squat' }], interval: plan }],
+      workouts: [{ id: 'workout-a', d: '2026-10-26', start: 1000, end: 241000, entries: [], interval: result }],
+    }))
+
+    useStore.getState().importBackup(backup)
+
+    expect(useStore.getState().S).toMatchObject({ routines: [{ interval: plan }], workouts: [{ interval: result }] })
+  })
+
   it('migra la copia legacy del dueño a IndexedDB antes de retirar localStorage', async () => {
     localStorage.setItem('gym_owner', 'account-a')
     localStorage.setItem('gym_state_owner', 'account-a')

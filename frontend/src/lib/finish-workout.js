@@ -2,6 +2,7 @@
 // exercise the exact shape the UI writes without mounting React or mutating store state.
 import { bestWeightForEntry, cleanupSg } from './history.js'
 import { hasCompletedWork, isSideSet } from './workout-model.js'
+import { cleanIntervalPlan } from './interval-engine.js'
 
 // planSec is live-session bookkeeping: a hold displaced before it finished puts its plan aside so
 // the row still knows what it is asking for (Workout.startTimed). A finished session keeps only
@@ -65,6 +66,33 @@ export function sessionEnd(active, now = Date.now(), gap = FORGOTTEN_GAP_MS) {
   return now - reach > gap ? reach : now
 }
 
+function intervalResultOf(interval) {
+  if (!interval || typeof interval !== 'object') return null
+  const plan = cleanIntervalPlan(interval.plan)
+  if (!plan) return null
+  const startedAt = Number.isFinite(interval.startedAt) ? interval.startedAt : null
+  const endedAt = Number.isFinite(interval.endedAt) ? interval.endedAt : null
+  if (startedAt == null || endedAt == null || endedAt < startedAt) return null
+  const elapsedMs = Number.isFinite(interval.elapsedMs)
+    ? Math.max(0, interval.elapsedMs)
+    : Math.max(0, endedAt - startedAt - (Number(interval.pausedDurationMs) || 0))
+  return {
+    v: 1,
+    plan,
+    startedAt,
+    endedAt,
+    elapsedMs,
+    confirmed: Array.isArray(interval.confirmed) ? interval.confirmed.map(({ round, station }) => ({ round, station })) : [],
+    skipped: Array.isArray(interval.skipped) ? interval.skipped.map(({ round, station }) => ({ round, station })) : [],
+    rounds: Number.isFinite(interval.rounds) ? Math.max(0, Math.trunc(interval.rounds)) : 0,
+    partialReps: Number.isFinite(interval.partialReps) ? Math.max(0, Math.trunc(interval.partialReps)) : 0,
+    roundTimes: Array.isArray(interval.roundTimes)
+      ? interval.roundTimes.filter(row => row && Number.isFinite(row.round) && Number.isFinite(row.elapsedMs))
+        .map(({ round, elapsedMs: time }) => ({ round, elapsedMs: time }))
+      : [],
+  }
+}
+
 export function buildCompletedWorkout(active, { end = Date.now(), prs = [], snapshotFor } = {}) {
   const entries = (active?.entries || []).map(entry => {
     const completed = {
@@ -111,12 +139,20 @@ export function buildCompletedWorkout(active, { end = Date.now(), prs = [], snap
   // entries, not read from `active` (which no longer carries the flag). A mixed session omits
   // it — that case is new territory only the per-entry `noProg` readers handle.
   const allNoProg = entries.length > 0 && entries.every(e => e.noProg === true)
+  const interval = intervalResultOf(active?.interval)
+  const savedEnd = interval?.endedAt ?? end
+
+  // A completed duration-only format (AMRAP) is a real session even if it has no strength
+  // rows. A circuit/interval run with only skipped blocks is not work and should not create a
+  // history item. The ordinary empty-session case follows the same rule.
+  const hasTimedResult = interval?.plan.mode === 'amrap'
+  if (!entries.length && !hasTimedResult) return null
 
   return {
     id: active.id,
     d: active.d,
     start: active.start,
-    end,
+    end: savedEnd,
     routineIds,
     routineId: routineIds[0] ?? null,
     name: active.name,
@@ -125,5 +161,6 @@ export function buildCompletedWorkout(active, { end = Date.now(), prs = [], snap
     prs,
     ...(allNoProg ? { excludeFromProgression: true } : {}),
     ...(sessionNote ? { note: sessionNote } : {}),
+    ...(interval ? { interval } : {}),
   }
 }

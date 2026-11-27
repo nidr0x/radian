@@ -92,6 +92,7 @@ function lowerKeptWeights(state, ids, current, saved) {
  * exercises in it — an empty row in the history that counts as a training day.
  */
 export const editLeftEmpty = active => !list(active?.entries).some(entry => list(entry?.sets).some(hasCompletedWork))
+  && !(Number.isFinite(active?.interval?.startedAt) && Number.isFinite(active?.interval?.endedAt))
 
 /**
  * Opens the editor on a saved workout: a copy of it becomes S.active. `ref` is the workout or its
