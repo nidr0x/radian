@@ -886,6 +886,20 @@ body.chips-dragging *{cursor:inherit}
    one-line ellipsis cut exactly the 0/19 the line is there for. */
 .whdr-mid .sub{font-size:13px;margin-top:1px;font-variant-numeric:tabular-nums;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:anywhere;text-wrap:balance}
 .btn.pill.whdr-finish{width:auto;flex:none;padding:8px 16px;border-radius:99px;font-size:15px;max-width:40%}
+.interval-player{display:grid;gap:12px;margin-bottom:16px;padding:16px}
+.interval-player-top,.interval-progress{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.interval-clock{font-size:clamp(46px,16vw,64px);font-weight:700;line-height:1;font-variant-numeric:tabular-nums;text-align:center;letter-spacing:-.04em}
+.interval-station{display:grid;gap:3px;text-align:center}
+.interval-station strong{font-size:22px}
+.interval-next{display:flex;justify-content:center;gap:6px;flex-wrap:wrap}
+.interval-progress{justify-content:center;color:var(--label-2);font-size:12px}
+.interval-score{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.interval-score label{display:grid;gap:5px;font-size:13px;color:var(--label-2)}
+.interval-score input{min-height:42px;font-size:18px;text-align:center;font-variant-numeric:tabular-nums}
+.interval-lock-note{margin:0;text-align:center}
+.interval-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.interval-actions .btn{min-height:44px}
+.interval-actions .btn:only-child{grid-column:1/-1}
 /* Animations set to Small: the picture beside the exercise name, with an expand badge. */
 .wthumb{position:relative;flex:none;width:48px;height:48px;border-radius:10px;overflow:hidden;padding:0}
 .wthumb .thumb{width:48px;height:48px;border-radius:10px}

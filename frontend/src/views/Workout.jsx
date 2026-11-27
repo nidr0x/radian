@@ -4,6 +4,9 @@ import SwipeRow from '../components/SwipeRow.jsx'
 import { useNavigate } from 'react-router-dom'
 import { useStore } from '../store/useStore.js'
 import { workoutControls } from '../lib/workout-controls.js'
+import IntervalPlayer from '../components/IntervalPlayer.jsx'
+import { dispatchInterval } from '../lib/interval-engine.js'
+import { confirmIntervalStation } from '../lib/interval-session.js'
 import { useUI } from '../store/useUI.js'
 import { exOr, betterWeight } from '../lib/exercises.js'
 import { usesBar } from '../lib/bar.js'
@@ -927,7 +930,7 @@ function ActiveWorkout() {
   const editing = !!A.editingWorkoutId
   // A past workout has no rest to time — the sets were done days ago. The work timer for
   // timed sets stays, since counting a hold is how its duration gets entered.
-  const startRest = (A.backfill || editing) ? () => {} : liveRest
+  const startRest = (A.backfill || editing || A.interval) ? () => {} : liveRest
   const units = supersetUnits(A.entries)
   const cur = Number.isInteger(A.cur)
     ? Math.min(Math.max(A.cur, 0), Math.max(0, A.entries.length - 1))
@@ -1394,6 +1397,37 @@ function ActiveWorkout() {
     if (fresh) progressHighWater.current = fresh.entries.map(e => e.sets.filter(s => s.done).length)
     workoutCompleteSheet()
   }
+  const saveIntervalRun = (session, interval) => {
+    const pending = (interval.phase === 'rest' || interval.phase === 'roundRest') && interval.pendingBlockIndex != null
+      ? interval.pendingBlockIndex
+      : interval.blockIndex
+    const descriptor = interval.stations?.[pending % (interval.stations.length || 1)]
+    const entryIndex = descriptor?.entryKey
+      ? session.entries.findIndex(entry => entry?.intervalEntryKey === descriptor.entryKey)
+      : descriptor?.entryIndex
+    session.interval = interval
+    if (entryIndex >= 0 && entryIndex < session.entries.length) session.cur = entryIndex
+  }
+  const persistIntervalRun = interval => update(s => {
+    if (s.active?.id === A.id && s.active.interval) saveIntervalRun(s.active, interval)
+  }, true)
+  const confirmInterval = (position, actual) => {
+    const current = useStore.getState().S.active
+    if (!current?.interval) return
+    const next = confirmIntervalStation(current, position, actual, Date.now())
+    if (next !== current) update(s => {
+      if (s.active?.id === current.id) saveIntervalRun(next, next.interval)
+      if (s.active?.id === current.id) s.active = next
+    }, true)
+  }
+  const finishInterval = () => {
+    const current = useStore.getState().S.active
+    if (current?.interval && (current.interval.status === 'running' || current.interval.status === 'paused')) {
+      const stopped = dispatchInterval(current.interval, { type: 'stop' }, Date.now()).run
+      update(s => { if (s.active?.id === current.id) saveIntervalRun(s.active, stopped) }, true)
+    }
+    finishWorkoutSheet({ onDiscard: discardWorkout })
+  }
   // Adds an exercise after the current unit: the button under the session and the ⋯ menu's Add.
   const addExercise = () => exercisePicker((ex, quick) => {
     // A freehand add inherits the current unit's routine (its `rid`) so it lands in that
@@ -1686,7 +1720,7 @@ function ActiveWorkout() {
       }
     }, true)
     if (editing) return
-    if (workoutDone) workoutCompleteSheet()
+    if (workoutDone && !A.interval) workoutCompleteSheet()
     else if (exJustDone && cardioEntry) useUI.getState().toast(t('Cardio logged'))
     else if (exJustDone && m === 'time') useUI.getState().toast(t('Hold logged'))
 
@@ -1760,7 +1794,7 @@ function ActiveWorkout() {
       // Singleton units are ordinary exercises: they rest between sets and after the closing
       // one unless the next unit has an unfinished warm-up, and never enter superset navigation.
       // stopRest() first so a rest that belongs after this set replaces the one that was running.
-      if (freshUnitDone) stopRest()
+      if (freshUnitDone && !A.interval) stopRest()
       if (!freshUnit || freshUnit.length <= 1) {
         if (!restBeforeWarmup && restAfterSet({ unitDone: freshUnitDone, lastUnit: freshWorkoutDone })) startRest(restAfter, idx, { forSet: i })
         onFocusProgress?.({ unitDone: freshUnitDone })
@@ -2017,7 +2051,7 @@ function ActiveWorkout() {
       <div className="whdr-mid"><div className="whdr-name">{A.name}</div><div className="sub">{(A.backfill || editing) ? fmtDate(A.d, true) : <Elapsed start={A.start} />} · {t('{0} sets', done + '/' + total)}</div></div>
       <button className="iconbtn" aria-label={t('Workout options')} title={t('Workout options')} onClick={openViewMenu}><Icon name="more" /></button>
       <button className="btn primary pill whdr-finish" aria-label={editing ? t('Save changes') : undefined}
-        onClick={() => (editing ? finishWorkout() : finishWorkoutSheet({ onDiscard: discardWorkout }))}>{editing ? t('Save') : t('Finish')}</button>
+        onClick={() => (editing ? finishWorkout() : A.interval ? finishInterval() : finishWorkoutSheet({ onDiscard: discardWorkout }))}>{editing ? t('Save') : t('Finish')}</button>
     </div>
     <div className="wprog"><i style={{ width: (total ? done / total * 100 : 0) + '%' }} /></div>
     {/* In the list the chips ride in the pinned header, so any exercise is one tap away from
@@ -2026,6 +2060,8 @@ function ActiveWorkout() {
     </div>
     {editing && <p className="muted small">{t('Editing a saved workout. Date and duration stay unchanged.')}</p>}
     {A.backfill && <div className="muted small" style={{ marginBottom: 8 }}>{t('Logging a past workout, so no rest timers.')}</div>}
+    {A.interval && !editing && <IntervalPlayer active={A} onIntervalChange={persistIntervalRun}
+      onConfirm={confirmInterval} onFinish={finishInterval} />}
 
     {A.entries.length ? (listMode ? (
       <div className="workout-list" data-testid="workout-list" ref={listRef}>
@@ -2174,7 +2210,7 @@ function ActiveWorkout() {
     {(() => {
       const exDone = A.entries.filter(e => e.sets.length && e.sets.every(s => s.done)).length
       const allDone = A.entries.length > 0 && exDone === A.entries.length
-      return <button className={allDone ? 'btn primary' : 'btn ghost dim'} onClick={finishWorkout}>
+      return <button className={allDone ? 'btn primary' : 'btn ghost dim'} onClick={A.interval ? finishInterval : finishWorkout}>
         {editing ? t('Save changes') : allDone ? t('Finish workout') : t('Finish workout early · {0} exercises', exDone + '/' + A.entries.length)}
       </button>
     })()}

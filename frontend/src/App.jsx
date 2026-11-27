@@ -344,7 +344,7 @@ export default function App() {
     // A session started on the watch starts here as the phone's Start does, with the watch's id
     // and start time, and no weigh-in question (the lifter is at the watch, not here).
     const unbind = bindWatchAppActions({
-      start: (ids, { bw = null, ...opts } = {}) => beginWorkout(ids, bw, opts),
+      start: (ids, { bw = null, ...opts } = {}) => beginWorkout(ids, bw, { ...opts, source: 'watch' }),
       // The watch's weigh-in: logged as the phone's check-in logs one (today's replaces today's).
       weighIn: ({ w, at }) => useStore.getState().update(s => { logWeighIn(s, w, at) }),
       // The watch removed its copies of deleted workouts from Apple Health: the phone's removal

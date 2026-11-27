@@ -13,9 +13,10 @@ import { supersetMeta, setSupersetMeta } from '../lib/superset-meta.js'
 import { fmtRest } from '../lib/duration.js'
 import Icon from '../components/Icon.jsx'
 import { glyphOf } from '../lib/glyphs.js'
-import { Button, Row, SelectRow, Switch } from '../components/ui.jsx'
+import { Button, Row, SelectRow, Stepper, Switch } from '../components/ui.jsx'
 import SwipeRow from '../components/SwipeRow.jsx'
 import { workoutControls } from '../lib/workout-controls.js'
+import { cleanIntervalPlan } from '../lib/interval-engine.js'
 import { copyRoutine, deleteRoutine, replaceSlotExercise } from '../lib/routines.js'
 import { planPrintHTML, printPlan } from '../lib/plan-share.js'
 import { markEntryUndone } from '../lib/sync-merge.js'
@@ -375,6 +376,16 @@ export default function RoutineEdit() {
   // included: this still unmounts after the delete button navigates away.
   useEffect(() => () => useStore.getState().autoBackupNow(), [])
   const edit = fn => update(s => { fn(s.routines.find(x => x.id === id).ex) })
+  const setWorkoutFormat = mode => update(s => {
+    const routine = s.routines.find(x => x.id === id)
+    if (mode === 'normal') delete routine.interval
+    else if (mode === 'tabata') routine.interval = cleanIntervalPlan({ v: 1, mode: 'intervals', workSec: 20, restSec: 10, rounds: 8 })
+    else routine.interval = cleanIntervalPlan({ v: 1, mode })
+  })
+  const setIntervalField = (field, value) => update(s => {
+    const routine = s.routines.find(x => x.id === id)
+    if (routine.interval) routine.interval = cleanIntervalPlan({ ...routine.interval, [field]: value })
+  })
   const reorder = useRoutineReorder(r, r?.ex || [], (sourceIndex, targetSlot) => {
     edit(exercises => { reorderRoutineUnit(exercises, sourceIndex, targetSlot) })
   })
@@ -470,6 +481,46 @@ export default function RoutineEdit() {
           onChange={e => update(s => { s.routines.find(x => x.id === id).name = e.target.value.trim() || t('Routine') })} />
       </div>
       <button className="iconbtn" aria-label={t('Pick an icon')} onClick={() => glyphPicker(r.emoji, g => update(s => { s.routines.find(x => x.id === id).emoji = g }))}><Icon name={glyphOf(r.emoji)} /></button>
+    </div>
+
+    <div className="sect-b" style={{ marginBottom: 16 }}>
+      <SelectRow icon="clock" title={t('Workout format')}
+        value={!r.interval ? 'normal'
+          : r.interval.mode === 'intervals' && r.interval.workSec === 20 && r.interval.restSec === 10 && r.interval.rounds === 8 ? 'tabata'
+            : r.interval.mode} onChange={setWorkoutFormat}
+        options={[
+          { value: 'normal', label: t('Normal') },
+          { value: 'circuit', label: t('Circuit') },
+          { value: 'amrap', label: t('AMRAP') },
+          { value: 'emom', label: t('EMOM') },
+          { value: 'intervals', label: t('Intervals') },
+          { value: 'tabata', label: t('Tabata') },
+        ]} />
+      {r.interval?.mode === 'circuit' && <>
+        <Stepper label={t('Rounds')} value={r.interval.rounds ?? 3} step={1} min={1} max={50} decimal={false}
+          onChange={value => setIntervalField('rounds', value)} />
+        <Stepper label={t('Rest between stations (s)')} value={r.interval.gapSec ?? 15} step={5} min={0} max={300} decimal={false}
+          onChange={value => setIntervalField('gapSec', value)} />
+        <Stepper label={t('Rest between rounds (s)')} value={r.interval.roundRestSec ?? 0} step={5} min={0} max={600} decimal={false}
+          onChange={value => setIntervalField('roundRestSec', value)} />
+      </>}
+      {r.interval?.mode === 'amrap' && <Stepper label={t('Time cap (s)')} value={r.interval.durationSec ?? 600} step={30} min={60} max={3600} decimal={false}
+        onChange={value => setIntervalField('durationSec', value)} />}
+      {r.interval?.mode === 'emom' && <>
+        <Stepper label={t('Window (s)')} value={r.interval.windowSec ?? 60} step={10} min={10} max={600} decimal={false}
+          onChange={value => setIntervalField('windowSec', value)} />
+        <Stepper label={t('Rounds')} value={r.interval.rounds ?? 10} step={1} min={1} max={99} decimal={false}
+          onChange={value => setIntervalField('rounds', value)} />
+      </>}
+      {r.interval?.mode === 'intervals' && <>
+        <Stepper label={t('Work (s)')} value={r.interval.workSec ?? 20} step={5} min={5} max={3600} decimal={false}
+          onChange={value => setIntervalField('workSec', value)} />
+        <Stepper label={t('Rest (s)')} value={r.interval.restSec ?? 10} step={5} min={0} max={600} decimal={false}
+          onChange={value => setIntervalField('restSec', value)} />
+        <Stepper label={t('Rounds')} value={r.interval.rounds ?? 8} step={1} min={1} max={50} decimal={false}
+          onChange={value => setIntervalField('rounds', value)} />
+      </>}
+      {r.interval && <div className="small dim" style={{ margin: '4px 8px 8px' }}>{t('The timer never logs sets or reps for you.')}</div>}
     </div>
 
     <div className="sect-b" style={{ marginBottom: 16 }}>

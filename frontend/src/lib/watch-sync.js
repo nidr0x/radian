@@ -231,7 +231,7 @@ export function applyEvents (events, getState) {
         if (!appHandlers) break
         // Started at the wrist: the watch app is open already, nothing to open there (startWatchSync).
         if (ev.wid) startedOnWatch.add(ev.wid)
-        appHandlers.start(Array.isArray(ev.routineIds) ? ev.routineIds : [], { id: ev.wid || null, start: num(ev.at), ...(okBw(ev.bw) ? { bw: num(ev.bw) } : {}) })
+        appHandlers.start(Array.isArray(ev.routineIds) ? ev.routineIds : [], { source: 'watch', id: ev.wid || null, start: num(ev.at), ...(okBw(ev.bw) ? { bw: num(ev.bw) } : {}) })
       }
       // A workout already running on the phone is kept; one with the watch's id is this one.
     } else if (ev.type === 'setDone' && saved) {

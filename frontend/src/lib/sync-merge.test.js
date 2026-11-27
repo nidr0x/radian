@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { keepReset, mergeStates, stampChange, stampRestore } from './sync-merge.js'
+import { keepReset, mergeStates, stampChange, stampEntry, stampRestore } from './sync-merge.js'
 
 describe('tombstones and profile recovery', () => {
   it('records a workout removal after its edit and drops the stale offline copy', () => {
@@ -79,5 +79,26 @@ describe('tombstones and profile recovery', () => {
 
     expect(next.resetAt).toBe(100)
     expect(next.resetIds.workouts).toEqual(['old-workout'])
+  })
+
+  it('routineInterval_mergeKeepsIndependentExerciseOrder', () => {
+    const originalPlan = { v: 1, mode: 'circuit', rounds: 3, gapSec: 15, roundRestSec: 0 }
+    const updatedPlan = { ...originalPlan, rounds: 5 }
+    const originalRoutine = {
+      id: 'routine-a', name: 'Circuit', ex: [{ id: 'squat' }, { id: 'row' }], interval: originalPlan,
+    }
+    const planEdit = stampEntry(originalRoutine, { ...originalRoutine, interval: updatedPlan }, 20)
+    const orderEdit = stampEntry(originalRoutine, { ...originalRoutine, ex: [{ id: 'row' }, { id: 'squat' }] }, 30)
+    const active = {
+      id: 'active-a',
+      interval: { plan: originalPlan, stations: [{ exerciseId: 'squat' }, { exerciseId: 'row' }] },
+    }
+    const merged = mergeStates(
+      { _ts: 20, routines: [planEdit], workouts: [], active },
+      { _ts: 30, routines: [orderEdit], workouts: [], active },
+    )
+
+    expect(merged.routines[0]).toMatchObject({ interval: updatedPlan, ex: [{ id: 'row' }, { id: 'squat' }] })
+    expect(merged.active.interval.stations.map(station => station.exerciseId)).toEqual(['squat', 'row'])
   })
 })

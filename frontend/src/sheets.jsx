@@ -58,6 +58,7 @@ import { finishCompare, finishCardio } from './lib/finish-compare.js'
 import { workoutFit, fitFileName } from './lib/fit-export.js'
 import { joinSessionNoProg } from './lib/session-noprog.js'
 import { buildCombinedEntries, deriveSessionName } from './lib/session-merge.js'
+import { buildIntervalSession, canStartInterval } from './lib/interval-session.js'
 import { workoutsOn, backfillStart, backfillEnd, completeBackfill, historyAsOf, sessionHistory } from './lib/backfill.js'
 import { moveWorkout, sameWorkout, startTimeOf, durationMinOf, setWorkoutDuration, rebuildPrHistory, MAX_DURATION_MIN, endsInFuture } from './lib/workout-date.js'
 import { editCompletedSession, editLeftEmpty, editedRecord, editChangesNothing } from './lib/session-edit.js'
@@ -2722,6 +2723,23 @@ function WorkoutDurationEdit({ w, onDone, close }) {
 }
 export const workoutDurationSheet = (w, onDone) => ui().openSheet(close => <WorkoutDurationEdit w={w} onDone={onDone} close={close} />)
 
+function intervalHistorySummary(interval, includeDuration = true) {
+  if (!interval?.plan?.mode) return null
+  const mode = interval.plan.mode === 'circuit' ? t('Circuit')
+    : interval.plan.mode === 'amrap' ? t('AMRAP')
+      : interval.plan.mode === 'emom' ? t('EMOM') : t('Intervals')
+  const elapsed = Number.isFinite(interval.elapsedMs) ? interval.elapsedMs
+    : Math.max(0, (interval.endedAt || 0) - (interval.startedAt || 0))
+  const parts = [mode]
+  if (includeDuration) parts.push(fmtDur(elapsed))
+  parts.push(tn('{0} round', '{0} rounds', interval.rounds || 0))
+  if (interval.plan.mode === 'amrap') {
+    parts.push(t('Score') + ': ' + tn('{0} round', '{0} rounds', interval.rounds || 0)
+      + ' + ' + tn('{0} rep', '{0} reps', interval.partialReps || 0))
+  }
+  return parts.join(' · ')
+}
+
 function WorkoutDetail({ w, close }) {
   const noteRef = useRef(null)
   const onNoteFocus = useSheetKeyboard(noteRef)
@@ -2809,6 +2827,7 @@ function WorkoutDetail({ w, close }) {
   return <>
     <h3>{w.name}</h3>
     <div className="muted small" style={{ marginBottom: 12 }}>{[fmtDate(w.d, true), ...durPart(w.end - w.start), fmtVol(w.vol, st.unit), ...(w.bw ? [fmtNum(w.bw) + ' ' + st.unit] : [])].join(' · ')}</div>
+    {w.interval && <div className="small muted" style={{ marginBottom: 12 }}>{intervalHistorySummary(w.interval)}</div>}
     {grouped ? groups.map(g => {
       const r = g.rid ? st.routines.find(x => x.id === g.rid) : null
       const items = g.items.map(i => w.entries[i])
@@ -3039,7 +3058,7 @@ export function WorkoutRow({ w, onClick }) {
   return <div className="item" {...tappable(onClick)}>
     <span className="lrow-i" style={{ width: 34, height: 34, borderRadius: 8, fontSize: 19 }}><Icon name={glyph} /></span>
     <div className="grow"><div className="tt">{w.name}</div>
-      <div className="ss">{[fmtDate(w.d, true), ...durPart(w.end - w.start), tn('{0} set', '{0} sets', setsDone(w)), fmtVol(w.vol, st.unit)].join(' · ')}</div></div>
+      <div className="ss">{[fmtDate(w.d, true), ...durPart(w.end - w.start), tn('{0} set', '{0} sets', setsDone(w)), fmtVol(w.vol, st.unit), w.interval && intervalHistorySummary(w.interval, false)].filter(Boolean).join(' · ')}</div></div>
     {mediaN > 0 && <span className="wrow-media" title={tn('{0} photo or video', '{0} photos or videos', mediaN)} aria-label={tn('{0} photo or video', '{0} photos or videos', mediaN)}><Icon name="image" />{mediaN}</span>}
     {w.prs && w.prs.length > 0 && <span className="pr"><Icon name="trophy" />{w.prs.length} PR</span>}
     <Icon name="chevronRight" className="chev" />
@@ -3060,29 +3079,46 @@ export function DayNoteRow({ iso, note }) {
 // `routineIds` accepts `string | string[] | null` — `[r.id]` for one routine,
 // `effectiveRoutineIds(...)` for today's planned session, `[]` / null for explicit freestyle.
 export function startFlow(routineIds) {
+  const st = S()
+  const selected = [].concat(routineIds ?? []).map(id => st.routines.find(routine => routine.id === id)).filter(Boolean)
+  const eligibility = canStartInterval(selected, 'pwa')
+  if (!eligibility.allowed) { toast(intervalStartMessage(eligibility.reason)); return null }
   // The weigh-in is a setting (Settings → During a workout, issue #137): off goes straight
   // into the session with no body weight on it, same as "Start without weighing in".
   if (S().weighIn === false) { beginWorkout(routineIds, null); return }
   bwSheet({ required: true, onDone: bw => beginWorkout(routineIds, bw) })
 }
+function intervalStartMessage(reason) {
+  if (reason === 'mixed') return t('Start an interval workout from one routine at a time.')
+  if (reason === 'watch') return t('Start interval workouts from the Radian app.')
+  if (reason === 'empty') return t('Add an exercise before starting this interval workout.')
+  return t('This interval format is invalid. Edit the routine and try again.')
+}
 // `opts` from the Apple Watch (lib/watch-sync.js): a session started there keeps the watch's id,
 // so the sets ticked on it find it, and its start time, however late the phone hears of it.
-export function beginWorkout(routineIds, bw, { id = null, start = null } = {}) {
+export function beginWorkout(routineIds, bw, { id = null, start = null, source = 'pwa' } = {}) {
   const st = S()
   const { entries, routineIds: rids, routines } = buildCombinedEntries(st, routineIds)
+  const eligibility = canStartInterval(routines, source)
+  if (!eligibility.allowed) { toast(intervalStartMessage(eligibility.reason)); return null }
   const startAt = Number.isFinite(start) && start > 0 ? start : Date.now()
+  const active = {
+    id: id || uid(), d: id && start ? isoOf(new Date(startAt)) : todayISO(), start: startAt,
+    // A session tracks its routines as a list; per-entry `rid` carries which one each
+    // exercise came from. No top-level `excludeFromProgression` — per-entry `noProg` does it.
+    routineIds: rids,
+    name: routines.length ? deriveSessionName(routines.map(r => r.name)) : t('Freestyle'),
+    bw: bw || null, cur: 0, entries,
+    // Snapshot the layout at start so the header ⋮ can change it for this session only —
+    // changing the saved default (Settings → Workout view) mid-session leaves it alone.
+    workoutView: st.workoutView || 'cards',
+  }
+  const intervalActive = routines.length === 1 && routines[0].interval
+    ? buildIntervalSession(active, routines[0], startAt)
+    : active
+  if (!intervalActive) { toast(intervalStartMessage('invalid')); return null }
   update(s => {
-    s.active = {
-      id: id || uid(), d: id && start ? isoOf(new Date(startAt)) : todayISO(), start: startAt,
-      // A session tracks its routines as a list; per-entry `rid` carries which one each
-      // exercise came from. No top-level `excludeFromProgression` — per-entry `noProg` does it.
-      routineIds: rids,
-      name: routines.length ? deriveSessionName(routines.map(r => r.name)) : t('Freestyle'),
-      bw: bw || null, cur: 0, entries,
-      // Snapshot the layout at start so the header ⋮ can change it for this session only —
-      // changing the saved default (Settings → Workout view) mid-session leaves it alone.
-      workoutView: st.workoutView || 'cards',
-    }
+    s.active = intervalActive
   })
   useUI.getState().stopRest()
   navToWorkout()
@@ -3094,16 +3130,21 @@ export function beginWorkout(routineIds, bw, { id = null, start = null } = {}) {
 export function repeatWorkout(w, close) {
   const st = S()
   if (st.active) { toast(t('Finish the current workout first.')); return }
-  const { entries, skipped } = repeatSessionEntries(st, w)
+  const { entries, skipped, intervalPlan } = repeatSessionEntries(st, w)
   if (!entries.length) { toast(t('Nothing to repeat. Its exercises no longer exist.')); return }
   const go = bw => {
     if (S().active) { toast(t('Finish the current workout first.')); return }
+    const start = Date.now()
+    const active = {
+      id: uid(), d: todayISO(), start, routineIds: [],
+      name: w.name || t('Freestyle'), bw: bw || null, cur: 0, entries,
+      workoutView: st.workoutView || 'cards',
+    }
+    const nextActive = intervalPlan
+      ? buildIntervalSession(active, { interval: intervalPlan }, start)
+      : active
     update(s => {
-      s.active = {
-        id: uid(), d: todayISO(), start: Date.now(), routineIds: [],
-        name: w.name || t('Freestyle'), bw: bw || null, cur: 0, entries,
-        workoutView: s.workoutView || 'cards',
-      }
+      s.active = nextActive
     })
     useUI.getState().stopRest()
     if (close) closeThenNav(close, '/workout'); else navToWorkout()
@@ -3263,6 +3304,7 @@ function AddRoutineToSession({ close }) {
 }
 export function addRoutineToSessionSheet() {
   if (!S().active) return
+  if (S().active.interval) { toast(t('An interval workout follows the stations in its routine.')); return }
   ui().openSheet(close => <AddRoutineToSession close={close} />)
 }
 
@@ -3685,6 +3727,13 @@ function doFinishWorkout() {
     prs,
     snapshotFor: e => isCustomEx(EXIDX[e.id]) ? exerciseMuscleSnapshot(EXIDX[e.id]) : null,
   })
+  if (!w) {
+    update(s => { if (s.active?.id === A.id) s.active = null })
+    useUI.getState().stopRest()
+    useUI.getState().stopWork()
+    toast(t('Nothing logged yet'))
+    return
+  }
   w.vol = workoutVolume(w)
   let shown = w
   update(s => {

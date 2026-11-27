@@ -45,6 +45,43 @@ describe('repositorio relacional openGym', () => {
     }
   });
 
+  it('workoutInterval_roundTripsFullAndIncrementalD1', async () => {
+    const { database, d1 } = openDatabase();
+    try {
+      const plan = { v: 1, mode: 'circuit', rounds: 3, gapSec: 15, roundRestSec: 30 };
+      const interval = {
+        v: 1, plan, startedAt: 1792972800000, endedAt: 1792976400000, elapsedMs: 3600000,
+        confirmed: [{ round: 0, station: 0 }], skipped: [], rounds: 1, partialReps: 0,
+        roundTimes: [{ round: 1, elapsedMs: 1200000 }],
+      };
+      const workout = {
+        id: 'workout-interval', d: '2026-10-26', start: interval.startedAt, end: interval.endedAt,
+        routineIds: ['routine-interval'], entries: [{ id: '0025', sets: [{ w: 50, r: 8, done: true }] }], interval,
+      };
+      const state = {
+        routines: [{ id: 'routine-interval', name: 'Circuit', ex: [{ id: '0025' }], interval: plan }],
+        workouts: [workout],
+      };
+
+      const first = await writeGymState(d1, 'account-a', { state, baseRev: 0 });
+      expect(first).toMatchObject({ ok: true, rev: 1 });
+      const loaded = await readGymState(d1, 'account-a');
+      expect(loaded.state).toMatchObject({ routines: [{ interval: plan }], workouts: [{ interval }] });
+
+      const updatedInterval = { ...interval, rounds: 2, roundTimes: [...interval.roundTimes, { round: 2, elapsedMs: 1100000 }] };
+      const incremental = await writeGymState(d1, 'account-a', {
+        state: { workouts: [{ ...workout, interval: updatedInterval }] },
+        baseRev: loaded.rev,
+        baseWid: loaded.wid,
+      });
+      expect(incremental).toMatchObject({ ok: true, rev: 2 });
+      const updated = await readGymState(d1, 'account-a');
+      expect(updated.state).toMatchObject({ routines: [{ interval: plan }], workouts: [{ interval: updatedInterval }] });
+    } finally {
+      database.close();
+    }
+  });
+
   it('leaves every entity unchanged when a stale base revision loses the CAS', async () => {
     const { database, d1 } = openDatabase();
     try {

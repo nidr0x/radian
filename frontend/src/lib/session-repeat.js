@@ -13,6 +13,7 @@ import { buildSets, applyIntensifierPlan, modeOf, setsFromRows } from './history
 import { isWarmupRow } from './workout-model.js'
 import { dropGrid } from './plates.js'
 import { weightIncrement, defaultIncrement } from './progression.js'
+import { cleanIntervalPlan } from './interval-engine.js'
 
 const sourceEntries = w => (Array.isArray(w?.entries) ? w.entries : []).filter(entry => entry?.sets?.length)
 
@@ -45,7 +46,8 @@ export function repeatSessionEntries(st, w, { exists = id => !!EXIDX[id] } = {})
       .map(row => ({ ...row, done: false }))
     entries.push({ id: cfg.id, ...(sg ? { sg } : {}), target: { ...cfg }, plan: null, sets })
   })
-  return { entries: regroup(entries), skipped }
+  const intervalPlan = cleanIntervalPlan(w?.interval?.plan)
+  return { entries: regroup(entries), skipped, ...(intervalPlan ? { intervalPlan } : {}) }
 }
 
 // A superset whose other half was skipped is one exercise on its own, not a group of one.
